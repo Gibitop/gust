@@ -1,9 +1,9 @@
 # State of development
 
-The gust programming langugage project contains many tools and features
+The gust programming language project contains many tools and features
 
-Not all of them are currently implmeneted, though the docs may reference future features
+Not all of them are currently implemented, though the docs may reference future features
 
-Here is a list of features to reference, when thinking about the project, so you don't rely on something that is not yet implmented
+Here is a list of features to reference, when thinking about the project, so you don't rely on something that is not yet implemented
 
-**Current state:** nothing is implmeneted yet. 
+**Current state:** nothing is implemented yet.

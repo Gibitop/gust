@@ -1,20 +1,20 @@
 # Gust language design
 
-Gust is a compiled general purpose programming langugage designed for writing backend services and CLI applications
+Gust is a compiled general purpose programming language designed for writing backend services and CLI applications
 
-## Language 
+## Language
 - Syntax similar to rust
 - Type system similar to rust
 - First class Option and Error types
 - Traits like rust
-- Errors as values with special syntax to propogate the error (like rusts `?` operator)
+- Errors as values with special syntax to propagate the error (like rusts `?` operator)
 - Optional chaining like typescript
 - Pattern matching like rust
 - Comptime system like zig (for values and types)
 - Type utils like typescript (like Pick, Omit, Parameters, ReturnType, Indexed Access to fields  etc)
 - Mapped types like typescript
 - Has GC like go. No manual memory management, no borrow checker
-- Has light threads like go with goroutines
+- Has light threads like go with go routines
 - Type inference where possible like typescript
 - Immutability by default (especially for function parameters)
 - Async support like rust tokio
@@ -24,12 +24,12 @@ Gust is a compiled general purpose programming langugage designed for writing ba
 - Decorators
 - Struct, function, parameter and field attributes like rust
 - Defer like in go
-- Rich and simple standart library like go
+- Rich and simple standard library like go
 - Template literals like in typescript
 - Compiles to a self-contained binary like go
 - The compiled binary includes a small runtime like go
 - Foreign function interface support from importing libraries from other languages
-- Module reflection: 
+- Module reflection:
     - Get list of modules (to build file-based routing for example)
     - Get list of members of each module
     - Load non exported members (for unit testing for example)

@@ -1,8 +1,8 @@
-# Development descisions log
+# Development decisions log
 
 ## First toolchain
 
-First toolchain will be implmented in the rust programming language. Later the toolchain will be ported to the gust language itself
+First toolchain will be implemented in the rust programming language. Later the toolchain will be ported to the gust language itself
 
 
 ## Underlying tools

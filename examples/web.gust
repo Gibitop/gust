@@ -51,7 +51,7 @@ fn main() {
             let noteFuture = future db.sql("SELECT * FROM $Note WHERE id = $req.params.id")
 
             // You can explicitly await a future to get the value with `await`
-            
+
             return match await noteFuture {
                 Ok(note) => Response.ok(note),
                 // Fallback match branch

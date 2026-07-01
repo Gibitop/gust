@@ -1,20 +1,20 @@
 // Welcome to the basics of Gust!
-// Gust does not have its own syntax highliter yet, but the hightlighter for rust works ok for now
-// BTW all commments are **markdown**!
+// Gust does not have its own syntax highlighter yet, but the highlighter for rust works ok for now
+// BTW all comments are **markdown**!
 
-from time import getCurrentTime // Imports define 
-from json import Serializable as JsonSerializable // Imports 
+from time import getCurrentTime
+from json import Serializable as JsonSerializable
 
 from ./animal import Animal // Imports local modules. This will be resolved to the `./Animal.gust` file
 from ~/smth import SomeThing // Imports a module starting from the src directory of the project
-from extrnal-library/utils/* import * // Imports all functions from all `.gust` files in the extrnal-library/utils directory
+from external-library/utils/* import * // Imports all functions from all `.gust` files in the external-library/utils directory
 
-// This line is an artifact. It is needed to use rust's syntax highliter in this file since there is no gust highliter yet. Ignore this line */
+// This line is an artifact. It is needed to use rust's syntax highlighter in this file since there is no gust highlighter yet. Ignore this line */
 
 enum Being {
     Person(Person)
     Animal(Animal)
-} // There is no semicolons at the end of the lines ever 
+} // There is no semicolons at the end of the lines ever
 
 @Derive(JsonSerializable)
 struct Person {
@@ -77,7 +77,7 @@ fn main() {
         age: 25,
     })
 
-    // For loops iterate over an iterable. Standart array list implements the iterable trait
+    // For loops iterate over an iterable. Standard array list implements the iterable trait
     for person in listOfBeings {
         // $ is used to interpolate the value of the variable into the string
         io.println(getGreeting(person))
@@ -116,7 +116,7 @@ fn saveBeings(beings: ArrayList<Being>) {
     let file = io.open("beings.json", "w")
 
     match file {
-        // toJson method is implmented outside of the struct definition by the jsonSerializable derive macro
+        // toJson method is implemented outside of the struct definition by the jsonSerializable derive macro
         // The json module also implements the toJson method for ArrayList<T>
         Ok(file) => file.write(beings.toJson())!
         // Match branches can be blocks
@@ -127,5 +127,5 @@ fn saveBeings(beings: ArrayList<Being>) {
         }
     }
 
-    // We don't need to close the file manually because the standart File struct has a destructor defined
+    // We don't need to close the file manually because the standard File struct has a destructor defined
 }
