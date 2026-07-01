@@ -1,5 +1,10 @@
 from http import Server, Route, Request, Response
-from json import Serializable as JsonSerializable, SerializeAs as JsonSerializeAs
+// Long imports can be split into multiple lines to improve readability
+from json import (
+    Serializable as JsonSerializable,
+    SerializeAs as JsonSerializeAs,
+    DeserializeAs as JsonDeserializeAs,
+)
 from uuid import UUID
 from orm import Table, PrimaryKey, DbTypes, SqliteType
 from swagger import Swagger
