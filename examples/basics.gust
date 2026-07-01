@@ -60,7 +60,7 @@ fn main() {
 
     // debug is used to print the value of any type, not just simple types
     io.debug(person)
-   
+
     // mut is used to make the variable mutable
     // [] is used to declare an array list
     let mut listOfBeings: ArrayList<Being> = [Person(person)]
@@ -97,7 +97,7 @@ fn main() {
 }
 
 // this function returns a string. This is inferred by the compiler
-fn getGreeting(being: Being) => String {
+fn getGreeting(being: Being) {
     // Returns are always explicit (through the return keyword) for function with a body block
     return match being {
         // Match branches extract the value from the matched expression
