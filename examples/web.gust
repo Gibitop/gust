@@ -1,0 +1,82 @@
+from http import Server, Route, Request, Response
+from json import Serializable as JsonSerializable, SerializeAs as JsonSerializeAs
+from uuid import UUID
+from orm import Table, PrimaryKey, DbTypes, SqliteType
+from swagger import Swagger
+from base58 import encode as base58Encode
+
+// We can add methods to types
+// The method will only be available in this module and the modules that import this module
+impl for UUID {
+    fn toBase58String(self) => base58Encode(self.toBytes())
+
+    // Static methods are available on the type itself and don't receive the self reference
+    static fn fromBase58String(str: String) => UUID.fromBytes(base58Decode(str))
+}
+
+// Derive macros can accept arguments
+@Derive(JsonSerializable, Table("notes"))
+struct Note {
+    @PrimaryKey
+    @DbType(SqliteType.Integer, UUID.parse<u128>)
+    @JsonSerializeAs(UUID.toBase58String)
+    @JsonDeserializeAs(UUID.fromBase58String)
+    id: UUID
+
+    // The Table derive macro will generate column definition automatically if possible
+    title: String
+
+    description: Option<String>
+}
+
+fn main() {
+    // ?? operator can be used to provide a fallback value to an option type
+    let db = Db.new(process.env.get("DATABASE_URL") ?? "sqlite://:memory:")
+
+    let mut server = Server.new(routes: [
+        Route.get("/", fn (req) => Response.ok("Hello, world!")),
+
+        // Generic parameters can be named
+        Route.post("/notes", fn (req: Request<body: Omit<Note, "id">>) => {
+            // String literals remember values that were interpolated into them and can process them (eg: sanitize the sql)
+            db.sql("INSERT INTO $Note (title, description) VALUES ($req.body.title, $req.body.description)")!
+
+            return Response.created("Note created")
+        }),
+
+        // Return types can be defined explicitly
+        Route.get("/notes/:id", async fn (req): Response<body: Option<Note>> => {
+            // This is a non-blocking operation. The futures are awaited by default
+            // You can use the `future` keyword to get a non-awaited future.
+            let noteFuture = future db.sql("SELECT * FROM $Note WHERE id = $req.params.id")
+
+            // You can explicitly await a future to get the value with `await`
+            
+            return match await noteFuture {
+                Ok(note) => Response.ok(note),
+                // Fallback match branch
+                _ => Response.notFound(Option.None),
+            }
+        }),
+
+        Route.post("/long-running-operation", fn (req) => {
+            let future = spawn {
+                // Spawn blocks are executed in a new thread (like go routines)
+                // They return a future that can be awaited
+                // The future will be resolved with the return value of the block
+
+                return "Some value"
+            }
+
+            // There are also .then and .catch methods on the future to handle the value or error
+            future.then(fn (value) => io.println("Operation completed with value: $value"))
+
+            return Response.ok("Operation triggered")
+        }),
+    ])
+
+    // Swagger will use reflection to generate the route
+    server.routes.push(Route.get("/swagger", Swagger.generate(server.routes)))
+
+    server.start(port: 3000)
+}
