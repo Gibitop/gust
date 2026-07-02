@@ -50,17 +50,17 @@ fn main() {
         }),
 
         // Return types can be defined explicitly
-        Route.get("/notes/:id", async fn (req): Response<body: Option<Note>> => {
+        // Structs and enums can be defined anonymously in place
+        Route.get("/notes/:id", fn (req): Response<body: enum { Note, { message: String } }>> => {
             // This is a non-blocking operation. The futures are awaited by default
             // You can use the `future` keyword to get a non-awaited future.
             let noteFuture = future db.sql("SELECT * FROM $Note WHERE id = $req.params.id")
 
             // You can explicitly await a future to get the value with `await`
-
             return match await noteFuture {
                 Ok(note) => Response.ok(note),
-                // Fallback match branch
-                _ => Response.notFound(Option.None),
+                // Creating an instance of an anonymous struct
+                _ => Response.notFound({ message: "Note not found" }),
             }
         }),
 
@@ -73,7 +73,8 @@ fn main() {
                 return "Some value"
             }
 
-            // There are also .then and .catch methods on the future to handle the value or error
+            // There are also .then method on the future to handle the value of the future
+            // For error handling the spawn block must return a result type. There is no .catch method on the future
             future.then(fn (value) => io.println("Operation completed with value: $value"))
 
             return Response.ok("Operation triggered")

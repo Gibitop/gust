@@ -62,7 +62,9 @@ fn main() {
     io.debug(person)
 
     // mut is used to make the variable mutable
-    // [] is used to declare an array list
+    // [] is used as a literal for an enumerable type
+    // The exact enumerable type is inferred by the compiler or defaulted to an ArrayList
+    // Here we explicitly declare the type to be ArrayList<Being>, otherwise the compiler would infer the type to be ArrayList<Person>
     let mut listOfBeings: ArrayList<Being> = [Person(person)]
 
     // Defer can be compact
