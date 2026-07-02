@@ -1,0 +1,36 @@
+enum Enum {
+    { color: String, name: String }
+    { color: String, age: u8 }
+}
+
+fn main() {
+    // let a = A { name: "John" }       - This does not work now
+    // let b = B { age: 20 }            - This does not work now
+    // let c = C::A({ name: "John" })   - This does not work now
+    // let d = C::B({ age: 20 })        - This does not work now
+    let e = Enum { color: "red", name: "John" }
+    let f = Enum { color: "green", age: 20 }
+
+    baz(e)
+    baz(f)
+}
+
+// This does not work now
+// fn foo(c: Enum) {
+//     match c {
+//         Enum::A(a) => io.println("$a.name"),
+//         Enum::B(b) => io.println("$b.age"),
+//     }
+// }
+
+// This does not work now
+// fn bar(c: Enum) {
+//     match c {
+//         A(a) => io.println("$a.name"),
+//         B(b) => io.println("$b.age"),
+//     }
+// }
+
+fn baz(e: Enum) {
+    io.println("$e.color")
+}

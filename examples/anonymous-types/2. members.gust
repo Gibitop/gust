@@ -1,0 +1,52 @@
+struct A {
+    color: String,
+    name: String,
+}
+
+struct B {
+    color: String,
+    age: u8,
+}
+
+enum Enum {
+    A
+    B
+}
+
+fn main() {
+    let a = A { color: "red", name: "John" }
+    let b = B { color: "green", age: 20 }
+    // let c = C::A({ color: "blue", name: "Jack" })   - This does not work now
+    // let d = C::B({ color: "orange", age: 30 })      - This does not work now
+    let c = Enum { color: "blue", name: "Jack" }
+    let d = Enum { color: "orange", age: 30 }
+
+    bar(a)
+    bar(b)
+    bar(c)
+    bar(d)
+
+    baz(a)
+    baz(b)
+    baz(c)
+    baz(d)
+}
+
+// This does not work now
+// fn foo(c: Enum) {
+//     match c {
+//         Enum::A(a) => io.println("$a.name"),
+//         Enum::B(b) => io.println("$b.age"),
+//     }
+// }
+
+fn bar(c: Enum) {
+    match c {
+        A(a) => io.println("$a.name"),
+        B(b) => io.println("$b.age"),
+    }
+}
+
+fn baz(c: Enum) {
+    io.println("$c.color")
+}

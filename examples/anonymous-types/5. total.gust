@@ -1,0 +1,55 @@
+fn main() {
+    baz({ color: "red", name: "John" })
+    baz({ color: "green", age: 20 })
+}
+
+
+fn baz(e: enum {
+    { color: String, name: String }
+    { color: String, age: u8 }
+}) {
+    io.println("$e.color")
+}
+
+
+// ----- More realistic example ----- //
+
+
+// Part of http library
+struct Response<T implements JsonSerializable> {
+    status: u16,
+    body: T,
+
+    fn status(status: u16, body: T): Response<T> {
+        return Response { status: status, body: body }
+    }
+}
+
+// User code
+fn main2() {
+    // Define possible response types in place
+    registerHandler(fn(): Response<body: enum {
+        { color: String, name: "John" }
+        { color: String, age: u8 }
+    }> {
+        if (smth) {
+            // Enum member is picked by the compiler based on the type of the body
+            return Response.status(400, { color: "red", age: 20 })
+        }
+        return Response.status(200, { color: "green", name: "John" })
+    })
+
+}
+
+// Part of http library
+fn registerHandler<T implements JsonSerializable>(handler: fn(): Response<T>) {
+    // When request arrives, call the handler and respond to the client
+    respond(socket, handler())
+}
+
+// Part of http library
+fn respond<T implements JsonSerializable>(socket: Socket, e: Response<T>) {
+    socket.write(e.status)
+    socket.write(e.to_json())
+    socket.close()
+}
