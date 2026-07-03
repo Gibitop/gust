@@ -141,7 +141,7 @@ fn hello_world_c_output_is_stable() {
 
     assert_eq!(
         emit_c(&lowered),
-        "#include <stdio.h>\n\nint main(void) {\n    puts(\"Hello, world!\");\n    return 0;\n}\n"
+        "#include <stdio.h>\n\nstatic void gust_io_println(const char* value) {\n    puts(value);\n}\n\nint main(void) {\n    gust_io_println(\"Hello, world!\");\n    return 0;\n}\n"
     );
 }
 
@@ -157,7 +157,7 @@ fn string_local_c_output_is_stable() {
 
     assert_eq!(
         emit_c(&lowered),
-        "#include <stdio.h>\n\nint main(void) {\n    const char* gust_message = \"Hello, string local!\";\n    puts(gust_message);\n    return 0;\n}\n"
+        "#include <stdio.h>\n\nstatic void gust_io_println(const char* value) {\n    puts(value);\n}\n\nint main(void) {\n    const char* gust_message = \"Hello, string local!\";\n    gust_io_println(gust_message);\n    return 0;\n}\n"
     );
 }
 
@@ -172,11 +172,15 @@ fn string_concat_c_output_is_stable() {
 }"#,
     );
     let lowered = lower_program(&result.program).expect("string concat should lower");
+    let source = emit_c(&lowered);
 
     assert_eq!(
-        emit_c(&lowered),
-        "#include <stdio.h>\n#include <stdlib.h>\n#include <string.h>\n\nstatic char* gust_concat(const char* left, const char* right) {\n    size_t left_len = strlen(left);\n    size_t right_len = strlen(right);\n    char* result = malloc(left_len + right_len + 1);\n    memcpy(result, left, left_len);\n    memcpy(result + left_len, right, right_len + 1);\n    return result;\n}\n\nint main(void) {\n    const char* gust_name = \"Gust\";\n    const char* gust_message = gust_concat(gust_concat(\"Hello, \", gust_name), \"!\");\n    puts(gust_concat(\"Inline \", \"concat\"));\n    puts(gust_message);\n    return 0;\n}\n"
+        source,
+        "#include <stdio.h>\n#include <stdlib.h>\n#include <string.h>\n\nstatic void* gust_alloc(size_t size) {\n    return malloc(size);\n}\n\nstatic char* gust_string_concat(const char* left, const char* right) {\n    size_t left_len = strlen(left);\n    size_t right_len = strlen(right);\n    char* result = gust_alloc(left_len + right_len + 1);\n    memcpy(result, left, left_len);\n    memcpy(result + left_len, right, right_len + 1);\n    return result;\n}\n\nstatic void gust_io_println(const char* value) {\n    puts(value);\n}\n\nint main(void) {\n    const char* gust_name = \"Gust\";\n    const char* gust_message = gust_string_concat(gust_string_concat(\"Hello, \", gust_name), \"!\");\n    gust_io_println(gust_string_concat(\"Inline \", \"concat\"));\n    gust_io_println(gust_message);\n    return 0;\n}\n"
     );
+    assert_eq!(source.matches("malloc(").count(), 1);
+    assert!(source.contains("return malloc(size);"));
+    assert!(source.contains("char* result = gust_alloc(left_len + right_len + 1);"));
 }
 
 #[test]
@@ -194,7 +198,7 @@ fn basic_local_defaults_c_output_is_stable() {
 
     assert_eq!(
         emit_c(&lowered),
-        "#include <stdbool.h>\n#include <stddef.h>\n#include <stdint.h>\n#include <stdio.h>\n\nint main(void) {\n    const char* gust_message = \"\";\n    int32_t gust_count = 0;\n    bool gust_flag = false;\n    uint8_t gust_byte = 0;\n    size_t gust_size = 0;\n    return 0;\n}\n"
+        "#include <stdbool.h>\n#include <stddef.h>\n#include <stdint.h>\n\nint main(void) {\n    const char* gust_message = \"\";\n    int32_t gust_count = 0;\n    bool gust_flag = false;\n    uint8_t gust_byte = 0;\n    size_t gust_size = 0;\n    return 0;\n}\n"
     );
 }
 
@@ -211,7 +215,7 @@ fn initialized_basic_locals_c_output_is_stable() {
 
     assert_eq!(
         emit_c(&lowered),
-        "#include <stdbool.h>\n#include <stdint.h>\n#include <stdio.h>\n\nint main(void) {\n    const char* gust_message = \"Hello, initialized!\";\n    uint64_t gust_count = 42;\n    bool gust_flag = true;\n    return 0;\n}\n"
+        "#include <stdbool.h>\n#include <stdint.h>\n\nint main(void) {\n    const char* gust_message = \"Hello, initialized!\";\n    uint64_t gust_count = 42;\n    bool gust_flag = true;\n    return 0;\n}\n"
     );
 }
 
@@ -228,7 +232,7 @@ fn c_output_mangles_local_names_that_are_c_keywords() {
 
     assert_eq!(
         emit_c(&lowered),
-        "#include <stdint.h>\n#include <stdio.h>\n\nint main(void) {\n    uint16_t gust_short = 16;\n    uint32_t gust_unsigned = 32;\n    int32_t gust_signed = 32;\n    return 0;\n}\n"
+        "#include <stdint.h>\n\nint main(void) {\n    uint16_t gust_short = 16;\n    uint32_t gust_unsigned = 32;\n    int32_t gust_signed = 32;\n    return 0;\n}\n"
     );
 }
 
@@ -243,7 +247,7 @@ fn c_output_escapes_string_values() {
 
     assert_eq!(
         emit_c(&lowered),
-        "#include <stdio.h>\n\nint main(void) {\n    puts(\"line\\n\\\"quote\\\"\\\\slash\");\n    return 0;\n}\n"
+        "#include <stdio.h>\n\nstatic void gust_io_println(const char* value) {\n    puts(value);\n}\n\nint main(void) {\n    gust_io_println(\"line\\n\\\"quote\\\"\\\\slash\");\n    return 0;\n}\n"
     );
 }
 

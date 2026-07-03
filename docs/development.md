@@ -13,3 +13,7 @@ Minimal gust project contains a single `.gust` file with a `main` function
 Gust will use garbage collection for managed values, including strings. Do not introduce ownership or lexical `free` semantics for strings as an interim design.
 
 The current C backend may temporarily leak heap-allocated string concat results. Keep allocation isolated behind Gust-shaped runtime helpers, so raw `malloc` usage can later be replaced by GC allocation.
+
+## Runtime development
+
+Generated C should route operations that will later be runtime-managed through Gust-shaped helpers instead of calling C primitives directly.

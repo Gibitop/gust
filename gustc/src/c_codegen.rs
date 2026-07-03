@@ -41,6 +41,10 @@ pub fn emit_c(program: &LoweredProgram) -> String {
             matches!(value, LoweredValue::StringConcat(_, _))
         }
     });
+    let uses_println = program
+        .statements
+        .iter()
+        .any(|statement| matches!(statement, LoweredStatement::Println(_)));
 
     let mut source = String::new();
 
@@ -56,22 +60,35 @@ pub fn emit_c(program: &LoweredProgram) -> String {
         source.push_str("#include <stdint.h>\n");
     }
 
-    source.push_str("#include <stdio.h>\n");
+    if uses_println {
+        source.push_str("#include <stdio.h>\n");
+    }
 
     if uses_string_concat {
         source.push_str("#include <stdlib.h>\n#include <string.h>\n");
     }
 
-    source.push('\n');
+    if !source.is_empty() {
+        source.push('\n');
+    }
 
     if uses_string_concat {
-        source.push_str("static char* gust_concat(const char* left, const char* right) {\n");
+        source.push_str("static void* gust_alloc(size_t size) {\n");
+        source.push_str("    return malloc(size);\n");
+        source.push_str("}\n\n");
+        source.push_str("static char* gust_string_concat(const char* left, const char* right) {\n");
         source.push_str("    size_t left_len = strlen(left);\n");
         source.push_str("    size_t right_len = strlen(right);\n");
-        source.push_str("    char* result = malloc(left_len + right_len + 1);\n");
+        source.push_str("    char* result = gust_alloc(left_len + right_len + 1);\n");
         source.push_str("    memcpy(result, left, left_len);\n");
         source.push_str("    memcpy(result + left_len, right, right_len + 1);\n");
         source.push_str("    return result;\n");
+        source.push_str("}\n\n");
+    }
+
+    if uses_println {
+        source.push_str("static void gust_io_println(const char* value) {\n");
+        source.push_str("    puts(value);\n");
         source.push_str("}\n\n");
     }
 
@@ -90,17 +107,17 @@ pub fn emit_c(program: &LoweredProgram) -> String {
             }
             LoweredStatement::Println(value) => match value {
                 LoweredValue::StringLiteral(value) => {
-                    source.push_str("    puts(\"");
+                    source.push_str("    gust_io_println(\"");
                     push_c_string_value(&mut source, value);
                     source.push_str("\");\n");
                 }
                 LoweredValue::Local(name) => {
-                    source.push_str("    puts(");
+                    source.push_str("    gust_io_println(");
                     push_c_local_name(&mut source, name);
                     source.push_str(");\n");
                 }
                 LoweredValue::StringConcat(_, _) => {
-                    source.push_str("    puts(");
+                    source.push_str("    gust_io_println(");
                     push_c_value(&mut source, value);
                     source.push_str(");\n");
                 }
@@ -153,7 +170,7 @@ fn push_c_value(source: &mut String, value: &LoweredValue) {
         LoweredValue::NumberLiteral(value) => source.push_str(value),
         LoweredValue::Local(name) => push_c_local_name(source, name),
         LoweredValue::StringConcat(left, right) => {
-            source.push_str("gust_concat(");
+            source.push_str("gust_string_concat(");
             push_c_value(source, left);
             source.push_str(", ");
             push_c_value(source, right);
