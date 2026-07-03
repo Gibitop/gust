@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use crate::ast::{ExprKind, FunctionBody, Item, Program, StmtKind};
 use crate::diagnostic::Diagnostic;
 use crate::span::Span;
@@ -9,7 +11,14 @@ pub struct LoweredProgram {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LoweredStatement {
-    Println(String),
+    StringLocal { name: String, value: String },
+    Println(LoweredValue),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LoweredValue {
+    StringLiteral(String),
+    StringLocal(String),
 }
 
 pub fn lower_program(program: &Program) -> Result<LoweredProgram, Vec<Diagnostic>> {
@@ -57,6 +66,7 @@ pub fn lower_program(program: &Program) -> Result<LoweredProgram, Vec<Diagnostic
     };
 
     let mut statements = Vec::new();
+    let mut string_locals = HashSet::new();
     if let Some(param) = main.params.first() {
         diagnostics.push(Diagnostic::error(
             param.span,
@@ -79,7 +89,7 @@ pub fn lower_program(program: &Program) -> Result<LoweredProgram, Vec<Diagnostic
                         let ExprKind::Call { callee, args } = &expr.kind else {
                             diagnostics.push(Diagnostic::error(
                                 expr.span,
-                                "only `io.println(\"...\")` expression statements are supported in executable builds",
+                                "only `io.println(...)` expression statements are supported in executable builds",
                             ));
                             continue;
                         };
@@ -102,27 +112,76 @@ pub fn lower_program(program: &Program) -> Result<LoweredProgram, Vec<Diagnostic
                         if args.len() != 1 {
                             diagnostics.push(Diagnostic::error(
                                 expr.span,
-                                "`io.println` expects exactly one string literal in executable builds",
+                                "`io.println` expects exactly one string literal or string local in executable builds",
                             ));
                             continue;
                         }
 
                         let arg = &args[0];
-                        let ExprKind::String(value) = &arg.kind else {
-                            diagnostics.push(Diagnostic::error(
+                        match &arg.kind {
+                            ExprKind::String(value) => statements.push(LoweredStatement::Println(
+                                LoweredValue::StringLiteral(value.clone()),
+                            )),
+                            ExprKind::Identifier(name) if string_locals.contains(name) => {
+                                statements.push(LoweredStatement::Println(
+                                    LoweredValue::StringLocal(name.clone()),
+                                ));
+                            }
+                            ExprKind::Identifier(name) => diagnostics.push(Diagnostic::error(
                                 arg.span,
-                                "`io.println` only accepts a string literal in executable builds",
+                                format!("unknown string local `{name}` in `io.println`"),
+                            )),
+                            _ => diagnostics.push(Diagnostic::error(
+                                arg.span,
+                                "`io.println` only accepts a string literal or string local in executable builds",
+                            )),
+                        }
+                    }
+                    StmtKind::Let {
+                        name,
+                        mutable,
+                        type_annotation,
+                        value,
+                    } => {
+                        let mut can_lower = true;
+
+                        if *mutable {
+                            diagnostics.push(Diagnostic::error(
+                                statement.span,
+                                "`let mut` bindings are not supported in executable builds",
+                            ));
+                            can_lower = false;
+                        }
+
+                        if let Some(type_annotation) = type_annotation {
+                            diagnostics.push(Diagnostic::error(
+                                type_annotation.span,
+                                "typed let bindings are not supported in executable builds",
+                            ));
+                            can_lower = false;
+                        }
+
+                        let ExprKind::String(string_value) = &value.kind else {
+                            diagnostics.push(Diagnostic::error(
+                                value.span,
+                                "only string literal let values are supported in executable builds",
                             ));
                             continue;
                         };
 
-                        statements.push(LoweredStatement::Println(value.clone()));
-                    }
-                    StmtKind::Let { .. } => {
-                        diagnostics.push(Diagnostic::error(
-                            statement.span,
-                            "let statements are not supported in executable builds",
-                        ));
+                        if can_lower {
+                            if string_locals.insert(name.clone()) {
+                                statements.push(LoweredStatement::StringLocal {
+                                    name: name.clone(),
+                                    value: string_value.clone(),
+                                });
+                            } else {
+                                diagnostics.push(Diagnostic::error(
+                                    statement.span,
+                                    format!("duplicate string local `{name}` in executable build"),
+                                ));
+                            }
+                        }
                     }
                     StmtKind::Return { .. } => {
                         diagnostics.push(Diagnostic::error(
