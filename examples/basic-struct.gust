@@ -1,0 +1,13 @@
+struct Lang {
+    name: String
+    version: u32
+}
+
+fn main() {
+    let lang = Lang {
+        name: "Gust",
+        version: 1,
+    }
+
+    io.println(lang.name)
+}
