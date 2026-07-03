@@ -2,21 +2,35 @@ use std::collections::HashMap;
 
 use crate::ast::{
     BasicType, BinaryOp, Expr, ExprKind, FunctionBody, FunctionDecl, Item, Program, Stmt, StmtKind,
+    StructDecl, StructInitField, StructMember, TypeRef,
 };
 use crate::diagnostic::Diagnostic;
 use crate::span::Span;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LoweredProgram {
+    pub structs: Vec<LoweredStruct>,
     pub functions: Vec<LoweredFunction>,
     pub statements: Vec<LoweredStatement>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LoweredStruct {
+    pub name: String,
+    pub fields: Vec<LoweredField>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LoweredField {
+    pub name: String,
+    pub type_: LoweredType,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LoweredFunction {
     pub name: String,
     pub params: Vec<LoweredParam>,
-    pub return_type: BasicType,
+    pub return_type: LoweredType,
     pub statements: Vec<LoweredStatement>,
     pub return_value: LoweredExpr,
 }
@@ -24,7 +38,7 @@ pub struct LoweredFunction {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LoweredParam {
     pub name: String,
-    pub type_: BasicType,
+    pub type_: LoweredType,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -35,8 +49,23 @@ pub enum LoweredStatement {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LoweredExpr {
-    pub type_: BasicType,
+    pub type_: LoweredType,
     pub kind: LoweredExprKind,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LoweredType {
+    Basic(BasicType),
+    Struct(String),
+}
+
+impl LoweredType {
+    fn name(&self) -> String {
+        match self {
+            LoweredType::Basic(type_) => type_.name().to_string(),
+            LoweredType::Struct(name) => name.clone(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -46,6 +75,14 @@ pub enum LoweredExprKind {
     NumberLiteral(String),
     Local(String),
     StringConcat(Box<LoweredExpr>, Box<LoweredExpr>),
+    StructLiteral {
+        name: String,
+        fields: Vec<LoweredStructFieldValue>,
+    },
+    FieldAccess {
+        object: Box<LoweredExpr>,
+        field: String,
+    },
     Call {
         name: String,
         args: Vec<LoweredExpr>,
@@ -53,18 +90,30 @@ pub enum LoweredExprKind {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LoweredStructFieldValue {
+    pub name: String,
+    pub value: LoweredExpr,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct FunctionSignature {
-    params: Vec<BasicType>,
-    return_type: BasicType,
+    params: Vec<LoweredType>,
+    return_type: LoweredType,
 }
 
 pub fn lower_program(program: &Program) -> Result<LoweredProgram, Vec<Diagnostic>> {
     let mut diagnostics = Vec::new();
     let mut main = None;
+    let mut structs = HashMap::new();
     let mut signatures = HashMap::new();
 
     for item in &program.items {
         match item {
+            Item::Struct(item) => {
+                if let Some(struct_) = lower_struct_definition(item, &mut diagnostics) {
+                    structs.insert(item.name.clone(), struct_);
+                }
+            }
             Item::Function(function) if function.name.as_deref() == Some("main") => {
                 if main.is_some() {
                     diagnostics.push(Diagnostic::error(
@@ -89,10 +138,6 @@ pub fn lower_program(program: &Program) -> Result<LoweredProgram, Vec<Diagnostic
             Item::Enum(item) => diagnostics.push(Diagnostic::error(
                 item.span,
                 "enums are not supported in executable builds",
-            )),
-            Item::Struct(item) => diagnostics.push(Diagnostic::error(
-                item.span,
-                "structs are not supported in executable builds",
             )),
         }
     }
@@ -121,20 +166,77 @@ pub fn lower_program(program: &Program) -> Result<LoweredProgram, Vec<Diagnostic
             continue;
         }
 
-        if let Some(function) = lower_function(function, &signatures, &mut diagnostics) {
+        if let Some(function) = lower_function(function, &signatures, &structs, &mut diagnostics) {
             functions.push(function);
         }
     }
 
-    let statements = lower_main(main, &signatures, &mut diagnostics);
+    let statements = lower_main(main, &signatures, &structs, &mut diagnostics);
 
     if diagnostics.is_empty() {
+        let mut structs = structs.into_values().collect::<Vec<_>>();
+        structs.sort_by(|left, right| left.name.cmp(&right.name));
+
         Ok(LoweredProgram {
+            structs,
             functions,
             statements,
         })
     } else {
         Err(diagnostics)
+    }
+}
+
+fn lower_struct_definition(
+    item: &StructDecl,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> Option<LoweredStruct> {
+    let mut fields = Vec::new();
+    let mut field_names = HashMap::new();
+    let mut can_lower = true;
+
+    for member in &item.members {
+        match member {
+            StructMember::Field(field) => {
+                if field_names.insert(field.name.clone(), field.span).is_some() {
+                    diagnostics.push(Diagnostic::error(
+                        field.span,
+                        format!("duplicate field `{}` in struct `{}`", field.name, item.name),
+                    ));
+                    can_lower = false;
+                }
+
+                let Some(type_) = lower_basic_type_ref(
+                    &field.type_ref,
+                    diagnostics,
+                    "only basic struct field types are supported in executable builds",
+                ) else {
+                    can_lower = false;
+                    continue;
+                };
+
+                fields.push(LoweredField {
+                    name: field.name.clone(),
+                    type_: LoweredType::Basic(type_),
+                });
+            }
+            StructMember::Method(method) => {
+                diagnostics.push(Diagnostic::error(
+                    method.span,
+                    "methods are not supported in executable builds",
+                ));
+                can_lower = false;
+            }
+        }
+    }
+
+    if can_lower {
+        Some(LoweredStruct {
+            name: item.name.clone(),
+            fields,
+        })
+    } else {
+        None
     }
 }
 
@@ -163,25 +265,16 @@ fn lower_function_signature(
             continue;
         };
 
-        if !type_ref.args.is_empty() {
-            diagnostics.push(Diagnostic::error(
-                type_ref.span,
-                "generic parameter types are not supported in executable builds",
-            ));
-            can_lower = false;
-            continue;
-        }
-
-        let Some(type_) = BasicType::from_name(&type_ref.name) else {
-            diagnostics.push(Diagnostic::error(
-                type_ref.span,
-                "only basic parameter types are supported in executable builds",
-            ));
+        let Some(type_) = lower_basic_type_ref(
+            type_ref,
+            diagnostics,
+            "only basic parameter types are supported in executable builds",
+        ) else {
             can_lower = false;
             continue;
         };
 
-        params.push(type_);
+        params.push(LoweredType::Basic(type_));
     }
 
     let Some(return_type) = &function.return_type else {
@@ -192,35 +285,49 @@ fn lower_function_signature(
         return None;
     };
 
-    if !return_type.args.is_empty() {
-        diagnostics.push(Diagnostic::error(
-            return_type.span,
-            "generic return types are not supported in executable builds",
-        ));
-        return None;
-    }
-
-    let Some(return_type) = BasicType::from_name(&return_type.name) else {
-        diagnostics.push(Diagnostic::error(
-            return_type.span,
-            "only basic return types are supported in executable builds",
-        ));
+    let Some(return_type) = lower_basic_type_ref(
+        return_type,
+        diagnostics,
+        "only basic return types are supported in executable builds",
+    ) else {
         return None;
     };
 
     if can_lower {
         Some(FunctionSignature {
             params,
-            return_type,
+            return_type: LoweredType::Basic(return_type),
         })
     } else {
         None
     }
 }
 
+fn lower_basic_type_ref(
+    type_ref: &TypeRef,
+    diagnostics: &mut Vec<Diagnostic>,
+    message: &str,
+) -> Option<BasicType> {
+    if !type_ref.args.is_empty() {
+        diagnostics.push(Diagnostic::error(
+            type_ref.span,
+            "generic types are not supported in executable builds",
+        ));
+        return None;
+    }
+
+    let Some(type_) = BasicType::from_name(&type_ref.name) else {
+        diagnostics.push(Diagnostic::error(type_ref.span, message));
+        return None;
+    };
+
+    Some(type_)
+}
+
 fn lower_function(
     function: &FunctionDecl,
     signatures: &HashMap<String, FunctionSignature>,
+    structs: &HashMap<String, LoweredStruct>,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> Option<LoweredFunction> {
     let name = function.name.as_ref()?;
@@ -239,7 +346,7 @@ fn lower_function(
     let mut return_value = None;
 
     for (param, type_) in function.params.iter().zip(&signature.params) {
-        if locals.insert(param.name.clone(), *type_).is_some() {
+        if locals.insert(param.name.clone(), type_.clone()).is_some() {
             diagnostics.push(Diagnostic::error(
                 param.span,
                 format!("duplicate local `{}` in executable build", param.name),
@@ -248,7 +355,7 @@ fn lower_function(
 
         params.push(LoweredParam {
             name: param.name.clone(),
-            type_: *type_,
+            type_: type_.clone(),
         });
     }
 
@@ -262,8 +369,9 @@ fn lower_function(
                         value,
                         &locals,
                         signatures,
+                        structs,
                         diagnostics,
-                        Some(signature.return_type),
+                        Some(signature.return_type.clone()),
                         "expected supported return value in executable builds",
                     );
                 }
@@ -285,7 +393,7 @@ fn lower_function(
         match &statement.kind {
             StmtKind::Let { .. } => {
                 if let Some(statement) =
-                    lower_local_statement(statement, &mut locals, signatures, diagnostics)
+                    lower_local_statement(statement, &mut locals, signatures, structs, diagnostics)
                 {
                     statements.push(statement);
                 }
@@ -308,7 +416,7 @@ fn lower_function(
     Some(LoweredFunction {
         name: name.clone(),
         params,
-        return_type: signature.return_type,
+        return_type: signature.return_type.clone(),
         statements,
         return_value,
     })
@@ -317,6 +425,7 @@ fn lower_function(
 fn lower_main(
     main: &FunctionDecl,
     signatures: &HashMap<String, FunctionSignature>,
+    structs: &HashMap<String, LoweredStruct>,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> Vec<LoweredStatement> {
     let mut statements = Vec::new();
@@ -376,11 +485,12 @@ fn lower_main(
                             &args[0],
                             &locals,
                             signatures,
+                            structs,
                             diagnostics,
                             None,
                             "`io.println` only accepts `String` values in executable builds",
                         ) {
-                            if value.type_ != BasicType::String {
+                            if value.type_ != LoweredType::Basic(BasicType::String) {
                                 diagnostics.push(Diagnostic::error(
                                     args[0].span,
                                     format!(
@@ -395,9 +505,13 @@ fn lower_main(
                         }
                     }
                     StmtKind::Let { .. } => {
-                        if let Some(statement) =
-                            lower_local_statement(statement, &mut locals, signatures, diagnostics)
-                        {
+                        if let Some(statement) = lower_local_statement(
+                            statement,
+                            &mut locals,
+                            signatures,
+                            structs,
+                            diagnostics,
+                        ) {
                             statements.push(statement);
                         }
                     }
@@ -427,8 +541,9 @@ fn lower_main(
 
 fn lower_local_statement(
     statement: &Stmt,
-    locals: &mut HashMap<String, BasicType>,
+    locals: &mut HashMap<String, LoweredType>,
     signatures: &HashMap<String, FunctionSignature>,
+    structs: &HashMap<String, LoweredStruct>,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> Option<LoweredStatement> {
     let StmtKind::Let {
@@ -460,11 +575,13 @@ fn lower_local_statement(
             can_lower = false;
             None
         } else if let Some(type_) = BasicType::from_name(&type_annotation.name) {
-            Some(type_)
+            Some(LoweredType::Basic(type_))
+        } else if structs.contains_key(&type_annotation.name) {
+            Some(LoweredType::Struct(type_annotation.name.clone()))
         } else {
             diagnostics.push(Diagnostic::error(
                 type_annotation.span,
-                "only basic local types are supported in executable builds",
+                "only basic and struct local types are supported in executable builds",
             ));
             can_lower = false;
             None
@@ -478,16 +595,26 @@ fn lower_local_statement(
             value,
             locals,
             signatures,
+            structs,
             diagnostics,
-            annotated_type,
-            "only literal, string concat, and function call local values are supported in executable builds",
+            annotated_type.clone(),
+            "only literal, string concat, struct literal, field access, and function call local values are supported in executable builds",
         )
-    } else if let Some(type_) = annotated_type {
+    } else if let Some(type_) = annotated_type.clone() {
         let kind = match type_ {
-            BasicType::String => LoweredExprKind::StringLiteral(String::new()),
-            BasicType::Bool => LoweredExprKind::BoolLiteral(false),
-            type_ if type_.is_numeric() => LoweredExprKind::NumberLiteral("0".to_string()),
-            _ => unreachable!("all basic types have default values"),
+            LoweredType::Basic(BasicType::String) => LoweredExprKind::StringLiteral(String::new()),
+            LoweredType::Basic(BasicType::Bool) => LoweredExprKind::BoolLiteral(false),
+            LoweredType::Basic(type_) if type_.is_numeric() => {
+                LoweredExprKind::NumberLiteral("0".to_string())
+            }
+            LoweredType::Struct(_) => {
+                diagnostics.push(Diagnostic::error(
+                    statement.span,
+                    "struct locals must include an initializer in executable builds",
+                ));
+                return None;
+            }
+            LoweredType::Basic(_) => unreachable!("all basic types have default values"),
         };
 
         Some(LoweredExpr { type_, kind })
@@ -507,7 +634,7 @@ fn lower_local_statement(
         return None;
     }
 
-    if locals.insert(name.clone(), value.type_).is_some() {
+    if locals.insert(name.clone(), value.type_.clone()).is_some() {
         diagnostics.push(Diagnostic::error(
             statement.span,
             format!("duplicate local `{name}` in executable build"),
@@ -521,37 +648,124 @@ fn lower_local_statement(
     })
 }
 
+fn lower_struct_init(
+    expr: &Expr,
+    name: &str,
+    fields: &[StructInitField],
+    locals: &HashMap<String, LoweredType>,
+    signatures: &HashMap<String, FunctionSignature>,
+    structs: &HashMap<String, LoweredStruct>,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> Option<LoweredExpr> {
+    let Some(struct_) = structs.get(name) else {
+        diagnostics.push(Diagnostic::error(
+            expr.span,
+            format!("unknown struct `{name}` in executable build"),
+        ));
+        return None;
+    };
+
+    let mut lowered_fields = Vec::new();
+    let mut seen_fields = HashMap::new();
+    let mut can_lower = true;
+
+    for field in fields {
+        if seen_fields.insert(field.name.clone(), field.span).is_some() {
+            diagnostics.push(Diagnostic::error(
+                field.span,
+                format!("duplicate field `{}` in struct literal", field.name),
+            ));
+            can_lower = false;
+        }
+
+        let Some(expected_field) = struct_
+            .fields
+            .iter()
+            .find(|expected_field| expected_field.name == field.name)
+        else {
+            diagnostics.push(Diagnostic::error(
+                field.span,
+                format!("unknown field `{}` for struct `{name}`", field.name),
+            ));
+            can_lower = false;
+            continue;
+        };
+
+        if let Some(value) = lower_expr(
+            &field.value,
+            locals,
+            signatures,
+            structs,
+            diagnostics,
+            Some(expected_field.type_.clone()),
+            "expected supported struct field value in executable builds",
+        ) {
+            lowered_fields.push(LoweredStructFieldValue {
+                name: field.name.clone(),
+                value,
+            });
+        }
+    }
+
+    for field in &struct_.fields {
+        if !seen_fields.contains_key(&field.name) {
+            diagnostics.push(Diagnostic::error(
+                expr.span,
+                format!("missing field `{}` in struct literal `{name}`", field.name),
+            ));
+            can_lower = false;
+        }
+    }
+
+    if !can_lower || lowered_fields.len() != fields.len() {
+        return None;
+    }
+
+    Some(LoweredExpr {
+        type_: LoweredType::Struct(name.to_string()),
+        kind: LoweredExprKind::StructLiteral {
+            name: name.to_string(),
+            fields: lowered_fields,
+        },
+    })
+}
+
 fn lower_expr(
     expr: &Expr,
-    locals: &HashMap<String, BasicType>,
+    locals: &HashMap<String, LoweredType>,
     signatures: &HashMap<String, FunctionSignature>,
+    structs: &HashMap<String, LoweredStruct>,
     diagnostics: &mut Vec<Diagnostic>,
-    expected_type: Option<BasicType>,
+    expected_type: Option<LoweredType>,
     message: &str,
 ) -> Option<LoweredExpr> {
     let lowered = match &expr.kind {
         ExprKind::String(value) => LoweredExpr {
-            type_: BasicType::String,
+            type_: LoweredType::Basic(BasicType::String),
             kind: LoweredExprKind::StringLiteral(value.clone()),
         },
         ExprKind::Bool(value) => LoweredExpr {
-            type_: BasicType::Bool,
+            type_: LoweredType::Basic(BasicType::Bool),
             kind: LoweredExprKind::BoolLiteral(*value),
         },
         ExprKind::Number(value) => {
-            let type_ = if expected_type.is_some_and(BasicType::is_numeric) {
-                expected_type.unwrap()
+            let type_ = if let Some(LoweredType::Basic(type_)) = expected_type.as_ref() {
+                if type_.is_numeric() {
+                    *type_
+                } else {
+                    BasicType::I32
+                }
             } else {
                 BasicType::I32
             };
 
             LoweredExpr {
-                type_,
+                type_: LoweredType::Basic(type_),
                 kind: LoweredExprKind::NumberLiteral(value.clone()),
             }
         }
         ExprKind::Identifier(name) if locals.contains_key(name) => LoweredExpr {
-            type_: locals[name],
+            type_: locals[name].clone(),
             kind: LoweredExprKind::Local(name.clone()),
         },
         ExprKind::Identifier(name) => {
@@ -570,16 +784,18 @@ fn lower_expr(
                 left,
                 locals,
                 signatures,
+                structs,
                 diagnostics,
-                Some(BasicType::String),
+                Some(LoweredType::Basic(BasicType::String)),
                 "expected `String` value in executable builds",
             );
             let right = lower_expr(
                 right,
                 locals,
                 signatures,
+                structs,
                 diagnostics,
-                Some(BasicType::String),
+                Some(LoweredType::Basic(BasicType::String)),
                 "expected `String` value in executable builds",
             );
 
@@ -588,8 +804,54 @@ fn lower_expr(
             };
 
             LoweredExpr {
-                type_: BasicType::String,
+                type_: LoweredType::Basic(BasicType::String),
                 kind: LoweredExprKind::StringConcat(Box::new(left), Box::new(right)),
+            }
+        }
+        ExprKind::StructInit { name, fields } => {
+            lower_struct_init(expr, name, fields, locals, signatures, structs, diagnostics)?
+        }
+        ExprKind::Member { object, name } => {
+            let object = lower_expr(
+                object,
+                locals,
+                signatures,
+                structs,
+                diagnostics,
+                None,
+                "expected supported field access object in executable builds",
+            )?;
+
+            let LoweredType::Struct(struct_name) = &object.type_ else {
+                diagnostics.push(Diagnostic::error(
+                    expr.span,
+                    "field access requires a struct value in executable builds",
+                ));
+                return None;
+            };
+
+            let Some(struct_) = structs.get(struct_name) else {
+                diagnostics.push(Diagnostic::error(
+                    expr.span,
+                    format!("unknown struct `{struct_name}` in executable build"),
+                ));
+                return None;
+            };
+
+            let Some(field) = struct_.fields.iter().find(|field| field.name == *name) else {
+                diagnostics.push(Diagnostic::error(
+                    expr.span,
+                    format!("unknown field `{name}` for struct `{struct_name}`"),
+                ));
+                return None;
+            };
+
+            LoweredExpr {
+                type_: field.type_.clone(),
+                kind: LoweredExprKind::FieldAccess {
+                    object: Box::new(object),
+                    field: name.clone(),
+                },
             }
         }
         ExprKind::Call { callee, args } => {
@@ -628,8 +890,9 @@ fn lower_expr(
                     arg,
                     locals,
                     signatures,
+                    structs,
                     diagnostics,
-                    Some(*type_),
+                    Some(type_.clone()),
                     "expected supported function argument in executable builds",
                 ) {
                     lowered_args.push(arg);
@@ -641,7 +904,7 @@ fn lower_expr(
             }
 
             LoweredExpr {
-                type_: signature.return_type,
+                type_: signature.return_type.clone(),
                 kind: LoweredExprKind::Call {
                     name: name.clone(),
                     args: lowered_args,

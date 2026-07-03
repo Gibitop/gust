@@ -93,6 +93,207 @@ fn main() {
 }
 
 #[test]
+fn basic_struct_literal_validates() {
+    let result = check_source(
+        r#"
+struct Lang {
+    name: String
+    version: u32
+}
+
+fn main() {
+    let lang = Lang {
+        name: "Gust",
+        version: 1,
+    }
+}
+"#,
+    );
+
+    assert!(
+        !result.has_errors(),
+        "expected basic struct literal to validate, got {:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
+fn struct_field_access_validates_as_field_type() {
+    let result = check_source(
+        r#"
+struct Lang {
+    name: String
+    version: u32
+}
+
+fn main() {
+    let lang = Lang {
+        name: "Gust",
+        version: 1,
+    }
+    let name: String = lang.name
+}
+"#,
+    );
+
+    assert!(
+        !result.has_errors(),
+        "expected struct field access to validate, got {:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
+fn struct_literal_missing_field_is_an_error() {
+    let result = check_source(
+        r#"
+struct Lang {
+    name: String
+    version: u32
+}
+
+fn main() {
+    let lang = Lang {
+        name: "Gust",
+    }
+}
+"#,
+    );
+
+    assert!(
+        result
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.severity == Severity::Error
+                && diagnostic
+                    .message
+                    .contains("missing field `version` in struct literal `Lang`")),
+        "expected missing-field error, got {:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
+fn struct_literal_unknown_field_is_an_error() {
+    let result = check_source(
+        r#"
+struct Lang {
+    name: String
+}
+
+fn main() {
+    let lang = Lang {
+        name: "Gust",
+        version: 1,
+    }
+}
+"#,
+    );
+
+    assert!(
+        result
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.severity == Severity::Error
+                && diagnostic
+                    .message
+                    .contains("unknown field `version` for struct `Lang`")),
+        "expected unknown-field error, got {:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
+fn struct_literal_duplicate_field_is_an_error() {
+    let result = check_source(
+        r#"
+struct Lang {
+    name: String
+}
+
+fn main() {
+    let lang = Lang {
+        name: "Gust",
+        name: "Gust",
+    }
+}
+"#,
+    );
+
+    assert!(
+        result
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.severity == Severity::Error
+                && diagnostic
+                    .message
+                    .contains("duplicate field `name` in struct literal")),
+        "expected duplicate-field error, got {:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
+fn struct_literal_field_type_mismatch_is_an_error() {
+    let result = check_source(
+        r#"
+struct Lang {
+    name: String
+    version: u32
+}
+
+fn main() {
+    let lang = Lang {
+        name: "Gust",
+        version: "1",
+    }
+}
+"#,
+    );
+
+    assert!(
+        result
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.severity == Severity::Error
+                && diagnostic
+                    .message
+                    .contains("expected value of type `u32`, got `String`")),
+        "expected field type mismatch, got {:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
+fn struct_methods_remain_unsupported() {
+    let result = check_source(
+        r#"
+struct Lang {
+    name: String
+
+    fn displayName(): String {
+        return self.name
+    }
+}
+
+fn main() {}
+"#,
+    );
+
+    assert!(
+        result
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.severity == Severity::Warning
+                && diagnostic
+                    .message
+                    .contains("methods are parsed but method dispatch is not implemented yet")),
+        "expected unsupported-method warning, got {:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
 fn unknown_type_names_are_errors() {
     let result = check_source(
         r#"

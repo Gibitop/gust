@@ -18,4 +18,12 @@ The current C backend may temporarily leak heap-allocated string concat results.
 
 Generated C should route operations that will later be runtime-managed through Gust-shaped helpers instead of calling C primitives directly.
 
-Generated C reserves `gust_rt_*` for runtime helpers. User-defined functions should use deterministic internal names shaped like `gust_fn_<hash>_<source_name>` with a nearby comment containing the original Gust function name.
+## Generated C naming
+
+Generated C reserves `gust_rt_*` for runtime helpers. User-defined symbols must not use this prefix.
+
+User-defined functions should use deterministic internal names shaped like `gust_fn_<hash>_<source_name>` with a nearby comment containing the original Gust function name.
+
+User-defined structs should use deterministic internal names shaped like `gust_struct_<hash>_<source_name>` with a nearby comment containing the original Gust struct name.
+
+Generated local variables and struct fields should use `gust_<source_name>`. Keep source-name suffixes sanitized so generated identifiers stay valid C identifiers.

@@ -3,8 +3,13 @@ use gustc::c_codegen::emit_c;
 use gustc::check_source;
 use gustc::diagnostic::Severity;
 use gustc::lower::{
-    LoweredExpr, LoweredExprKind, LoweredFunction, LoweredParam, LoweredStatement, lower_program,
+    LoweredExpr, LoweredExprKind, LoweredField, LoweredFunction, LoweredParam, LoweredStatement,
+    LoweredStruct, LoweredStructFieldValue, LoweredType, lower_program,
 };
+
+fn basic(type_: BasicType) -> LoweredType {
+    LoweredType::Basic(type_)
+}
 
 #[test]
 fn hello_world_lowers_successfully() {
@@ -25,7 +30,7 @@ fn hello_world_lowers_successfully() {
     assert_eq!(
         lowered.statements,
         vec![LoweredStatement::Println(LoweredExpr {
-            type_: BasicType::String,
+            type_: basic(BasicType::String),
             kind: LoweredExprKind::StringLiteral("Hello, world!".to_string()),
         })]
     );
@@ -54,12 +59,12 @@ fn string_local_lowers_successfully() {
             LoweredStatement::Local {
                 name: "message".to_string(),
                 value: LoweredExpr {
-                    type_: BasicType::String,
+                    type_: basic(BasicType::String),
                     kind: LoweredExprKind::StringLiteral("Hello, string local!".to_string()),
                 },
             },
             LoweredStatement::Println(LoweredExpr {
-                type_: BasicType::String,
+                type_: basic(BasicType::String),
                 kind: LoweredExprKind::Local("message".to_string()),
             }),
         ]
@@ -87,7 +92,7 @@ fn string_concat_local_lowers_successfully() {
         panic!("expected string concat local");
     };
 
-    assert_eq!(value.type_, BasicType::String);
+    assert_eq!(value.type_, basic(BasicType::String));
 
     assert_eq!(
         lowered.statements,
@@ -95,28 +100,28 @@ fn string_concat_local_lowers_successfully() {
             LoweredStatement::Local {
                 name: "name".to_string(),
                 value: LoweredExpr {
-                    type_: BasicType::String,
+                    type_: basic(BasicType::String),
                     kind: LoweredExprKind::StringLiteral("Gust".to_string()),
                 },
             },
             LoweredStatement::Local {
                 name: "message".to_string(),
                 value: LoweredExpr {
-                    type_: BasicType::String,
+                    type_: basic(BasicType::String),
                     kind: LoweredExprKind::StringConcat(
                         Box::new(LoweredExpr {
-                            type_: BasicType::String,
+                            type_: basic(BasicType::String),
                             kind: LoweredExprKind::StringLiteral("Hello, ".to_string()),
                         }),
                         Box::new(LoweredExpr {
-                            type_: BasicType::String,
+                            type_: basic(BasicType::String),
                             kind: LoweredExprKind::Local("name".to_string()),
                         }),
                     ),
                 },
             },
             LoweredStatement::Println(LoweredExpr {
-                type_: BasicType::String,
+                type_: basic(BasicType::String),
                 kind: LoweredExprKind::Local("message".to_string()),
             }),
         ]
@@ -146,19 +151,19 @@ fn direct_string_concat_println_lowers_successfully() {
             LoweredStatement::Local {
                 name: "name".to_string(),
                 value: LoweredExpr {
-                    type_: BasicType::String,
+                    type_: basic(BasicType::String),
                     kind: LoweredExprKind::StringLiteral("Gust".to_string()),
                 },
             },
             LoweredStatement::Println(LoweredExpr {
-                type_: BasicType::String,
+                type_: basic(BasicType::String),
                 kind: LoweredExprKind::StringConcat(
                     Box::new(LoweredExpr {
-                        type_: BasicType::String,
+                        type_: basic(BasicType::String),
                         kind: LoweredExprKind::StringLiteral("Hello, ".to_string()),
                     }),
                     Box::new(LoweredExpr {
-                        type_: BasicType::String,
+                        type_: basic(BasicType::String),
                         kind: LoweredExprKind::Local("name".to_string()),
                     }),
                 ),
@@ -194,19 +199,19 @@ fn main() {
             name: "greet".to_string(),
             params: vec![LoweredParam {
                 name: "name".to_string(),
-                type_: BasicType::String,
+                type_: basic(BasicType::String),
             }],
-            return_type: BasicType::String,
+            return_type: basic(BasicType::String),
             statements: vec![],
             return_value: LoweredExpr {
-                type_: BasicType::String,
+                type_: basic(BasicType::String),
                 kind: LoweredExprKind::StringConcat(
                     Box::new(LoweredExpr {
-                        type_: BasicType::String,
+                        type_: basic(BasicType::String),
                         kind: LoweredExprKind::StringLiteral("Hello, ".to_string()),
                     }),
                     Box::new(LoweredExpr {
-                        type_: BasicType::String,
+                        type_: basic(BasicType::String),
                         kind: LoweredExprKind::Local("name".to_string()),
                     }),
                 ),
@@ -219,21 +224,148 @@ fn main() {
             LoweredStatement::Local {
                 name: "message".to_string(),
                 value: LoweredExpr {
-                    type_: BasicType::String,
+                    type_: basic(BasicType::String),
                     kind: LoweredExprKind::Call {
                         name: "greet".to_string(),
                         args: vec![LoweredExpr {
-                            type_: BasicType::String,
+                            type_: basic(BasicType::String),
                             kind: LoweredExprKind::StringLiteral("Gust".to_string()),
                         }],
                     },
                 },
             },
             LoweredStatement::Println(LoweredExpr {
-                type_: BasicType::String,
+                type_: basic(BasicType::String),
                 kind: LoweredExprKind::Local("message".to_string()),
             }),
         ]
+    );
+}
+
+#[test]
+fn basic_struct_local_lowers_successfully() {
+    let result = check_source(
+        r#"struct Person {
+    name: String
+    age: u32
+}
+
+fn main() {
+    let person = Person {
+        name: "Gust",
+        age: 1,
+    }
+}"#,
+    );
+
+    assert!(
+        !result.has_errors(),
+        "expected no frontend errors, got {:?}",
+        result.diagnostics
+    );
+
+    let lowered = lower_program(&result.program).expect("basic struct should lower");
+
+    assert_eq!(
+        lowered.structs,
+        vec![LoweredStruct {
+            name: "Person".to_string(),
+            fields: vec![
+                LoweredField {
+                    name: "name".to_string(),
+                    type_: basic(BasicType::String),
+                },
+                LoweredField {
+                    name: "age".to_string(),
+                    type_: basic(BasicType::U32),
+                },
+            ],
+        }]
+    );
+    assert_eq!(
+        lowered.statements,
+        vec![LoweredStatement::Local {
+            name: "person".to_string(),
+            value: LoweredExpr {
+                type_: LoweredType::Struct("Person".to_string()),
+                kind: LoweredExprKind::StructLiteral {
+                    name: "Person".to_string(),
+                    fields: vec![
+                        LoweredStructFieldValue {
+                            name: "name".to_string(),
+                            value: LoweredExpr {
+                                type_: basic(BasicType::String),
+                                kind: LoweredExprKind::StringLiteral("Gust".to_string()),
+                            },
+                        },
+                        LoweredStructFieldValue {
+                            name: "age".to_string(),
+                            value: LoweredExpr {
+                                type_: basic(BasicType::U32),
+                                kind: LoweredExprKind::NumberLiteral("1".to_string()),
+                            },
+                        },
+                    ],
+                },
+            },
+        }]
+    );
+}
+
+#[test]
+fn struct_field_access_lowers_successfully() {
+    let result = check_source(
+        r#"struct Person {
+    name: String
+    age: u32
+}
+
+fn main() {
+    let person = Person {
+        name: "Gust",
+        age: 1,
+    }
+    let name: String = person.name
+    io.println(person.name)
+}"#,
+    );
+
+    assert!(
+        !result.has_errors(),
+        "expected no frontend errors, got {:?}",
+        result.diagnostics
+    );
+
+    let lowered = lower_program(&result.program).expect("field access should lower");
+
+    assert_eq!(
+        lowered.statements[1],
+        LoweredStatement::Local {
+            name: "name".to_string(),
+            value: LoweredExpr {
+                type_: basic(BasicType::String),
+                kind: LoweredExprKind::FieldAccess {
+                    object: Box::new(LoweredExpr {
+                        type_: LoweredType::Struct("Person".to_string()),
+                        kind: LoweredExprKind::Local("person".to_string()),
+                    }),
+                    field: "name".to_string(),
+                },
+            },
+        }
+    );
+    assert_eq!(
+        lowered.statements[2],
+        LoweredStatement::Println(LoweredExpr {
+            type_: basic(BasicType::String),
+            kind: LoweredExprKind::FieldAccess {
+                object: Box::new(LoweredExpr {
+                    type_: LoweredType::Struct("Person".to_string()),
+                    kind: LoweredExprKind::Local("person".to_string()),
+                }),
+                field: "name".to_string(),
+            },
+        })
     );
 }
 
@@ -326,6 +458,36 @@ fn main() {
         emit_c(&lowered),
         "#include <stdio.h>\n#include <stdlib.h>\n#include <string.h>\n\nstatic void* gust_rt_alloc(size_t size) {\n    return malloc(size);\n}\n\nstatic char* gust_rt_string_concat(const char* left, const char* right) {\n    size_t left_len = strlen(left);\n    size_t right_len = strlen(right);\n    char* result = gust_rt_alloc(left_len + right_len + 1);\n    memcpy(result, left, left_len);\n    memcpy(result + left_len, right, right_len + 1);\n    return result;\n}\n\nstatic void gust_rt_io_println(const char* value) {\n    puts(value);\n}\n\n// Gust function: greet\nstatic const char* gust_fn_fb1de34a_greet(const char* gust_name) {\n    return gust_rt_string_concat(\"Hello, \", gust_name);\n}\n\nint main(void) {\n    gust_rt_io_println(gust_rt_string_concat(gust_fn_fb1de34a_greet(\"Gust\"), \"!\"));\n    return 0;\n}\n"
     );
+}
+
+#[test]
+fn basic_struct_c_output_contains_typedef_literal_and_field_access() {
+    let result = check_source(
+        r#"struct Person {
+    name: String
+    age: u32
+}
+
+fn main() {
+    let person = Person {
+        name: "Gust",
+        age: 1,
+    }
+    io.println(person.name)
+}"#,
+    );
+    let lowered = lower_program(&result.program).expect("basic struct should lower");
+    let source = emit_c(&lowered);
+
+    assert!(source.contains("// Gust struct: Person"));
+    assert!(source.contains("typedef struct gust_struct_"));
+    assert!(source.contains("_Person {"));
+    assert!(source.contains("const char* gust_name;"));
+    assert!(source.contains("uint32_t gust_age;"));
+    assert!(source.contains("gust_person = (gust_struct_"));
+    assert!(source.contains(".gust_name = \"Gust\""));
+    assert!(source.contains(".gust_age = 1"));
+    assert!(source.contains("gust_rt_io_println(gust_person.gust_name);"));
 }
 
 #[test]
@@ -481,17 +643,18 @@ fn mutable_local_is_still_rejected_by_backend() {
 }
 
 #[test]
-fn typed_non_basic_local_is_rejected_by_backend() {
+fn struct_helper_signature_is_rejected_by_backend() {
     let result = check_source(
         r#"
 struct Person {
     name: String
 }
 
+fn identity(person: Person): Person {
+    return person
+}
+
 fn main() {
-    let person: Person = Person {
-        name: "Gust",
-    }
 }
 "#,
     );
@@ -510,8 +673,8 @@ fn main() {
             .any(|diagnostic| diagnostic.severity == Severity::Error
                 && diagnostic
                     .message
-                    .contains("only basic local types are supported")),
-        "expected non-basic local diagnostic, got {diagnostics:?}"
+                    .contains("only basic parameter types are supported")),
+        "expected struct parameter diagnostic, got {diagnostics:?}"
     );
     assert!(
         diagnostics
@@ -519,8 +682,8 @@ fn main() {
             .any(|diagnostic| diagnostic.severity == Severity::Error
                 && diagnostic
                     .message
-                    .contains("structs are not supported in executable builds")),
-        "expected unsupported-struct diagnostic, got {diagnostics:?}"
+                    .contains("only basic return types are supported")),
+        "expected struct return diagnostic, got {diagnostics:?}"
     );
 }
 
@@ -571,7 +734,7 @@ fn basics_reaches_build_mode_rejection() {
             .any(|diagnostic| diagnostic.severity == Severity::Error
                 && diagnostic
                     .message
-                    .contains("structs are not supported in executable builds")),
-        "expected unsupported-struct diagnostic, got {diagnostics:?}"
+                    .contains("methods are not supported in executable builds")),
+        "expected unsupported-method diagnostic, got {diagnostics:?}"
     );
 }

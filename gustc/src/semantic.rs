@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 
 use crate::ast::{
     BasicType, BinaryOp, Block, Expr, ExprKind, FunctionBody, FunctionDecl, Item, Pattern, Program,
-    Stmt, StmtKind, StructMember, TypeRef,
+    Stmt, StmtKind, StructDecl, StructInitField, StructMember, TypeRef,
 };
 use crate::diagnostic::Diagnostic;
 use crate::span::Span;
@@ -18,6 +18,7 @@ struct Analyzer {
     diagnostics: Vec<Diagnostic>,
     values: HashSet<String>,
     types: HashSet<String>,
+    structs: HashMap<String, StructDefinition>,
     functions: HashMap<String, FunctionSignature>,
     unsupported_features: HashSet<&'static str>,
     scopes: Vec<HashMap<String, Binding>>,
@@ -30,16 +31,32 @@ struct FunctionSignature {
     return_type: Type,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
+struct StructDefinition {
+    fields: HashMap<String, Type>,
+}
+
+#[derive(Debug, Clone)]
 struct Binding {
     mutable: bool,
     type_: Type,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 enum Type {
     Basic(BasicType),
+    Struct(String),
     Unknown,
+}
+
+impl Type {
+    fn name(&self) -> String {
+        match self {
+            Type::Basic(type_) => type_.name().to_string(),
+            Type::Struct(name) => name.clone(),
+            Type::Unknown => "unknown".to_string(),
+        }
+    }
 }
 
 impl Analyzer {
@@ -51,6 +68,7 @@ impl Analyzer {
             diagnostics: Vec::new(),
             values,
             types,
+            structs: HashMap::new(),
             functions: HashMap::new(),
             unsupported_features: HashSet::new(),
             scopes: Vec::new(),
@@ -82,6 +100,12 @@ impl Analyzer {
                 Item::Struct(item) => {
                     self.values.insert(item.name.clone());
                     self.types.insert(item.name.clone());
+                    self.structs.insert(
+                        item.name.clone(),
+                        StructDefinition {
+                            fields: HashMap::new(),
+                        },
+                    );
                     self.insert_top_level(&mut names, &item.name, item.span);
                 }
                 Item::Function(item) => {
@@ -91,20 +115,34 @@ impl Analyzer {
                         }
 
                         self.values.insert(name.clone());
+                        self.insert_top_level(&mut names, name, item.span);
+                    }
+                }
+            }
+        }
+
+        for item in &program.items {
+            match item {
+                Item::Struct(item) => self.collect_struct_definition(item),
+                Item::Function(item) => {
+                    if let Some(name) = &item.name {
                         self.functions.insert(
                             name.clone(),
                             FunctionSignature {
                                 params: item
                                     .params
                                     .iter()
-                                    .map(|param| basic_type_ref(param.type_ref.as_ref()))
+                                    .map(|param| {
+                                        self.type_ref_without_diagnostics(param.type_ref.as_ref())
+                                    })
                                     .collect(),
-                                return_type: basic_type_ref(item.return_type.as_ref()),
+                                return_type: self
+                                    .type_ref_without_diagnostics(item.return_type.as_ref()),
                             },
                         );
-                        self.insert_top_level(&mut names, name, item.span);
                     }
                 }
+                Item::Import(_) | Item::Enum(_) => {}
             }
         }
 
@@ -121,6 +159,32 @@ impl Analyzer {
                 "expected exactly one `main` function",
             ));
         }
+    }
+
+    fn collect_struct_definition(&mut self, item: &StructDecl) {
+        let mut fields = HashMap::new();
+
+        for member in &item.members {
+            let StructMember::Field(field) = member else {
+                continue;
+            };
+
+            if fields
+                .insert(
+                    field.name.clone(),
+                    self.type_ref_without_diagnostics(Some(&field.type_ref)),
+                )
+                .is_some()
+            {
+                self.diagnostics.push(Diagnostic::error(
+                    field.span,
+                    format!("duplicate field `{}` in struct `{}`", field.name, item.name),
+                ));
+            }
+        }
+
+        self.structs
+            .insert(item.name.clone(), StructDefinition { fields });
     }
 
     fn insert_top_level(&mut self, names: &mut HashMap<String, Span>, name: &str, span: Span) {
@@ -156,15 +220,21 @@ impl Analyzer {
                     }
                 }
                 Item::Struct(item) => {
-                    self.unsupported(
-                        item.span,
-                        "structs are parsed but struct layout is not implemented yet",
-                    );
-
                     for member in &item.members {
                         match member {
                             StructMember::Field(field) => {
-                                self.validate_type(&field.type_ref);
+                                let type_ = self.validate_type(&field.type_ref);
+
+                                if matches!(type_, Type::Struct(_))
+                                    || (matches!(type_, Type::Unknown)
+                                        && BasicType::from_name(&field.type_ref.name).is_none()
+                                        && self.types.contains(&field.type_ref.name))
+                                {
+                                    self.diagnostics.push(Diagnostic::error(
+                                        field.span,
+                                        "struct fields only support basic types for now",
+                                    ));
+                                }
                             }
                             StructMember::Method(method) => {
                                 self.unsupported(
@@ -208,13 +278,13 @@ impl Analyzer {
             .return_type
             .as_ref()
             .map_or(Type::Unknown, |type_ref| self.validate_type(type_ref));
-        self.return_types.push(return_type);
+        self.return_types.push(return_type.clone());
 
         match &function.body {
             FunctionBody::Block(block) => self.validate_block(block),
             FunctionBody::Expr(expr) => {
-                let value_type = self.validate_expr_with_context(expr, Some(return_type));
-                self.report_type_mismatch(expr.span, return_type, value_type);
+                let value_type = self.validate_expr_with_context(expr, Some(return_type.clone()));
+                self.report_type_mismatch(expr.span, return_type.clone(), value_type);
             }
         }
 
@@ -252,7 +322,7 @@ impl Analyzer {
                     .as_ref()
                     .map(|type_ref| self.validate_type(type_ref));
                 let value_type = if let Some(value) = value {
-                    self.validate_expr_with_context(value, annotated_type)
+                    self.validate_expr_with_context(value, annotated_type.clone())
                 } else {
                     if type_annotation.is_none() {
                         self.diagnostics.push(Diagnostic::error(
@@ -272,19 +342,8 @@ impl Analyzer {
                     Type::Unknown
                 };
 
-                if let (Some(Type::Basic(annotated_type)), Type::Basic(value_type)) =
-                    (annotated_type, value_type)
-                {
-                    if annotated_type != value_type {
-                        self.diagnostics.push(Diagnostic::error(
-                            statement.span,
-                            format!(
-                                "expected value of type `{}`, got `{}`",
-                                annotated_type.name(),
-                                value_type.name()
-                            ),
-                        ));
-                    }
+                if let Some(annotated_type) = annotated_type.clone() {
+                    self.report_type_mismatch(statement.span, annotated_type, value_type.clone());
                 }
 
                 self.define(name, *mutable, annotated_type.unwrap_or(value_type));
@@ -293,7 +352,8 @@ impl Analyzer {
                 let expected_type = self.current_return_type();
 
                 if let Some(value) = value {
-                    let value_type = self.validate_expr_with_context(value, Some(expected_type));
+                    let value_type =
+                        self.validate_expr_with_context(value, Some(expected_type.clone()));
                     self.report_type_mismatch(value.span, expected_type, value_type);
                 } else if matches!(expected_type, Type::Basic(_)) {
                     self.diagnostics.push(Diagnostic::error(
@@ -346,19 +406,11 @@ impl Analyzer {
                     Type::Unknown
                 }
             }
-            ExprKind::Number(_) => {
-                if let Some(Type::Basic(type_)) = expected_type {
-                    if type_.is_numeric() {
-                        Type::Basic(type_)
-                    } else {
-                        Type::Basic(BasicType::I32)
-                    }
-                } else if matches!(expected_type, Some(Type::Unknown)) {
-                    Type::Unknown
-                } else {
-                    Type::Basic(BasicType::I32)
-                }
-            }
+            ExprKind::Number(_) => match expected_type {
+                Some(Type::Basic(type_)) if type_.is_numeric() => Type::Basic(type_),
+                Some(Type::Unknown) => Type::Unknown,
+                Some(Type::Basic(_)) | Some(Type::Struct(_)) | None => Type::Basic(BasicType::I32),
+            },
             ExprKind::String(_) => Type::Basic(BasicType::String),
             ExprKind::Bool(_) => Type::Basic(BasicType::Bool),
             ExprKind::Missing => Type::Unknown,
@@ -387,28 +439,9 @@ impl Analyzer {
 
                 Type::Unknown
             }
-            ExprKind::Member { object, .. } => {
-                self.validate_expr(object);
-                Type::Unknown
-            }
+            ExprKind::Member { object, name } => self.validate_member(expr.span, object, name),
             ExprKind::StructInit { name, fields } => {
-                self.unsupported(
-                    expr.span,
-                    "struct literals are parsed but construction is not implemented yet",
-                );
-
-                if BasicType::from_name(name).is_none() && !self.types.contains(name) {
-                    self.diagnostics.push(Diagnostic::error(
-                        expr.span,
-                        format!("unknown type `{name}`"),
-                    ));
-                }
-
-                for field in fields {
-                    self.validate_expr(&field.value);
-                }
-
-                Type::Unknown
+                self.validate_struct_init(expr.span, name, fields)
             }
             ExprKind::Binary { left, op, right } => {
                 let left_type = self.validate_expr(left);
@@ -528,11 +561,96 @@ impl Analyzer {
         }
 
         for (arg, expected_type) in args.iter().zip(signature.params) {
-            let arg_type = self.validate_expr_with_context(arg, Some(expected_type));
+            let arg_type = self.validate_expr_with_context(arg, Some(expected_type.clone()));
             self.report_type_mismatch(arg.span, expected_type, arg_type);
         }
 
         signature.return_type
+    }
+
+    fn validate_struct_init(&mut self, span: Span, name: &str, fields: &[StructInitField]) -> Type {
+        let Some(definition) = self.structs.get(name).cloned() else {
+            if BasicType::from_name(name).is_none() && !self.types.contains(name) {
+                self.diagnostics
+                    .push(Diagnostic::error(span, format!("unknown type `{name}`")));
+            } else {
+                self.diagnostics.push(Diagnostic::error(
+                    span,
+                    format!("`{name}` is not a struct type"),
+                ));
+            }
+
+            for field in fields {
+                self.validate_expr(&field.value);
+            }
+
+            return Type::Unknown;
+        };
+
+        let mut seen_fields = HashSet::new();
+
+        for field in fields {
+            if !seen_fields.insert(field.name.clone()) {
+                self.diagnostics.push(Diagnostic::error(
+                    field.span,
+                    format!("duplicate field `{}` in struct literal", field.name),
+                ));
+            }
+
+            let Some(expected_type) = definition.fields.get(&field.name).cloned() else {
+                self.diagnostics.push(Diagnostic::error(
+                    field.span,
+                    format!("unknown field `{}` for struct `{name}`", field.name),
+                ));
+                self.validate_expr(&field.value);
+                continue;
+            };
+
+            let value_type =
+                self.validate_expr_with_context(&field.value, Some(expected_type.clone()));
+            self.report_type_mismatch(field.value.span, expected_type, value_type);
+        }
+
+        for field in definition.fields.keys() {
+            if !seen_fields.contains(field) {
+                self.diagnostics.push(Diagnostic::error(
+                    span,
+                    format!("missing field `{field}` in struct literal `{name}`"),
+                ));
+            }
+        }
+
+        Type::Struct(name.to_string())
+    }
+
+    fn validate_member(&mut self, span: Span, object: &Expr, name: &str) -> Type {
+        let object_type = self.validate_expr(object);
+
+        let struct_name = match object_type {
+            Type::Struct(struct_name) => struct_name,
+            Type::Unknown => return Type::Unknown,
+            Type::Basic(_) => {
+                self.diagnostics.push(Diagnostic::error(
+                    span,
+                    "field access requires a struct value",
+                ));
+                return Type::Unknown;
+            }
+        };
+
+        let Some(definition) = self.structs.get(&struct_name) else {
+            return Type::Unknown;
+        };
+
+        let Some(type_) = definition.fields.get(name) else {
+            self.diagnostics.push(Diagnostic::error(
+                span,
+                format!("unknown field `{name}` for struct `{struct_name}`"),
+            ));
+            return Type::Unknown;
+        };
+
+        type_.clone()
     }
 
     fn validate_missing_return(&mut self, function: &FunctionDecl, return_type: Type) {
@@ -558,17 +676,19 @@ impl Analyzer {
     }
 
     fn report_type_mismatch(&mut self, span: Span, expected_type: Type, value_type: Type) {
-        if let (Type::Basic(expected_type), Type::Basic(value_type)) = (expected_type, value_type) {
-            if expected_type != value_type {
-                self.diagnostics.push(Diagnostic::error(
-                    span,
-                    format!(
-                        "expected value of type `{}`, got `{}`",
-                        expected_type.name(),
-                        value_type.name()
-                    ),
-                ));
-            }
+        if matches!(expected_type, Type::Unknown) || matches!(value_type, Type::Unknown) {
+            return;
+        }
+
+        if expected_type != value_type {
+            self.diagnostics.push(Diagnostic::error(
+                span,
+                format!(
+                    "expected value of type `{}`, got `{}`",
+                    expected_type.name(),
+                    value_type.name()
+                ),
+            ));
         }
     }
 
@@ -618,6 +738,8 @@ impl Analyzer {
             Type::Unknown
         } else if let Some(basic_type) = basic_type {
             Type::Basic(basic_type)
+        } else if self.structs.contains_key(&type_ref.name) {
+            Type::Struct(type_ref.name.clone())
         } else {
             Type::Unknown
         }
@@ -628,7 +750,25 @@ impl Analyzer {
             return !type_ref.args.is_empty();
         }
 
-        self.types.contains(&type_ref.name)
+        self.structs.contains_key(&type_ref.name) || self.types.contains(&type_ref.name)
+    }
+
+    fn type_ref_without_diagnostics(&self, type_ref: Option<&TypeRef>) -> Type {
+        let Some(type_ref) = type_ref else {
+            return Type::Unknown;
+        };
+
+        if !type_ref.args.is_empty() {
+            return Type::Unknown;
+        }
+
+        if let Some(basic_type) = BasicType::from_name(&type_ref.name) {
+            Type::Basic(basic_type)
+        } else if self.structs.contains_key(&type_ref.name) {
+            Type::Struct(type_ref.name.clone())
+        } else {
+            Type::Unknown
+        }
     }
 
     fn unsupported(&mut self, span: Span, message: &'static str) {
@@ -646,7 +786,7 @@ impl Analyzer {
     fn lookup(&self, name: &str) -> Option<Binding> {
         for scope in self.scopes.iter().rev() {
             if let Some(binding) = scope.get(name) {
-                return Some(*binding);
+                return Some(binding.clone());
             }
         }
 
@@ -662,20 +802,8 @@ impl Analyzer {
     }
 
     fn current_return_type(&self) -> Type {
-        self.return_types.last().copied().unwrap_or(Type::Unknown)
+        self.return_types.last().cloned().unwrap_or(Type::Unknown)
     }
-}
-
-fn basic_type_ref(type_ref: Option<&TypeRef>) -> Type {
-    type_ref
-        .and_then(|type_ref| {
-            if type_ref.args.is_empty() {
-                BasicType::from_name(&type_ref.name)
-            } else {
-                None
-            }
-        })
-        .map_or(Type::Unknown, Type::Basic)
 }
 
 fn root_identifier(expr: &Expr) -> Option<&str> {

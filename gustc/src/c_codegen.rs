@@ -1,6 +1,7 @@
 use crate::ast::BasicType;
 use crate::lower::{
-    LoweredExpr, LoweredExprKind, LoweredFunction, LoweredProgram, LoweredStatement,
+    LoweredExpr, LoweredExprKind, LoweredFunction, LoweredProgram, LoweredStatement, LoweredStruct,
+    LoweredType,
 };
 
 pub fn emit_c(program: &LoweredProgram) -> String {
@@ -37,6 +38,11 @@ pub fn emit_c(program: &LoweredProgram) -> String {
     }
 
     if !source.is_empty() {
+        source.push('\n');
+    }
+
+    for struct_ in &program.structs {
+        push_c_struct(&mut source, struct_);
         source.push('\n');
     }
 
@@ -79,18 +85,32 @@ pub fn emit_c(program: &LoweredProgram) -> String {
 
 fn program_uses_type(program: &LoweredProgram, type_: BasicType) -> bool {
     program
-        .functions
+        .structs
         .iter()
-        .any(|function| function_uses_type(function, type_))
+        .any(|struct_| struct_uses_type(struct_, type_))
+        || program
+            .functions
+            .iter()
+            .any(|function| function_uses_type(function, type_))
         || program
             .statements
             .iter()
             .any(|statement| statement_uses_type(statement, type_))
 }
 
+fn struct_uses_type(struct_: &LoweredStruct, type_: BasicType) -> bool {
+    struct_
+        .fields
+        .iter()
+        .any(|field| field.type_ == LoweredType::Basic(type_))
+}
+
 fn function_uses_type(function: &LoweredFunction, type_: BasicType) -> bool {
-    function.return_type == type_
-        || function.params.iter().any(|param| param.type_ == type_)
+    function.return_type == LoweredType::Basic(type_)
+        || function
+            .params
+            .iter()
+            .any(|param| param.type_ == LoweredType::Basic(type_))
         || function
             .statements
             .iter()
@@ -107,11 +127,15 @@ fn statement_uses_type(statement: &LoweredStatement, type_: BasicType) -> bool {
 }
 
 fn expr_uses_type(expr: &LoweredExpr, type_: BasicType) -> bool {
-    expr.type_ == type_
+    expr.type_ == LoweredType::Basic(type_)
         || match &expr.kind {
             LoweredExprKind::StringConcat(left, right) => {
                 expr_uses_type(left, type_) || expr_uses_type(right, type_)
             }
+            LoweredExprKind::StructLiteral { fields, .. } => fields
+                .iter()
+                .any(|field| expr_uses_type(&field.value, type_)),
+            LoweredExprKind::FieldAccess { object, .. } => expr_uses_type(object, type_),
             LoweredExprKind::Call { args, .. } => args.iter().any(|arg| expr_uses_type(arg, type_)),
             LoweredExprKind::StringLiteral(_)
             | LoweredExprKind::BoolLiteral(_)
@@ -159,6 +183,10 @@ fn statement_uses_string_concat(statement: &LoweredStatement) -> bool {
 fn expr_uses_string_concat(expr: &LoweredExpr) -> bool {
     match &expr.kind {
         LoweredExprKind::StringConcat(_, _) => true,
+        LoweredExprKind::StructLiteral { fields, .. } => fields
+            .iter()
+            .any(|field| expr_uses_string_concat(&field.value)),
+        LoweredExprKind::FieldAccess { object, .. } => expr_uses_string_concat(object),
         LoweredExprKind::Call { args, .. } => args.iter().any(expr_uses_string_concat),
         LoweredExprKind::StringLiteral(_)
         | LoweredExprKind::BoolLiteral(_)
@@ -171,12 +199,33 @@ fn statement_uses_println(statement: &LoweredStatement) -> bool {
     matches!(statement, LoweredStatement::Println(_))
 }
 
+fn push_c_struct(source: &mut String, struct_: &LoweredStruct) {
+    source.push_str("// Gust struct: ");
+    source.push_str(&struct_.name);
+    source.push('\n');
+    source.push_str("typedef struct ");
+    push_c_struct_name(source, &struct_.name);
+    source.push_str(" {\n");
+
+    for field in &struct_.fields {
+        source.push_str("    ");
+        push_c_type(source, &field.type_);
+        source.push(' ');
+        push_c_local_name(source, &field.name);
+        source.push_str(";\n");
+    }
+
+    source.push_str("} ");
+    push_c_struct_name(source, &struct_.name);
+    source.push_str(";\n");
+}
+
 fn push_c_function(source: &mut String, function: &LoweredFunction) {
     source.push_str("// Gust function: ");
     source.push_str(&function.name);
     source.push('\n');
     source.push_str("static ");
-    source.push_str(c_type(function.return_type));
+    push_c_type(source, &function.return_type);
     source.push(' ');
     push_c_function_name(source, &function.name);
     source.push('(');
@@ -186,7 +235,7 @@ fn push_c_function(source: &mut String, function: &LoweredFunction) {
             source.push_str(", ");
         }
 
-        source.push_str(c_type(param.type_));
+        push_c_type(source, &param.type_);
         source.push(' ');
         push_c_local_name(source, &param.name);
     }
@@ -207,7 +256,7 @@ fn push_c_statement(source: &mut String, statement: &LoweredStatement) {
     match statement {
         LoweredStatement::Local { name, value } => {
             source.push_str("    ");
-            source.push_str(c_type(value.type_));
+            push_c_type(source, &value.type_);
             source.push(' ');
             push_c_local_name(source, name);
             source.push_str(" = ");
@@ -225,12 +274,16 @@ fn push_c_statement(source: &mut String, statement: &LoweredStatement) {
                 push_c_local_name(source, name);
                 source.push_str(");\n");
             }
-            LoweredExprKind::StringConcat(_, _) | LoweredExprKind::Call { .. } => {
+            LoweredExprKind::StringConcat(_, _)
+            | LoweredExprKind::FieldAccess { .. }
+            | LoweredExprKind::Call { .. } => {
                 source.push_str("    gust_rt_io_println(");
                 push_c_value(source, value);
                 source.push_str(");\n");
             }
-            LoweredExprKind::BoolLiteral(_) | LoweredExprKind::NumberLiteral(_) => {
+            LoweredExprKind::BoolLiteral(_)
+            | LoweredExprKind::NumberLiteral(_)
+            | LoweredExprKind::StructLiteral { .. } => {
                 unreachable!("println only lowers String values")
             }
         },
@@ -244,6 +297,12 @@ fn push_c_local_name(source: &mut String, name: &str) {
 
 fn push_c_function_name(source: &mut String, name: &str) {
     source.push_str("gust_fn_");
+    source.push_str(&format!("{:08x}_", stable_name_hash(name)));
+    push_c_identifier_suffix(source, name);
+}
+
+fn push_c_struct_name(source: &mut String, name: &str) {
+    source.push_str("gust_struct_");
     source.push_str(&format!("{:08x}_", stable_name_hash(name)));
     push_c_identifier_suffix(source, name);
 }
@@ -268,7 +327,14 @@ fn push_c_identifier_suffix(source: &mut String, name: &str) {
     }
 }
 
-fn c_type(type_: BasicType) -> &'static str {
+fn push_c_type(source: &mut String, type_: &LoweredType) {
+    match type_ {
+        LoweredType::Basic(type_) => source.push_str(c_basic_type(*type_)),
+        LoweredType::Struct(name) => push_c_struct_name(source, name),
+    }
+}
+
+fn c_basic_type(type_: BasicType) -> &'static str {
     match type_ {
         BasicType::String => "const char*",
         BasicType::Bool => "bool",
@@ -306,6 +372,35 @@ fn push_c_value(source: &mut String, value: &LoweredExpr) {
             source.push_str(", ");
             push_c_value(source, right);
             source.push(')');
+        }
+        LoweredExprKind::StructLiteral { name, fields } => {
+            source.push('(');
+            push_c_struct_name(source, name);
+            source.push_str("){");
+
+            for (index, field) in fields.iter().enumerate() {
+                if index > 0 {
+                    source.push_str(", ");
+                } else {
+                    source.push(' ');
+                }
+
+                source.push('.');
+                push_c_local_name(source, &field.name);
+                source.push_str(" = ");
+                push_c_value(source, &field.value);
+            }
+
+            if !fields.is_empty() {
+                source.push(' ');
+            }
+
+            source.push('}');
+        }
+        LoweredExprKind::FieldAccess { object, field } => {
+            push_c_value(source, object);
+            source.push('.');
+            push_c_local_name(source, field);
         }
         LoweredExprKind::Call { name, args } => {
             push_c_function_name(source, name);
