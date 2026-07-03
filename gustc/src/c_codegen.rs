@@ -1,44 +1,32 @@
 use crate::ast::BasicType;
-use crate::lower::{LoweredProgram, LoweredStatement, LoweredValue};
+use crate::lower::{LoweredExpr, LoweredExprKind, LoweredProgram, LoweredStatement};
 
 pub fn emit_c(program: &LoweredProgram) -> String {
-    let uses_bool = program.statements.iter().any(|statement| {
-        matches!(
-            statement,
-            LoweredStatement::Local {
-                type_: BasicType::Bool,
-                ..
-            }
-        )
+    let uses_bool = program.statements.iter().any(|statement| match statement {
+        LoweredStatement::Local { value, .. } => value.type_ == BasicType::Bool,
+        LoweredStatement::Println(_) => false,
     });
-    let uses_usize = program.statements.iter().any(|statement| {
-        matches!(
-            statement,
-            LoweredStatement::Local {
-                type_: BasicType::Usize,
-                ..
-            }
-        )
+    let uses_usize = program.statements.iter().any(|statement| match statement {
+        LoweredStatement::Local { value, .. } => value.type_ == BasicType::Usize,
+        LoweredStatement::Println(_) => false,
     });
-    let uses_fixed_width_int = program.statements.iter().any(|statement| {
-        matches!(
-            statement,
-            LoweredStatement::Local {
-                type_: BasicType::U8
-                    | BasicType::U16
-                    | BasicType::U32
-                    | BasicType::U64
-                    | BasicType::I8
-                    | BasicType::I16
-                    | BasicType::I32
-                    | BasicType::I64,
-                ..
-            }
-        )
+    let uses_fixed_width_int = program.statements.iter().any(|statement| match statement {
+        LoweredStatement::Local { value, .. } => matches!(
+            value.type_,
+            BasicType::U8
+                | BasicType::U16
+                | BasicType::U32
+                | BasicType::U64
+                | BasicType::I8
+                | BasicType::I16
+                | BasicType::I32
+                | BasicType::I64
+        ),
+        LoweredStatement::Println(_) => false,
     });
     let uses_string_concat = program.statements.iter().any(|statement| match statement {
         LoweredStatement::Local { value, .. } | LoweredStatement::Println(value) => {
-            matches!(value, LoweredValue::StringConcat(_, _))
+            matches!(&value.kind, LoweredExprKind::StringConcat(_, _))
         }
     });
     let uses_println = program
@@ -96,32 +84,32 @@ pub fn emit_c(program: &LoweredProgram) -> String {
 
     for statement in &program.statements {
         match statement {
-            LoweredStatement::Local { name, type_, value } => {
+            LoweredStatement::Local { name, value } => {
                 source.push_str("    ");
-                source.push_str(c_type(*type_));
+                source.push_str(c_type(value.type_));
                 source.push(' ');
                 push_c_local_name(&mut source, name);
                 source.push_str(" = ");
                 push_c_value(&mut source, value);
                 source.push_str(";\n");
             }
-            LoweredStatement::Println(value) => match value {
-                LoweredValue::StringLiteral(value) => {
+            LoweredStatement::Println(value) => match &value.kind {
+                LoweredExprKind::StringLiteral(value) => {
                     source.push_str("    gust_io_println(\"");
                     push_c_string_value(&mut source, value);
                     source.push_str("\");\n");
                 }
-                LoweredValue::Local(name) => {
+                LoweredExprKind::Local(name) => {
                     source.push_str("    gust_io_println(");
                     push_c_local_name(&mut source, name);
                     source.push_str(");\n");
                 }
-                LoweredValue::StringConcat(_, _) => {
+                LoweredExprKind::StringConcat(_, _) => {
                     source.push_str("    gust_io_println(");
                     push_c_value(&mut source, value);
                     source.push_str(");\n");
                 }
-                LoweredValue::BoolLiteral(_) | LoweredValue::NumberLiteral(_) => {
+                LoweredExprKind::BoolLiteral(_) | LoweredExprKind::NumberLiteral(_) => {
                     unreachable!("println only lowers String values")
                 }
             },
@@ -153,23 +141,23 @@ fn c_type(type_: BasicType) -> &'static str {
     }
 }
 
-fn push_c_value(source: &mut String, value: &LoweredValue) {
-    match value {
-        LoweredValue::StringLiteral(value) => {
+fn push_c_value(source: &mut String, value: &LoweredExpr) {
+    match &value.kind {
+        LoweredExprKind::StringLiteral(value) => {
             source.push('"');
             push_c_string_value(source, value);
             source.push('"');
         }
-        LoweredValue::BoolLiteral(value) => {
+        LoweredExprKind::BoolLiteral(value) => {
             if *value {
                 source.push_str("true");
             } else {
                 source.push_str("false");
             }
         }
-        LoweredValue::NumberLiteral(value) => source.push_str(value),
-        LoweredValue::Local(name) => push_c_local_name(source, name),
-        LoweredValue::StringConcat(left, right) => {
+        LoweredExprKind::NumberLiteral(value) => source.push_str(value),
+        LoweredExprKind::Local(name) => push_c_local_name(source, name),
+        LoweredExprKind::StringConcat(left, right) => {
             source.push_str("gust_string_concat(");
             push_c_value(source, left);
             source.push_str(", ");

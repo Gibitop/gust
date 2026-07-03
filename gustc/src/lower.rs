@@ -11,21 +11,23 @@ pub struct LoweredProgram {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LoweredStatement {
-    Local {
-        name: String,
-        type_: BasicType,
-        value: LoweredValue,
-    },
-    Println(LoweredValue),
+    Local { name: String, value: LoweredExpr },
+    Println(LoweredExpr),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum LoweredValue {
+pub struct LoweredExpr {
+    pub type_: BasicType,
+    pub kind: LoweredExprKind,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LoweredExprKind {
     StringLiteral(String),
     BoolLiteral(bool),
     NumberLiteral(String),
     Local(String),
-    StringConcat(Box<LoweredValue>, Box<LoweredValue>),
+    StringConcat(Box<LoweredExpr>, Box<LoweredExpr>),
 }
 
 pub fn lower_program(program: &Program) -> Result<LoweredProgram, Vec<Diagnostic>> {
@@ -124,7 +126,7 @@ pub fn lower_program(program: &Program) -> Result<LoweredProgram, Vec<Diagnostic
                             continue;
                         }
 
-                        if let Some(value) = lower_string_value(
+                        if let Some(value) = lower_string_expr(
                             &args[0],
                             &locals,
                             &mut diagnostics,
@@ -177,7 +179,10 @@ pub fn lower_program(program: &Program) -> Result<LoweredProgram, Vec<Diagnostic
                                 (ExprKind::String(value), None | Some(BasicType::String)) => {
                                     Some((
                                         BasicType::String,
-                                        LoweredValue::StringLiteral(value.clone()),
+                                        LoweredExpr {
+                                            type_: BasicType::String,
+                                            kind: LoweredExprKind::StringLiteral(value.clone()),
+                                        },
                                     ))
                                 }
                                 (ExprKind::String(_), Some(type_)) => {
@@ -193,7 +198,13 @@ pub fn lower_program(program: &Program) -> Result<LoweredProgram, Vec<Diagnostic
                                 (ExprKind::Identifier(name), None | Some(BasicType::String))
                                     if locals.get(name) == Some(&BasicType::String) =>
                                 {
-                                    Some((BasicType::String, LoweredValue::Local(name.clone())))
+                                    Some((
+                                        BasicType::String,
+                                        LoweredExpr {
+                                            type_: BasicType::String,
+                                            kind: LoweredExprKind::Local(name.clone()),
+                                        },
+                                    ))
                                 }
                                 (ExprKind::Identifier(name), Some(type_))
                                     if locals.get(name) == Some(&BasicType::String) =>
@@ -212,20 +223,20 @@ pub fn lower_program(program: &Program) -> Result<LoweredProgram, Vec<Diagnostic
                                         op: BinaryOp::Add, ..
                                     },
                                     None | Some(BasicType::String),
-                                ) => lower_string_value(
+                                ) => lower_string_expr(
                                     value,
                                     &locals,
                                     &mut diagnostics,
                                     "expected `String` value in executable builds",
                                 )
-                                .map(|value| (BasicType::String, value)),
+                                .map(|value| (value.type_, value)),
                                 (
                                     ExprKind::Binary {
                                         op: BinaryOp::Add, ..
                                     },
                                     Some(type_),
                                 ) => {
-                                    if lower_string_value(
+                                    if lower_string_expr(
                                         value,
                                         &locals,
                                         &mut diagnostics,
@@ -244,9 +255,13 @@ pub fn lower_program(program: &Program) -> Result<LoweredProgram, Vec<Diagnostic
 
                                     None
                                 }
-                                (ExprKind::Bool(value), None | Some(BasicType::Bool)) => {
-                                    Some((BasicType::Bool, LoweredValue::BoolLiteral(*value)))
-                                }
+                                (ExprKind::Bool(value), None | Some(BasicType::Bool)) => Some((
+                                    BasicType::Bool,
+                                    LoweredExpr {
+                                        type_: BasicType::Bool,
+                                        kind: LoweredExprKind::BoolLiteral(*value),
+                                    },
+                                )),
                                 (ExprKind::Bool(_), Some(type_)) => {
                                     diagnostics.push(Diagnostic::error(
                                         value.span,
@@ -259,10 +274,19 @@ pub fn lower_program(program: &Program) -> Result<LoweredProgram, Vec<Diagnostic
                                 }
                                 (ExprKind::Number(value), None) => Some((
                                     BasicType::I32,
-                                    LoweredValue::NumberLiteral(value.clone()),
+                                    LoweredExpr {
+                                        type_: BasicType::I32,
+                                        kind: LoweredExprKind::NumberLiteral(value.clone()),
+                                    },
                                 )),
                                 (ExprKind::Number(value), Some(type_)) if type_.is_numeric() => {
-                                    Some((type_, LoweredValue::NumberLiteral(value.clone())))
+                                    Some((
+                                        type_,
+                                        LoweredExpr {
+                                            type_,
+                                            kind: LoweredExprKind::NumberLiteral(value.clone()),
+                                        },
+                                    ))
                                 }
                                 (ExprKind::Number(_), Some(type_)) => {
                                     diagnostics.push(Diagnostic::error(
@@ -284,15 +308,15 @@ pub fn lower_program(program: &Program) -> Result<LoweredProgram, Vec<Diagnostic
                             }
                         } else if let Some(type_) = annotated_type {
                             let value = match type_ {
-                                BasicType::String => LoweredValue::StringLiteral(String::new()),
-                                BasicType::Bool => LoweredValue::BoolLiteral(false),
+                                BasicType::String => LoweredExprKind::StringLiteral(String::new()),
+                                BasicType::Bool => LoweredExprKind::BoolLiteral(false),
                                 type_ if type_.is_numeric() => {
-                                    LoweredValue::NumberLiteral("0".to_string())
+                                    LoweredExprKind::NumberLiteral("0".to_string())
                                 }
                                 _ => unreachable!("all basic types have default values"),
                             };
 
-                            Some((type_, value))
+                            Some((type_, LoweredExpr { type_, kind: value }))
                         } else {
                             diagnostics.push(Diagnostic::error(
                                 statement.span,
@@ -319,7 +343,6 @@ pub fn lower_program(program: &Program) -> Result<LoweredProgram, Vec<Diagnostic
 
                         statements.push(LoweredStatement::Local {
                             name: name.clone(),
-                            type_,
                             value,
                         });
                     }
@@ -351,16 +374,22 @@ pub fn lower_program(program: &Program) -> Result<LoweredProgram, Vec<Diagnostic
     }
 }
 
-fn lower_string_value(
+fn lower_string_expr(
     expr: &Expr,
     locals: &HashMap<String, BasicType>,
     diagnostics: &mut Vec<Diagnostic>,
     message: &str,
-) -> Option<LoweredValue> {
+) -> Option<LoweredExpr> {
     match &expr.kind {
-        ExprKind::String(value) => Some(LoweredValue::StringLiteral(value.clone())),
+        ExprKind::String(value) => Some(LoweredExpr {
+            type_: BasicType::String,
+            kind: LoweredExprKind::StringLiteral(value.clone()),
+        }),
         ExprKind::Identifier(name) if locals.get(name) == Some(&BasicType::String) => {
-            Some(LoweredValue::Local(name.clone()))
+            Some(LoweredExpr {
+                type_: BasicType::String,
+                kind: LoweredExprKind::Local(name.clone()),
+            })
         }
         ExprKind::Identifier(name) if locals.contains_key(name) => {
             let type_ = locals[name];
@@ -382,13 +411,14 @@ fn lower_string_value(
             op: BinaryOp::Add,
             right,
         } => {
-            let left = lower_string_value(left, locals, diagnostics, message);
-            let right = lower_string_value(right, locals, diagnostics, message);
+            let left = lower_string_expr(left, locals, diagnostics, message);
+            let right = lower_string_expr(right, locals, diagnostics, message);
 
             match (left, right) {
-                (Some(left), Some(right)) => {
-                    Some(LoweredValue::StringConcat(Box::new(left), Box::new(right)))
-                }
+                (Some(left), Some(right)) => Some(LoweredExpr {
+                    type_: BasicType::String,
+                    kind: LoweredExprKind::StringConcat(Box::new(left), Box::new(right)),
+                }),
                 _ => None,
             }
         }
