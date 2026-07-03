@@ -1,0 +1,747 @@
+use crate::ast::{
+    BinaryOp, Block, EnumDecl, EnumVariant, Expr, ExprKind, FieldDecl, FunctionBody, FunctionDecl,
+    ImportDecl, Item, MatchBranch, Param, Pattern, Program, Stmt, StmtKind, StructDecl,
+    StructInitField, StructMember, TypeRef,
+};
+use crate::diagnostic::Diagnostic;
+use crate::lexer::{Keyword, Token, TokenKind};
+use crate::span::Span;
+
+pub struct Parser {
+    tokens: Vec<Token>,
+    position: usize,
+    diagnostics: Vec<Diagnostic>,
+    allow_struct_init: bool,
+}
+
+impl Parser {
+    pub fn new(tokens: Vec<Token>) -> Self {
+        Self {
+            tokens,
+            position: 0,
+            diagnostics: Vec::new(),
+            allow_struct_init: true,
+        }
+    }
+
+    pub fn parse(mut self) -> (Program, Vec<Diagnostic>) {
+        let mut items = Vec::new();
+
+        while !self.at_eof() {
+            let start = self.position;
+
+            match self.current_keyword() {
+                Some(Keyword::From) => items.push(Item::Import(self.parse_import())),
+                Some(Keyword::Enum) => items.push(Item::Enum(self.parse_enum())),
+                Some(Keyword::Struct) => items.push(Item::Struct(self.parse_struct())),
+                Some(Keyword::Fn) => items.push(Item::Function(self.parse_function(true))),
+                _ => {
+                    self.error_here("expected a top-level declaration");
+                    self.advance();
+                    self.synchronize_top_level();
+                }
+            }
+
+            if self.position == start {
+                self.advance();
+            }
+        }
+
+        (Program { items }, self.diagnostics)
+    }
+
+    fn parse_import(&mut self) -> ImportDecl {
+        let start = self.expect_keyword(Keyword::From, "`from`").span;
+        let mut path = String::new();
+
+        while !self.at_eof() && self.current_keyword() != Some(Keyword::Import) {
+            path.push_str(&self.advance().lexeme);
+        }
+
+        self.expect_keyword(Keyword::Import, "`import`");
+
+        let mut names = Vec::new();
+        while !self.at_eof() {
+            if let Some(name) = self.consume_identifier() {
+                names.push(name);
+            } else {
+                self.error_here("expected imported name");
+                break;
+            }
+
+            if !self.match_kind(&TokenKind::Comma) {
+                break;
+            }
+        }
+
+        let end = self.previous_span();
+
+        ImportDecl {
+            path,
+            names,
+            span: start.join(end),
+        }
+    }
+
+    fn parse_enum(&mut self) -> EnumDecl {
+        let start = self.expect_keyword(Keyword::Enum, "`enum`").span;
+        let name = self.expect_identifier("expected enum name");
+        self.expect_kind(&TokenKind::LeftBrace, "`{`");
+
+        let mut variants = Vec::new();
+        while !self.at_eof() && !self.check_kind(&TokenKind::RightBrace) {
+            let variant_start = self.current().span;
+            let variant_name = self.expect_identifier("expected enum variant name");
+            let payload = if self.match_kind(&TokenKind::LeftParen) {
+                let payload = self.parse_type();
+                self.expect_kind(&TokenKind::RightParen, "`)`");
+                payload
+            } else {
+                None
+            };
+            let span = variant_start.join(self.previous_span());
+            variants.push(EnumVariant {
+                name: variant_name,
+                payload,
+                span,
+            });
+            self.match_kind(&TokenKind::Comma);
+        }
+
+        self.expect_kind(&TokenKind::RightBrace, "`}`");
+        let end = self.previous_span();
+
+        EnumDecl {
+            name,
+            variants,
+            span: start.join(end),
+        }
+    }
+
+    fn parse_struct(&mut self) -> StructDecl {
+        let start = self.expect_keyword(Keyword::Struct, "`struct`").span;
+        let name = self.expect_identifier("expected struct name");
+        self.expect_kind(&TokenKind::LeftBrace, "`{`");
+
+        let mut members = Vec::new();
+        while !self.at_eof() && !self.check_kind(&TokenKind::RightBrace) {
+            let member_start = self.position;
+
+            if self.current_keyword() == Some(Keyword::Fn) {
+                members.push(StructMember::Method(self.parse_function(true)));
+            } else if self.check_identifier() {
+                let field_start = self.current().span;
+                let name = self.expect_identifier("expected field name");
+                self.expect_kind(&TokenKind::Colon, "`:`");
+                let type_ref = self
+                    .parse_type()
+                    .unwrap_or_else(|| self.missing_type(field_start));
+                members.push(StructMember::Field(FieldDecl {
+                    name,
+                    span: field_start.join(type_ref.span),
+                    type_ref,
+                }));
+                self.match_kind(&TokenKind::Comma);
+            } else {
+                self.error_here("expected struct field or method");
+                self.advance();
+            }
+
+            if self.position == member_start {
+                self.advance();
+            }
+        }
+
+        self.expect_kind(&TokenKind::RightBrace, "`}`");
+        let end = self.previous_span();
+
+        StructDecl {
+            name,
+            members,
+            span: start.join(end),
+        }
+    }
+
+    fn parse_function(&mut self, named: bool) -> FunctionDecl {
+        let start = self.expect_keyword(Keyword::Fn, "`fn`").span;
+        let name = if named {
+            Some(self.expect_identifier("expected function name"))
+        } else {
+            None
+        };
+
+        self.expect_kind(&TokenKind::LeftParen, "`(`");
+        let params = self.parse_params();
+        self.expect_kind(&TokenKind::RightParen, "`)`");
+
+        let return_type = if self.match_kind(&TokenKind::Colon) {
+            self.parse_type()
+        } else {
+            None
+        };
+
+        let body = if self.check_kind(&TokenKind::LeftBrace) {
+            FunctionBody::Block(self.parse_block())
+        } else if self.match_kind(&TokenKind::FatArrow) {
+            FunctionBody::Expr(Box::new(self.parse_expression()))
+        } else {
+            self.error_here("expected function body");
+            FunctionBody::Expr(Box::new(self.missing_expr(self.current().span)))
+        };
+
+        let span = start.join(body.span());
+
+        FunctionDecl {
+            name,
+            params,
+            return_type,
+            body,
+            span,
+        }
+    }
+
+    fn parse_params(&mut self) -> Vec<Param> {
+        let mut params = Vec::new();
+
+        while !self.at_eof() && !self.check_kind(&TokenKind::RightParen) {
+            let start = self.current().span;
+            let mutable = self.match_keyword(Keyword::Mut);
+            let name = self.expect_identifier("expected parameter name");
+            let type_ref = if self.match_kind(&TokenKind::Colon) {
+                self.parse_type()
+            } else {
+                None
+            };
+
+            params.push(Param {
+                name,
+                mutable,
+                type_ref,
+                span: start.join(self.previous_span()),
+            });
+
+            if !self.match_kind(&TokenKind::Comma) {
+                break;
+            }
+        }
+
+        params
+    }
+
+    fn parse_block(&mut self) -> Block {
+        let start = self.expect_kind(&TokenKind::LeftBrace, "`{`").span;
+        let mut statements = Vec::new();
+
+        while !self.at_eof() && !self.check_kind(&TokenKind::RightBrace) {
+            let position = self.position;
+            statements.push(self.parse_statement());
+
+            if self.position == position {
+                self.advance();
+            }
+        }
+
+        self.expect_kind(&TokenKind::RightBrace, "`}`");
+        let end = self.previous_span();
+
+        Block {
+            statements,
+            span: start.join(end),
+        }
+    }
+
+    fn parse_statement(&mut self) -> Stmt {
+        match self.current_keyword() {
+            Some(Keyword::Let) => self.parse_let_statement(),
+            Some(Keyword::Return) => self.parse_return_statement(),
+            Some(Keyword::For) => self.parse_for_statement(),
+            _ => {
+                let expr = self.parse_expression();
+                Stmt {
+                    span: expr.span,
+                    kind: StmtKind::Expr(expr),
+                }
+            }
+        }
+    }
+
+    fn parse_let_statement(&mut self) -> Stmt {
+        let start = self.expect_keyword(Keyword::Let, "`let`").span;
+        let mutable = self.match_keyword(Keyword::Mut);
+        let name = self.expect_identifier("expected binding name");
+        let type_annotation = if self.match_kind(&TokenKind::Colon) {
+            self.parse_type()
+        } else {
+            None
+        };
+
+        self.expect_kind(&TokenKind::Equal, "`=`");
+        let value = self.parse_expression();
+        let span = start.join(value.span);
+
+        Stmt {
+            kind: StmtKind::Let {
+                name,
+                mutable,
+                type_annotation,
+                value,
+            },
+            span,
+        }
+    }
+
+    fn parse_return_statement(&mut self) -> Stmt {
+        let start = self.expect_keyword(Keyword::Return, "`return`").span;
+        let value = if self.check_kind(&TokenKind::RightBrace) || self.at_eof() {
+            None
+        } else {
+            Some(self.parse_expression())
+        };
+        let end = value.as_ref().map_or(start, |expr| expr.span);
+
+        Stmt {
+            kind: StmtKind::Return { value },
+            span: start.join(end),
+        }
+    }
+
+    fn parse_for_statement(&mut self) -> Stmt {
+        let start = self.expect_keyword(Keyword::For, "`for`").span;
+        let name = self.expect_identifier("expected loop binding name");
+        self.expect_keyword(Keyword::In, "`in`");
+        let iterable = self.parse_expression_without_struct_init();
+        let body = self.parse_block();
+        let span = start.join(body.span);
+
+        Stmt {
+            kind: StmtKind::For {
+                name,
+                iterable,
+                body,
+            },
+            span,
+        }
+    }
+
+    fn parse_expression(&mut self) -> Expr {
+        self.parse_binary_expression(0)
+    }
+
+    fn parse_expression_without_struct_init(&mut self) -> Expr {
+        let previous = self.allow_struct_init;
+        self.allow_struct_init = false;
+        let expr = self.parse_expression();
+        self.allow_struct_init = previous;
+        expr
+    }
+
+    fn parse_binary_expression(&mut self, min_precedence: u8) -> Expr {
+        let mut left = self.parse_postfix_expression();
+
+        while let Some((op, precedence)) = self.current_binary_op() {
+            if precedence < min_precedence {
+                break;
+            }
+
+            self.advance();
+            let right = self.parse_binary_expression(precedence + 1);
+            let span = left.span.join(right.span);
+            left = Expr {
+                kind: ExprKind::Binary {
+                    left: Box::new(left),
+                    op,
+                    right: Box::new(right),
+                },
+                span,
+            };
+        }
+
+        left
+    }
+
+    fn parse_postfix_expression(&mut self) -> Expr {
+        let mut expr = self.parse_primary_expression();
+
+        loop {
+            if self.match_kind(&TokenKind::LeftParen) {
+                let mut args = Vec::new();
+
+                while !self.at_eof() && !self.check_kind(&TokenKind::RightParen) {
+                    args.push(self.parse_expression());
+
+                    if !self.match_kind(&TokenKind::Comma) {
+                        break;
+                    }
+                }
+
+                self.expect_kind(&TokenKind::RightParen, "`)`");
+                let span = expr.span.join(self.previous_span());
+                expr = Expr {
+                    kind: ExprKind::Call {
+                        callee: Box::new(expr),
+                        args,
+                    },
+                    span,
+                };
+            } else if self.match_kind(&TokenKind::Dot) {
+                let name_span = self.current().span;
+                let name = self.expect_identifier("expected member name");
+                expr = Expr {
+                    span: expr.span.join(name_span),
+                    kind: ExprKind::Member {
+                        object: Box::new(expr),
+                        name,
+                    },
+                };
+            } else if self.match_kind(&TokenKind::PlusPlus) {
+                expr = Expr {
+                    span: expr.span.join(self.previous_span()),
+                    kind: ExprKind::PostfixIncrement(Box::new(expr)),
+                };
+            } else if self.allow_struct_init && self.check_kind(&TokenKind::LeftBrace) {
+                if let ExprKind::Identifier(name) = &expr.kind {
+                    let name = name.clone();
+                    expr = self.parse_struct_init(name, expr.span);
+                } else {
+                    break;
+                }
+            } else {
+                break;
+            }
+        }
+
+        expr
+    }
+
+    fn parse_struct_init(&mut self, name: String, start: Span) -> Expr {
+        self.expect_kind(&TokenKind::LeftBrace, "`{`");
+        let mut fields = Vec::new();
+
+        while !self.at_eof() && !self.check_kind(&TokenKind::RightBrace) {
+            let field_start = self.current().span;
+            let name = self.expect_identifier("expected struct field name");
+            self.expect_kind(&TokenKind::Colon, "`:`");
+            let value = self.parse_expression();
+            let span = field_start.join(value.span);
+            fields.push(StructInitField { name, value, span });
+
+            if !self.match_kind(&TokenKind::Comma) {
+                break;
+            }
+        }
+
+        self.expect_kind(&TokenKind::RightBrace, "`}`");
+        let span = start.join(self.previous_span());
+
+        Expr {
+            kind: ExprKind::StructInit { name, fields },
+            span,
+        }
+    }
+
+    fn parse_primary_expression(&mut self) -> Expr {
+        let token = self.advance();
+
+        match token.kind {
+            TokenKind::Identifier(name) => Expr {
+                kind: ExprKind::Identifier(name),
+                span: token.span,
+            },
+            TokenKind::Number(value) => Expr {
+                kind: ExprKind::Number(value),
+                span: token.span,
+            },
+            TokenKind::StringLiteral(value) => Expr {
+                kind: ExprKind::String(value),
+                span: token.span,
+            },
+            TokenKind::LeftBracket => self.finish_array(token.span),
+            TokenKind::LeftParen => {
+                let expr = self.parse_expression();
+                self.expect_kind(&TokenKind::RightParen, "`)`");
+                expr
+            }
+            TokenKind::Keyword(Keyword::Fn) => {
+                self.position = self.position.saturating_sub(1);
+                let function = self.parse_function(false);
+                Expr {
+                    span: function.span,
+                    kind: ExprKind::Lambda(function),
+                }
+            }
+            TokenKind::Keyword(Keyword::Match) => self.finish_match(token.span),
+            _ => {
+                self.diagnostics
+                    .push(Diagnostic::error(token.span, "expected expression"));
+                self.missing_expr(token.span)
+            }
+        }
+    }
+
+    fn finish_array(&mut self, start: Span) -> Expr {
+        let mut items = Vec::new();
+
+        while !self.at_eof() && !self.check_kind(&TokenKind::RightBracket) {
+            items.push(self.parse_expression());
+
+            if !self.match_kind(&TokenKind::Comma) {
+                break;
+            }
+        }
+
+        self.expect_kind(&TokenKind::RightBracket, "`]`");
+        let span = start.join(self.previous_span());
+
+        Expr {
+            kind: ExprKind::Array(items),
+            span,
+        }
+    }
+
+    fn finish_match(&mut self, start: Span) -> Expr {
+        let value = self.parse_expression_without_struct_init();
+        self.expect_kind(&TokenKind::LeftBrace, "`{`");
+
+        let mut branches = Vec::new();
+        while !self.at_eof() && !self.check_kind(&TokenKind::RightBrace) {
+            let pattern = self.parse_pattern();
+            self.expect_kind(&TokenKind::FatArrow, "`=>`");
+            let value = self.parse_expression();
+            let span = pattern.span().join(value.span);
+            branches.push(MatchBranch {
+                pattern,
+                value,
+                span,
+            });
+            self.match_kind(&TokenKind::Comma);
+        }
+
+        self.expect_kind(&TokenKind::RightBrace, "`}`");
+        let span = start.join(self.previous_span());
+
+        Expr {
+            kind: ExprKind::Match {
+                value: Box::new(value),
+                branches,
+            },
+            span,
+        }
+    }
+
+    fn parse_pattern(&mut self) -> Pattern {
+        let start = self.current().span;
+        let name = self.expect_identifier("expected match pattern");
+        let binding = if self.match_kind(&TokenKind::LeftParen) {
+            let binding = self.expect_identifier("expected pattern binding");
+            self.expect_kind(&TokenKind::RightParen, "`)`");
+            Some(binding)
+        } else {
+            None
+        };
+        let span = start.join(self.previous_span());
+
+        Pattern::Identifier {
+            name,
+            binding,
+            span,
+        }
+    }
+
+    fn parse_type(&mut self) -> Option<TypeRef> {
+        let start = self.current().span;
+        let name = if let Some(name) = self.consume_identifier() {
+            name
+        } else {
+            self.error_here("expected type name");
+            return None;
+        };
+
+        let mut args = Vec::new();
+        if self.match_kind(&TokenKind::Less) {
+            while !self.at_eof() && !self.check_kind(&TokenKind::Greater) {
+                if let Some(type_ref) = self.parse_type() {
+                    args.push(type_ref);
+                }
+
+                if !self.match_kind(&TokenKind::Comma) {
+                    break;
+                }
+            }
+
+            self.expect_kind(&TokenKind::Greater, "`>`");
+        }
+
+        Some(TypeRef {
+            name,
+            args,
+            span: start.join(self.previous_span()),
+        })
+    }
+
+    fn current_binary_op(&self) -> Option<(BinaryOp, u8)> {
+        match self.current().kind {
+            TokenKind::Plus => Some((BinaryOp::Add, 10)),
+            TokenKind::GreaterEqual => Some((BinaryOp::GreaterEqual, 5)),
+            _ => None,
+        }
+    }
+
+    fn missing_expr(&self, span: Span) -> Expr {
+        Expr {
+            kind: ExprKind::Missing,
+            span,
+        }
+    }
+
+    fn missing_type(&self, span: Span) -> TypeRef {
+        TypeRef {
+            name: "<missing>".to_string(),
+            args: Vec::new(),
+            span,
+        }
+    }
+
+    fn synchronize_top_level(&mut self) {
+        while !self.at_eof() {
+            if matches!(
+                self.current_keyword(),
+                Some(Keyword::From | Keyword::Enum | Keyword::Struct | Keyword::Fn)
+            ) {
+                return;
+            }
+
+            self.advance();
+        }
+    }
+
+    fn expect_identifier(&mut self, message: &str) -> String {
+        if let Some(name) = self.consume_identifier() {
+            return name;
+        }
+
+        self.error_here(message);
+        "<missing>".to_string()
+    }
+
+    fn consume_identifier(&mut self) -> Option<String> {
+        match self.current().kind.clone() {
+            TokenKind::Identifier(name) => {
+                self.advance();
+                Some(name)
+            }
+            _ => None,
+        }
+    }
+
+    fn expect_keyword(&mut self, keyword: Keyword, expected: &str) -> Token {
+        if self.current_keyword() == Some(keyword) {
+            return self.advance();
+        }
+
+        self.error_here(format!("expected {expected}"));
+        self.synthetic_current()
+    }
+
+    fn expect_kind(&mut self, kind: &TokenKind, expected: &str) -> Token {
+        if self.check_kind(kind) {
+            return self.advance();
+        }
+
+        self.error_here(format!("expected {expected}"));
+        self.synthetic_current()
+    }
+
+    fn match_keyword(&mut self, keyword: Keyword) -> bool {
+        if self.current_keyword() != Some(keyword) {
+            return false;
+        }
+
+        self.advance();
+        true
+    }
+
+    fn match_kind(&mut self, kind: &TokenKind) -> bool {
+        if !self.check_kind(kind) {
+            return false;
+        }
+
+        self.advance();
+        true
+    }
+
+    fn check_identifier(&self) -> bool {
+        matches!(self.current().kind, TokenKind::Identifier(_))
+    }
+
+    fn check_kind(&self, kind: &TokenKind) -> bool {
+        simple_kind_eq(&self.current().kind, kind)
+    }
+
+    fn current_keyword(&self) -> Option<Keyword> {
+        match self.current().kind {
+            TokenKind::Keyword(keyword) => Some(keyword),
+            _ => None,
+        }
+    }
+
+    fn at_eof(&self) -> bool {
+        matches!(self.current().kind, TokenKind::Eof)
+    }
+
+    fn current(&self) -> &Token {
+        &self.tokens[self.position]
+    }
+
+    fn advance(&mut self) -> Token {
+        let token = self.current().clone();
+
+        if !matches!(token.kind, TokenKind::Eof) {
+            self.position += 1;
+        }
+
+        token
+    }
+
+    fn previous_span(&self) -> Span {
+        self.tokens
+            .get(self.position.saturating_sub(1))
+            .map_or_else(|| self.current().span, |token| token.span)
+    }
+
+    fn synthetic_current(&self) -> Token {
+        Token {
+            kind: TokenKind::Identifier(String::new()),
+            span: self.current().span,
+            lexeme: String::new(),
+        }
+    }
+
+    fn error_here(&mut self, message: impl Into<String>) {
+        self.diagnostics
+            .push(Diagnostic::error(self.current().span, message));
+    }
+}
+
+fn simple_kind_eq(left: &TokenKind, right: &TokenKind) -> bool {
+    matches!(
+        (left, right),
+        (TokenKind::LeftParen, TokenKind::LeftParen)
+            | (TokenKind::RightParen, TokenKind::RightParen)
+            | (TokenKind::LeftBrace, TokenKind::LeftBrace)
+            | (TokenKind::RightBrace, TokenKind::RightBrace)
+            | (TokenKind::LeftBracket, TokenKind::LeftBracket)
+            | (TokenKind::RightBracket, TokenKind::RightBracket)
+            | (TokenKind::Colon, TokenKind::Colon)
+            | (TokenKind::Comma, TokenKind::Comma)
+            | (TokenKind::Dot, TokenKind::Dot)
+            | (TokenKind::Slash, TokenKind::Slash)
+            | (TokenKind::Plus, TokenKind::Plus)
+            | (TokenKind::PlusPlus, TokenKind::PlusPlus)
+            | (TokenKind::Equal, TokenKind::Equal)
+            | (TokenKind::FatArrow, TokenKind::FatArrow)
+            | (TokenKind::GreaterEqual, TokenKind::GreaterEqual)
+            | (TokenKind::Less, TokenKind::Less)
+            | (TokenKind::Greater, TokenKind::Greater)
+            | (TokenKind::Eof, TokenKind::Eof)
+    )
+}
