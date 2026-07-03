@@ -3,11 +3,20 @@ struct Lang {
     version: u32
 }
 
-fn main() {
-    let lang = Lang {
+fn makeLang(): Lang {
+    return Lang {
         name: "Gust",
         version: 1,
     }
+}
 
-    io.println(lang.name)
+fn getName(lang: Lang): String {
+    return lang.name
+}
+
+fn main() {
+    let lang = makeLang()
+
+    io.println(getName(lang))
+    io.println(makeLang().name)
 }

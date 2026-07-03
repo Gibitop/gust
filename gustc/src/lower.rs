@@ -124,13 +124,7 @@ pub fn lower_program(program: &Program) -> Result<LoweredProgram, Vec<Diagnostic
                     main = Some(function);
                 }
             }
-            Item::Function(function) => {
-                if let Some(name) = &function.name {
-                    if let Some(signature) = lower_function_signature(function, &mut diagnostics) {
-                        signatures.insert(name.clone(), signature);
-                    }
-                }
-            }
+            Item::Function(_) => {}
             Item::Import(item) => diagnostics.push(Diagnostic::error(
                 item.span,
                 "imports are not supported in executable builds",
@@ -139,6 +133,24 @@ pub fn lower_program(program: &Program) -> Result<LoweredProgram, Vec<Diagnostic
                 item.span,
                 "enums are not supported in executable builds",
             )),
+        }
+    }
+
+    for item in &program.items {
+        let Item::Function(function) = item else {
+            continue;
+        };
+
+        let Some(name) = &function.name else {
+            continue;
+        };
+
+        if name == "main" {
+            continue;
+        }
+
+        if let Some(signature) = lower_function_signature(function, &structs, &mut diagnostics) {
+            signatures.insert(name.clone(), signature);
         }
     }
 
@@ -242,6 +254,7 @@ fn lower_struct_definition(
 
 fn lower_function_signature(
     function: &FunctionDecl,
+    structs: &HashMap<String, LoweredStruct>,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> Option<FunctionSignature> {
     let mut params = Vec::new();
@@ -265,16 +278,17 @@ fn lower_function_signature(
             continue;
         };
 
-        let Some(type_) = lower_basic_type_ref(
+        let Some(type_) = lower_value_type_ref(
             type_ref,
+            structs,
             diagnostics,
-            "only basic parameter types are supported in executable builds",
+            "only basic and known struct parameter types are supported in executable builds",
         ) else {
             can_lower = false;
             continue;
         };
 
-        params.push(LoweredType::Basic(type_));
+        params.push(type_);
     }
 
     let Some(return_type) = &function.return_type else {
@@ -285,10 +299,11 @@ fn lower_function_signature(
         return None;
     };
 
-    let Some(return_type) = lower_basic_type_ref(
+    let Some(return_type) = lower_value_type_ref(
         return_type,
+        structs,
         diagnostics,
-        "only basic return types are supported in executable builds",
+        "only basic and known struct return types are supported in executable builds",
     ) else {
         return None;
     };
@@ -296,11 +311,37 @@ fn lower_function_signature(
     if can_lower {
         Some(FunctionSignature {
             params,
-            return_type: LoweredType::Basic(return_type),
+            return_type,
         })
     } else {
         None
     }
+}
+
+fn lower_value_type_ref(
+    type_ref: &TypeRef,
+    structs: &HashMap<String, LoweredStruct>,
+    diagnostics: &mut Vec<Diagnostic>,
+    message: &str,
+) -> Option<LoweredType> {
+    if !type_ref.args.is_empty() {
+        diagnostics.push(Diagnostic::error(
+            type_ref.span,
+            "generic types are not supported in executable builds",
+        ));
+        return None;
+    }
+
+    if let Some(type_) = BasicType::from_name(&type_ref.name) {
+        return Some(LoweredType::Basic(type_));
+    }
+
+    if structs.contains_key(&type_ref.name) {
+        return Some(LoweredType::Struct(type_ref.name.clone()));
+    }
+
+    diagnostics.push(Diagnostic::error(type_ref.span, message));
+    None
 }
 
 fn lower_basic_type_ref(
