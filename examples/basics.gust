@@ -1,0 +1,85 @@
+// Welcome to the basics of Gust!
+// Gust does not have its own syntax highlighter yet, but the highlighter for rust works ok for now
+// BTW all comments are **markdown**!
+
+from json import escapeString
+from ../animal import Animal // Imports local modules. This will be resolved to the `./Animal.gust` file
+
+enum Being {
+    Person(Person)
+    Animal(Animal)
+} // There is no semicolons at the end of the lines ever
+
+struct Person {
+    name: String
+    age: u32
+
+    // Methods can be defined on structs
+    fn toJson(): String {
+        return "{\n" +
+        "    \"name\": \"" + escapeString(self.name) + "\",\n" +
+        "    \"age\": " + self.age.toString() + "\n" +
+        "}"
+    }
+}
+
+fn main() {
+    // IO is a module is in the global scope
+    io.println("Hello, world!")
+
+    // let is used to declare a new variable. This is immutable by default
+    let person = Person {
+        name: "John Doe",
+        age: 30, // Trailing commas are allowed and encouraged by the formatter
+    }
+
+    // debug is used to print the value of any type, not just simple types
+    io.debug(person)
+
+    // mut is used to make the variable mutable
+    // [] is used as a literal for an enumerable type
+    // The exact enumerable type is inferred by the compiler or defaulted to an ArrayList
+    // Here we explicitly declare the type to be ArrayList<Being>, otherwise the compiler would infer the type to be ArrayList<Person>
+    let mut listOfBeings: ArrayList<Being> = [Person(person)]
+
+    // push is used to add a new element to the array
+    listOfBeings.push(Person {
+        name: "Jane Doe",
+        age: 25,
+    })
+
+    // For loops iterate over an iterable. Standard array list implements the iterable trait
+    for person in listOfBeings {
+        // $ is used to interpolate the value of the variable into the string
+        io.println(getGreeting(person))
+    }
+
+    // Functions are first class citizens
+    listOfBeings.forEach(incrementAge)
+
+    // The generic type is inferred by the compiler. In this case it is ArrayList<Being>
+    // Lambda functions follow the same syntax as normal functions
+    // Parameter type is inferred by the compiler
+    // No `return` keyword is needed if the function has no body block (arrow function syntax)
+    let oldBeings = listOfBeings.filter(fn (b: Being) => b.age >= 30)
+
+    io.println(oldBeings.length.toString())
+
+    let file = io.open("beings.json", "w").unwrap()
+    file.write(beings.toJson())
+}
+
+// this function returns a string. This is inferred by the compiler
+fn getGreeting(being: Being): String {
+    // Returns are always explicit (through the return keyword) for function with a body block
+    return match being {
+        // Match branches extract the value from the matched expression
+        Person(person) => "Hello from person " + person.name + "!",
+        Animal(animal) => "Hello from animal " + animal.name + "!",
+    }
+}
+
+// we mark the parameter as mutable, so we can modify it. Otherwise the compiler will error because the parameter is immutable
+fn incrementAge(mut being: Being): void {
+    being.age++
+}
