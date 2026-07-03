@@ -1,3 +1,6 @@
 fn main() {
     io.println("Hello, world!")
+
+    io.println("Hello, gust!")
+    io.println("Hello, world!")
 }
