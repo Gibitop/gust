@@ -370,6 +370,134 @@ fn main() {
 }
 
 #[test]
+fn struct_helper_values_lower_successfully() {
+    let result = check_source(
+        r#"struct Lang {
+    name: String
+    version: u32
+}
+
+fn makeLang(): Lang {
+    return Lang {
+        name: "Gust",
+        version: 1,
+    }
+}
+
+fn getName(lang: Lang): String {
+    return lang.name
+}
+
+fn main() {
+    let lang = makeLang()
+    io.println(getName(lang))
+    io.println(makeLang().name)
+}"#,
+    );
+
+    assert!(
+        !result.has_errors(),
+        "expected no frontend errors, got {:?}",
+        result.diagnostics
+    );
+
+    let lowered = lower_program(&result.program).expect("struct helper values should lower");
+    let lang_type = LoweredType::Struct("Lang".to_string());
+
+    assert_eq!(
+        lowered.functions[0],
+        LoweredFunction {
+            name: "makeLang".to_string(),
+            params: vec![],
+            return_type: lang_type.clone(),
+            statements: vec![],
+            return_value: LoweredExpr {
+                type_: lang_type.clone(),
+                kind: LoweredExprKind::StructLiteral {
+                    name: "Lang".to_string(),
+                    fields: vec![
+                        LoweredStructFieldValue {
+                            name: "name".to_string(),
+                            value: LoweredExpr {
+                                type_: basic(BasicType::String),
+                                kind: LoweredExprKind::StringLiteral("Gust".to_string()),
+                            },
+                        },
+                        LoweredStructFieldValue {
+                            name: "version".to_string(),
+                            value: LoweredExpr {
+                                type_: basic(BasicType::U32),
+                                kind: LoweredExprKind::NumberLiteral("1".to_string()),
+                            },
+                        },
+                    ],
+                },
+            },
+        }
+    );
+    assert_eq!(
+        lowered.functions[1],
+        LoweredFunction {
+            name: "getName".to_string(),
+            params: vec![LoweredParam {
+                name: "lang".to_string(),
+                type_: lang_type.clone(),
+            }],
+            return_type: basic(BasicType::String),
+            statements: vec![],
+            return_value: LoweredExpr {
+                type_: basic(BasicType::String),
+                kind: LoweredExprKind::FieldAccess {
+                    object: Box::new(LoweredExpr {
+                        type_: lang_type.clone(),
+                        kind: LoweredExprKind::Local("lang".to_string()),
+                    }),
+                    field: "name".to_string(),
+                },
+            },
+        }
+    );
+    assert_eq!(
+        lowered.statements,
+        vec![
+            LoweredStatement::Local {
+                name: "lang".to_string(),
+                value: LoweredExpr {
+                    type_: lang_type.clone(),
+                    kind: LoweredExprKind::Call {
+                        name: "makeLang".to_string(),
+                        args: vec![],
+                    },
+                },
+            },
+            LoweredStatement::Println(LoweredExpr {
+                type_: basic(BasicType::String),
+                kind: LoweredExprKind::Call {
+                    name: "getName".to_string(),
+                    args: vec![LoweredExpr {
+                        type_: lang_type.clone(),
+                        kind: LoweredExprKind::Local("lang".to_string()),
+                    }],
+                },
+            }),
+            LoweredStatement::Println(LoweredExpr {
+                type_: basic(BasicType::String),
+                kind: LoweredExprKind::FieldAccess {
+                    object: Box::new(LoweredExpr {
+                        type_: lang_type,
+                        kind: LoweredExprKind::Call {
+                            name: "makeLang".to_string(),
+                            args: vec![],
+                        },
+                    }),
+                    field: "name".to_string(),
+                },
+            }),
+        ]
+    );
+}
+
+#[test]
 fn hello_world_c_output_is_stable() {
     let result = check_source(
         r#"fn main() {
@@ -488,6 +616,46 @@ fn main() {
     assert!(source.contains(".gust_name = \"Gust\""));
     assert!(source.contains(".gust_age = 1"));
     assert!(source.contains("gust_rt_io_println(gust_person.gust_name);"));
+}
+
+#[test]
+fn struct_helper_values_c_output_contains_struct_signatures() {
+    let result = check_source(
+        r#"struct Lang {
+    name: String
+    version: u32
+}
+
+fn makeLang(): Lang {
+    return Lang {
+        name: "Gust",
+        version: 1,
+    }
+}
+
+fn getName(lang: Lang): String {
+    return lang.name
+}
+
+fn main() {
+    let lang = makeLang()
+    io.println(getName(lang))
+    io.println(makeLang().name)
+}"#,
+    );
+    let lowered = lower_program(&result.program).expect("struct helper values should lower");
+    let source = emit_c(&lowered);
+
+    assert!(source.contains("typedef struct gust_struct_f1168775_Lang {"));
+    assert!(source.contains("} gust_struct_f1168775_Lang;"));
+    assert!(source.contains("static gust_struct_f1168775_Lang gust_fn_de4514cf_makeLang() {"));
+    assert!(source.contains(
+        "static const char* gust_fn_1f1b2f34_getName(gust_struct_f1168775_Lang gust_lang) {"
+    ));
+    assert!(source.contains("return gust_lang.gust_name;"));
+    assert!(source.contains("gust_struct_f1168775_Lang gust_lang = gust_fn_de4514cf_makeLang();"));
+    assert!(source.contains("gust_rt_io_println(gust_fn_1f1b2f34_getName(gust_lang));"));
+    assert!(source.contains("gust_rt_io_println(gust_fn_de4514cf_makeLang().gust_name);"));
 }
 
 #[test]
@@ -643,14 +811,14 @@ fn mutable_local_is_still_rejected_by_backend() {
 }
 
 #[test]
-fn struct_helper_signature_is_rejected_by_backend() {
+fn mutable_struct_helper_signature_is_rejected_by_backend() {
     let result = check_source(
         r#"
 struct Person {
     name: String
 }
 
-fn identity(person: Person): Person {
+fn identity(mut person: Person): Person {
     return person
 }
 
@@ -673,17 +841,8 @@ fn main() {
             .any(|diagnostic| diagnostic.severity == Severity::Error
                 && diagnostic
                     .message
-                    .contains("only basic parameter types are supported")),
-        "expected struct parameter diagnostic, got {diagnostics:?}"
-    );
-    assert!(
-        diagnostics
-            .iter()
-            .any(|diagnostic| diagnostic.severity == Severity::Error
-                && diagnostic
-                    .message
-                    .contains("only basic return types are supported")),
-        "expected struct return diagnostic, got {diagnostics:?}"
+                    .contains("mutable parameters are not supported")),
+        "expected mutable struct parameter diagnostic, got {diagnostics:?}"
     );
 }
 
