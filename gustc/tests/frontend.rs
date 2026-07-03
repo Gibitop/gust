@@ -332,6 +332,168 @@ fn main() {
 }
 
 #[test]
+fn function_call_with_basic_return_type_validates() {
+    let result = check_source(
+        r#"
+fn greet(name: String): String {
+    return "Hello, " + name
+}
+
+fn main() {
+    let message: String = greet("Gust")
+}
+"#,
+    );
+
+    assert!(
+        !result.has_errors(),
+        "expected function call to validate, got {:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
+fn function_call_wrong_argument_count_is_an_error() {
+    let result = check_source(
+        r#"
+fn greet(name: String): String {
+    return name
+}
+
+fn main() {
+    let message = greet()
+}
+"#,
+    );
+
+    assert!(
+        result
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.severity == Severity::Error
+                && diagnostic
+                    .message
+                    .contains("function `greet` expects 1 arguments, got 0")),
+        "expected wrong-argument-count error, got {:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
+fn function_call_wrong_argument_type_is_an_error() {
+    let result = check_source(
+        r#"
+fn greet(name: String): String {
+    return name
+}
+
+fn main() {
+    let message = greet(1)
+}
+"#,
+    );
+
+    assert!(
+        result
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.severity == Severity::Error
+                && diagnostic
+                    .message
+                    .contains("expected value of type `String`, got `i32`")),
+        "expected wrong-argument-type error, got {:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
+fn function_return_type_mismatch_is_an_error() {
+    let result = check_source(
+        r#"
+fn greet(): String {
+    return 1
+}
+
+fn main() {}
+"#,
+    );
+
+    assert!(
+        result
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.severity == Severity::Error
+                && diagnostic
+                    .message
+                    .contains("expected value of type `String`, got `i32`")),
+        "expected return-type mismatch error, got {:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
+fn unknown_call_callee_suppresses_initializer_mismatch() {
+    let result = check_source(
+        r#"
+fn main() {
+    let message: String = missing("Gust")
+}
+"#,
+    );
+
+    assert!(
+        result
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.severity == Severity::Error
+                && diagnostic.message.contains("unknown name `missing`")),
+        "expected unknown-name error, got {:?}",
+        result.diagnostics
+    );
+    assert!(
+        result
+            .diagnostics
+            .iter()
+            .all(|diagnostic| !diagnostic.message.contains("expected value of type")),
+        "expected Unknown to suppress mismatch cascades, got {:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
+fn unknown_call_argument_suppresses_argument_mismatch() {
+    let result = check_source(
+        r#"
+fn greet(name: String): String {
+    return name
+}
+
+fn main() {
+    let message = greet(missing)
+}
+"#,
+    );
+
+    assert!(
+        result
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.severity == Severity::Error
+                && diagnostic.message.contains("unknown name `missing`")),
+        "expected unknown-name error, got {:?}",
+        result.diagnostics
+    );
+    assert!(
+        result
+            .diagnostics
+            .iter()
+            .all(|diagnostic| !diagnostic.message.contains("expected value of type")),
+        "expected Unknown to suppress argument mismatch cascades, got {:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
 fn unannotated_numeric_literals_default_to_i32() {
     let result = check_source(
         r#"
