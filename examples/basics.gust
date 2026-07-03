@@ -66,7 +66,7 @@ fn main() {
     io.println(oldBeings.length.toString())
 
     let file = io.open("beings.json", "w").unwrap()
-    file.write(beings.toJson())
+    file.write(listOfBeings.toJson())
 }
 
 // this function returns a string. This is inferred by the compiler

@@ -1,6 +1,8 @@
 pub mod ast;
+pub mod c_codegen;
 pub mod diagnostic;
 pub mod lexer;
+pub mod lower;
 pub mod parser;
 pub mod semantic;
 pub mod span;
