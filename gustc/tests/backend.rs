@@ -2,7 +2,7 @@ use gustc::ast::BasicType;
 use gustc::c_codegen::emit_c;
 use gustc::check_source;
 use gustc::diagnostic::Severity;
-use gustc::lower::{LoweredStatement, LoweredValue, lower_program};
+use gustc::lower::{LoweredExpr, LoweredExprKind, LoweredStatement, lower_program};
 
 #[test]
 fn hello_world_lowers_successfully() {
@@ -22,9 +22,10 @@ fn hello_world_lowers_successfully() {
 
     assert_eq!(
         lowered.statements,
-        vec![LoweredStatement::Println(LoweredValue::StringLiteral(
-            "Hello, world!".to_string()
-        ))]
+        vec![LoweredStatement::Println(LoweredExpr {
+            type_: BasicType::String,
+            kind: LoweredExprKind::StringLiteral("Hello, world!".to_string()),
+        })]
     );
 }
 
@@ -50,10 +51,15 @@ fn string_local_lowers_successfully() {
         vec![
             LoweredStatement::Local {
                 name: "message".to_string(),
-                type_: BasicType::String,
-                value: LoweredValue::StringLiteral("Hello, string local!".to_string()),
+                value: LoweredExpr {
+                    type_: BasicType::String,
+                    kind: LoweredExprKind::StringLiteral("Hello, string local!".to_string()),
+                },
             },
-            LoweredStatement::Println(LoweredValue::Local("message".to_string())),
+            LoweredStatement::Println(LoweredExpr {
+                type_: BasicType::String,
+                kind: LoweredExprKind::Local("message".to_string()),
+            }),
         ]
     );
 }
@@ -75,24 +81,42 @@ fn string_concat_local_lowers_successfully() {
     );
 
     let lowered = lower_program(&result.program).expect("string concat local should lower");
+    let LoweredStatement::Local { value, .. } = &lowered.statements[1] else {
+        panic!("expected string concat local");
+    };
+
+    assert_eq!(value.type_, BasicType::String);
 
     assert_eq!(
         lowered.statements,
         vec![
             LoweredStatement::Local {
                 name: "name".to_string(),
-                type_: BasicType::String,
-                value: LoweredValue::StringLiteral("Gust".to_string()),
+                value: LoweredExpr {
+                    type_: BasicType::String,
+                    kind: LoweredExprKind::StringLiteral("Gust".to_string()),
+                },
             },
             LoweredStatement::Local {
                 name: "message".to_string(),
-                type_: BasicType::String,
-                value: LoweredValue::StringConcat(
-                    Box::new(LoweredValue::StringLiteral("Hello, ".to_string())),
-                    Box::new(LoweredValue::Local("name".to_string())),
-                ),
+                value: LoweredExpr {
+                    type_: BasicType::String,
+                    kind: LoweredExprKind::StringConcat(
+                        Box::new(LoweredExpr {
+                            type_: BasicType::String,
+                            kind: LoweredExprKind::StringLiteral("Hello, ".to_string()),
+                        }),
+                        Box::new(LoweredExpr {
+                            type_: BasicType::String,
+                            kind: LoweredExprKind::Local("name".to_string()),
+                        }),
+                    ),
+                },
             },
-            LoweredStatement::Println(LoweredValue::Local("message".to_string())),
+            LoweredStatement::Println(LoweredExpr {
+                type_: BasicType::String,
+                kind: LoweredExprKind::Local("message".to_string()),
+            }),
         ]
     );
 }
@@ -119,13 +143,24 @@ fn direct_string_concat_println_lowers_successfully() {
         vec![
             LoweredStatement::Local {
                 name: "name".to_string(),
-                type_: BasicType::String,
-                value: LoweredValue::StringLiteral("Gust".to_string()),
+                value: LoweredExpr {
+                    type_: BasicType::String,
+                    kind: LoweredExprKind::StringLiteral("Gust".to_string()),
+                },
             },
-            LoweredStatement::Println(LoweredValue::StringConcat(
-                Box::new(LoweredValue::StringLiteral("Hello, ".to_string())),
-                Box::new(LoweredValue::Local("name".to_string())),
-            )),
+            LoweredStatement::Println(LoweredExpr {
+                type_: BasicType::String,
+                kind: LoweredExprKind::StringConcat(
+                    Box::new(LoweredExpr {
+                        type_: BasicType::String,
+                        kind: LoweredExprKind::StringLiteral("Hello, ".to_string()),
+                    }),
+                    Box::new(LoweredExpr {
+                        type_: BasicType::String,
+                        kind: LoweredExprKind::Local("name".to_string()),
+                    }),
+                ),
+            }),
         ]
     );
 }
