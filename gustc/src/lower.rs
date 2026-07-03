@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use crate::ast::{BasicType, ExprKind, FunctionBody, Item, Program, StmtKind};
+use crate::ast::{BasicType, BinaryOp, Expr, ExprKind, FunctionBody, Item, Program, StmtKind};
 use crate::diagnostic::Diagnostic;
 use crate::span::Span;
 
@@ -25,6 +25,7 @@ pub enum LoweredValue {
     BoolLiteral(bool),
     NumberLiteral(String),
     Local(String),
+    StringConcat(Box<LoweredValue>, Box<LoweredValue>),
 }
 
 pub fn lower_program(program: &Program) -> Result<LoweredProgram, Vec<Diagnostic>> {
@@ -118,41 +119,18 @@ pub fn lower_program(program: &Program) -> Result<LoweredProgram, Vec<Diagnostic
                         if args.len() != 1 {
                             diagnostics.push(Diagnostic::error(
                                 expr.span,
-                                "`io.println` expects exactly one string literal or string local in executable builds",
+                                "`io.println` expects exactly one `String` value in executable builds",
                             ));
                             continue;
                         }
 
-                        let arg = &args[0];
-                        match &arg.kind {
-                            ExprKind::String(value) => statements.push(LoweredStatement::Println(
-                                LoweredValue::StringLiteral(value.clone()),
-                            )),
-                            ExprKind::Identifier(name)
-                                if locals.get(name) == Some(&BasicType::String) =>
-                            {
-                                statements.push(LoweredStatement::Println(LoweredValue::Local(
-                                    name.clone(),
-                                )));
-                            }
-                            ExprKind::Identifier(name) if locals.contains_key(name) => {
-                                let type_ = locals[name];
-                                diagnostics.push(Diagnostic::error(
-                                    arg.span,
-                                    format!(
-                                        "`io.println` only accepts `String` values in executable builds, got `{}`",
-                                        type_.name()
-                                    ),
-                                ));
-                            }
-                            ExprKind::Identifier(name) => diagnostics.push(Diagnostic::error(
-                                arg.span,
-                                format!("unknown local `{name}` in `io.println`"),
-                            )),
-                            _ => diagnostics.push(Diagnostic::error(
-                                arg.span,
-                                "`io.println` only accepts `String` values in executable builds",
-                            )),
+                        if let Some(value) = lower_string_value(
+                            &args[0],
+                            &locals,
+                            &mut diagnostics,
+                            "`io.println` only accepts `String` values in executable builds",
+                        ) {
+                            statements.push(LoweredStatement::Println(value));
                         }
                     }
                     StmtKind::Let {
@@ -212,6 +190,60 @@ pub fn lower_program(program: &Program) -> Result<LoweredProgram, Vec<Diagnostic
                                     ));
                                     None
                                 }
+                                (ExprKind::Identifier(name), None | Some(BasicType::String))
+                                    if locals.get(name) == Some(&BasicType::String) =>
+                                {
+                                    Some((BasicType::String, LoweredValue::Local(name.clone())))
+                                }
+                                (ExprKind::Identifier(name), Some(type_))
+                                    if locals.get(name) == Some(&BasicType::String) =>
+                                {
+                                    diagnostics.push(Diagnostic::error(
+                                        value.span,
+                                        format!(
+                                            "expected value of type `{}`, got `String`",
+                                            type_.name()
+                                        ),
+                                    ));
+                                    None
+                                }
+                                (
+                                    ExprKind::Binary {
+                                        op: BinaryOp::Add, ..
+                                    },
+                                    None | Some(BasicType::String),
+                                ) => lower_string_value(
+                                    value,
+                                    &locals,
+                                    &mut diagnostics,
+                                    "expected `String` value in executable builds",
+                                )
+                                .map(|value| (BasicType::String, value)),
+                                (
+                                    ExprKind::Binary {
+                                        op: BinaryOp::Add, ..
+                                    },
+                                    Some(type_),
+                                ) => {
+                                    if lower_string_value(
+                                        value,
+                                        &locals,
+                                        &mut diagnostics,
+                                        "expected `String` value in executable builds",
+                                    )
+                                    .is_some()
+                                    {
+                                        diagnostics.push(Diagnostic::error(
+                                            value.span,
+                                            format!(
+                                                "expected value of type `{}`, got `String`",
+                                                type_.name()
+                                            ),
+                                        ));
+                                    }
+
+                                    None
+                                }
                                 (ExprKind::Bool(value), None | Some(BasicType::Bool)) => {
                                     Some((BasicType::Bool, LoweredValue::BoolLiteral(*value)))
                                 }
@@ -245,7 +277,7 @@ pub fn lower_program(program: &Program) -> Result<LoweredProgram, Vec<Diagnostic
                                 _ => {
                                     diagnostics.push(Diagnostic::error(
                                         value.span,
-                                        "only literal local values are supported in executable builds",
+                                        "only literal and string concat local values are supported in executable builds",
                                     ));
                                     None
                                 }
@@ -316,5 +348,57 @@ pub fn lower_program(program: &Program) -> Result<LoweredProgram, Vec<Diagnostic
         Ok(LoweredProgram { statements })
     } else {
         Err(diagnostics)
+    }
+}
+
+fn lower_string_value(
+    expr: &Expr,
+    locals: &HashMap<String, BasicType>,
+    diagnostics: &mut Vec<Diagnostic>,
+    message: &str,
+) -> Option<LoweredValue> {
+    match &expr.kind {
+        ExprKind::String(value) => Some(LoweredValue::StringLiteral(value.clone())),
+        ExprKind::Identifier(name) if locals.get(name) == Some(&BasicType::String) => {
+            Some(LoweredValue::Local(name.clone()))
+        }
+        ExprKind::Identifier(name) if locals.contains_key(name) => {
+            let type_ = locals[name];
+            diagnostics.push(Diagnostic::error(
+                expr.span,
+                format!("{message}, got `{}`", type_.name()),
+            ));
+            None
+        }
+        ExprKind::Identifier(name) => {
+            diagnostics.push(Diagnostic::error(
+                expr.span,
+                format!("unknown local `{name}` in string expression"),
+            ));
+            None
+        }
+        ExprKind::Binary {
+            left,
+            op: BinaryOp::Add,
+            right,
+        } => {
+            let left = lower_string_value(left, locals, diagnostics, message);
+            let right = lower_string_value(right, locals, diagnostics, message);
+
+            match (left, right) {
+                (Some(left), Some(right)) => {
+                    Some(LoweredValue::StringConcat(Box::new(left), Box::new(right)))
+                }
+                _ => None,
+            }
+        }
+        ExprKind::Binary { .. } => {
+            diagnostics.push(Diagnostic::error(expr.span, message));
+            None
+        }
+        _ => {
+            diagnostics.push(Diagnostic::error(expr.span, message));
+            None
+        }
     }
 }
