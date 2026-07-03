@@ -246,6 +246,92 @@ fn main() {
 }
 
 #[test]
+fn string_add_validates_as_string() {
+    let result = check_source(
+        r#"
+fn main() {
+    let message: String = "Hello, " + "Gust"
+}
+"#,
+    );
+
+    assert!(
+        !result.has_errors(),
+        "expected string concat to validate, got {:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
+fn nested_string_add_validates_as_string() {
+    let result = check_source(
+        r#"
+fn main() {
+    let name = "Gust"
+    let message: String = "Hello, " + name + "!"
+}
+"#,
+    );
+
+    assert!(
+        !result.has_errors(),
+        "expected nested string concat to validate, got {:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
+fn numeric_add_is_rejected_for_now() {
+    let result = check_source(
+        r#"
+fn main() {
+    let count = 1 + 2
+}
+"#,
+    );
+
+    assert!(
+        result
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.severity == Severity::Error
+                && diagnostic
+                    .message
+                    .contains("operator + only supports String operands for now")),
+        "expected string-only add diagnostic, got {:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
+fn unknown_add_operand_suppresses_followup_string_operand_error() {
+    let result = check_source(
+        r#"
+fn main() {
+    let message = missing + "!"
+}
+"#,
+    );
+
+    assert!(
+        result
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.severity == Severity::Error
+                && diagnostic.message.contains("unknown name `missing`")),
+        "expected unknown-name error, got {:?}",
+        result.diagnostics
+    );
+    assert!(
+        result.diagnostics.iter().all(|diagnostic| !diagnostic
+            .message
+            .contains("operator + only supports String operands")),
+        "expected Unknown to suppress concat operand cascades, got {:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
 fn unannotated_numeric_literals_default_to_i32() {
     let result = check_source(
         r#"

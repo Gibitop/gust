@@ -36,6 +36,11 @@ pub fn emit_c(program: &LoweredProgram) -> String {
             }
         )
     });
+    let uses_string_concat = program.statements.iter().any(|statement| match statement {
+        LoweredStatement::Local { value, .. } | LoweredStatement::Println(value) => {
+            matches!(value, LoweredValue::StringConcat(_, _))
+        }
+    });
 
     let mut source = String::new();
 
@@ -51,7 +56,26 @@ pub fn emit_c(program: &LoweredProgram) -> String {
         source.push_str("#include <stdint.h>\n");
     }
 
-    source.push_str("#include <stdio.h>\n\nint main(void) {\n");
+    source.push_str("#include <stdio.h>\n");
+
+    if uses_string_concat {
+        source.push_str("#include <stdlib.h>\n#include <string.h>\n");
+    }
+
+    source.push('\n');
+
+    if uses_string_concat {
+        source.push_str("static char* gust_concat(const char* left, const char* right) {\n");
+        source.push_str("    size_t left_len = strlen(left);\n");
+        source.push_str("    size_t right_len = strlen(right);\n");
+        source.push_str("    char* result = malloc(left_len + right_len + 1);\n");
+        source.push_str("    memcpy(result, left, left_len);\n");
+        source.push_str("    memcpy(result + left_len, right, right_len + 1);\n");
+        source.push_str("    return result;\n");
+        source.push_str("}\n\n");
+    }
+
+    source.push_str("int main(void) {\n");
 
     for statement in &program.statements {
         match statement {
@@ -73,6 +97,11 @@ pub fn emit_c(program: &LoweredProgram) -> String {
                 LoweredValue::Local(name) => {
                     source.push_str("    puts(");
                     push_c_local_name(&mut source, name);
+                    source.push_str(");\n");
+                }
+                LoweredValue::StringConcat(_, _) => {
+                    source.push_str("    puts(");
+                    push_c_value(&mut source, value);
                     source.push_str(");\n");
                 }
                 LoweredValue::BoolLiteral(_) | LoweredValue::NumberLiteral(_) => {
@@ -123,6 +152,13 @@ fn push_c_value(source: &mut String, value: &LoweredValue) {
         }
         LoweredValue::NumberLiteral(value) => source.push_str(value),
         LoweredValue::Local(name) => push_c_local_name(source, name),
+        LoweredValue::StringConcat(left, right) => {
+            source.push_str("gust_concat(");
+            push_c_value(source, left);
+            source.push_str(", ");
+            push_c_value(source, right);
+            source.push(')');
+        }
     }
 }
 

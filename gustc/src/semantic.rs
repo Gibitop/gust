@@ -1,8 +1,8 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::ast::{
-    BasicType, Block, Expr, ExprKind, FunctionBody, FunctionDecl, Item, Pattern, Program, Stmt,
-    StmtKind, StructMember, TypeRef,
+    BasicType, BinaryOp, Block, Expr, ExprKind, FunctionBody, FunctionDecl, Item, Pattern, Program,
+    Stmt, StmtKind, StructMember, TypeRef,
 };
 use crate::diagnostic::Diagnostic;
 use crate::span::Span;
@@ -372,10 +372,29 @@ impl Analyzer {
 
                 Type::Unknown
             }
-            ExprKind::Binary { left, right, .. } => {
-                self.validate_expr(left);
-                self.validate_expr(right);
-                Type::Unknown
+            ExprKind::Binary { left, op, right } => {
+                let left_type = self.validate_expr(left);
+                let right_type = self.validate_expr(right);
+
+                match op {
+                    BinaryOp::Add => {
+                        if matches!(left_type, Type::Unknown) || matches!(right_type, Type::Unknown)
+                        {
+                            Type::Unknown
+                        } else if left_type == Type::Basic(BasicType::String)
+                            && right_type == Type::Basic(BasicType::String)
+                        {
+                            Type::Basic(BasicType::String)
+                        } else {
+                            self.diagnostics.push(Diagnostic::error(
+                                expr.span,
+                                "operator + only supports String operands for now",
+                            ));
+                            Type::Unknown
+                        }
+                    }
+                    BinaryOp::GreaterEqual => Type::Unknown,
+                }
             }
             ExprKind::Match { value, branches } => {
                 self.unsupported(

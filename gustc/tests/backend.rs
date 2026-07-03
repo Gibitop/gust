@@ -59,6 +59,78 @@ fn string_local_lowers_successfully() {
 }
 
 #[test]
+fn string_concat_local_lowers_successfully() {
+    let result = check_source(
+        r#"fn main() {
+    let name = "Gust"
+    let message = "Hello, " + name
+    io.println(message)
+}"#,
+    );
+
+    assert!(
+        !result.has_errors(),
+        "expected no frontend errors, got {:?}",
+        result.diagnostics
+    );
+
+    let lowered = lower_program(&result.program).expect("string concat local should lower");
+
+    assert_eq!(
+        lowered.statements,
+        vec![
+            LoweredStatement::Local {
+                name: "name".to_string(),
+                type_: BasicType::String,
+                value: LoweredValue::StringLiteral("Gust".to_string()),
+            },
+            LoweredStatement::Local {
+                name: "message".to_string(),
+                type_: BasicType::String,
+                value: LoweredValue::StringConcat(
+                    Box::new(LoweredValue::StringLiteral("Hello, ".to_string())),
+                    Box::new(LoweredValue::Local("name".to_string())),
+                ),
+            },
+            LoweredStatement::Println(LoweredValue::Local("message".to_string())),
+        ]
+    );
+}
+
+#[test]
+fn direct_string_concat_println_lowers_successfully() {
+    let result = check_source(
+        r#"fn main() {
+    let name = "Gust"
+    io.println("Hello, " + name)
+}"#,
+    );
+
+    assert!(
+        !result.has_errors(),
+        "expected no frontend errors, got {:?}",
+        result.diagnostics
+    );
+
+    let lowered = lower_program(&result.program).expect("direct string concat should lower");
+
+    assert_eq!(
+        lowered.statements,
+        vec![
+            LoweredStatement::Local {
+                name: "name".to_string(),
+                type_: BasicType::String,
+                value: LoweredValue::StringLiteral("Gust".to_string()),
+            },
+            LoweredStatement::Println(LoweredValue::StringConcat(
+                Box::new(LoweredValue::StringLiteral("Hello, ".to_string())),
+                Box::new(LoweredValue::Local("name".to_string())),
+            )),
+        ]
+    );
+}
+
+#[test]
 fn hello_world_c_output_is_stable() {
     let result = check_source(
         r#"fn main() {
@@ -86,6 +158,24 @@ fn string_local_c_output_is_stable() {
     assert_eq!(
         emit_c(&lowered),
         "#include <stdio.h>\n\nint main(void) {\n    const char* gust_message = \"Hello, string local!\";\n    puts(gust_message);\n    return 0;\n}\n"
+    );
+}
+
+#[test]
+fn string_concat_c_output_is_stable() {
+    let result = check_source(
+        r#"fn main() {
+    let name = "Gust"
+    let message = "Hello, " + name + "!"
+    io.println("Inline " + "concat")
+    io.println(message)
+}"#,
+    );
+    let lowered = lower_program(&result.program).expect("string concat should lower");
+
+    assert_eq!(
+        emit_c(&lowered),
+        "#include <stdio.h>\n#include <stdlib.h>\n#include <string.h>\n\nstatic char* gust_concat(const char* left, const char* right) {\n    size_t left_len = strlen(left);\n    size_t right_len = strlen(right);\n    char* result = malloc(left_len + right_len + 1);\n    memcpy(result, left, left_len);\n    memcpy(result + left_len, right, right_len + 1);\n    return result;\n}\n\nint main(void) {\n    const char* gust_name = \"Gust\";\n    const char* gust_message = gust_concat(gust_concat(\"Hello, \", gust_name), \"!\");\n    puts(gust_concat(\"Inline \", \"concat\"));\n    puts(gust_message);\n    return 0;\n}\n"
     );
 }
 

@@ -1,0 +1,8 @@
+fn main() {
+    let name = "Gust"
+    let greeting = "Hello, " + name
+    let message = greeting + "!"
+
+    io.println(message)
+    io.println("Inline " + "concat")
+}
