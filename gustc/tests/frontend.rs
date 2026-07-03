@@ -17,7 +17,7 @@ fn hello_world_has_no_frontend_errors() {
 
 #[test]
 fn basics_parses_without_syntax_errors() {
-    let source = include_str!("../../examples/basics.gust");
+    let source = include_str!("../../examples/milestone.gust");
     let (tokens, lexer_diagnostics) = Lexer::new(source).tokenize();
     let (_, parser_diagnostics) = Parser::new(tokens).parse();
 
@@ -33,7 +33,7 @@ fn basics_parses_without_syntax_errors() {
 
 #[test]
 fn basics_reports_unsupported_features() {
-    let source = include_str!("../../examples/basics.gust");
+    let source = include_str!("../../examples/milestone.gust");
     let result = check_source(source);
 
     assert!(
@@ -43,6 +43,228 @@ fn basics_reports_unsupported_features() {
             .any(|diagnostic| diagnostic.severity == Severity::Warning
                 && diagnostic.message.contains("not implemented yet")),
         "expected at least one unsupported-feature warning, got {:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
+fn basic_primitive_type_names_are_valid() {
+    let result = check_source(
+        r#"
+fn main() {
+    let string: String
+    let boolean: bool
+    let unsigned8: u8
+    let unsigned16: u16
+    let unsigned32: u32
+    let unsigned64: u64
+    let pointerSized: usize
+    let signed8: i8
+    let signed16: i16
+    let signed32: i32
+    let signed64: i64
+}
+"#,
+    );
+
+    assert!(
+        !result.has_errors(),
+        "expected basic primitive types to be valid, got {:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
+fn bool_literals_validate_as_bool() {
+    let result = check_source(
+        r#"
+fn main() {
+    let enabled = true
+    let disabled: bool = false
+}
+"#,
+    );
+
+    assert!(
+        !result.has_errors(),
+        "expected bool literals to validate, got {:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
+fn unknown_type_names_are_errors() {
+    let result = check_source(
+        r#"
+fn main() {
+    let value: Nope = 1
+}
+"#,
+    );
+
+    assert!(
+        result
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.severity == Severity::Error
+                && diagnostic.message.contains("unknown type `Nope`")),
+        "expected unknown-type error, got {:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
+fn unknown_type_suppresses_followup_initializer_mismatch() {
+    let result = check_source(
+        r#"
+fn main() {
+    let value: Nope = "not checked again"
+}
+"#,
+    );
+
+    assert!(
+        result
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.severity == Severity::Error
+                && diagnostic.message.contains("unknown type `Nope`")),
+        "expected unknown-type error, got {:?}",
+        result.diagnostics
+    );
+    assert!(
+        result
+            .diagnostics
+            .iter()
+            .all(|diagnostic| !diagnostic.message.contains("expected value of type")),
+        "expected Unknown to suppress mismatch cascades, got {:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
+fn unknown_identifier_suppresses_followup_initializer_mismatch() {
+    let result = check_source(
+        r#"
+fn main() {
+    let value: u32 = missing
+}
+"#,
+    );
+
+    assert!(
+        result
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.severity == Severity::Error
+                && diagnostic.message.contains("unknown name `missing`")),
+        "expected unknown-name error, got {:?}",
+        result.diagnostics
+    );
+    assert!(
+        result
+            .diagnostics
+            .iter()
+            .all(|diagnostic| !diagnostic.message.contains("expected value of type")),
+        "expected Unknown to suppress mismatch cascades, got {:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
+fn unknown_type_suppresses_followup_default_error() {
+    let result = check_source(
+        r#"
+fn main() {
+    let value: Nope
+}
+"#,
+    );
+
+    assert!(
+        result
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.severity == Severity::Error
+                && diagnostic.message.contains("unknown type `Nope`")),
+        "expected unknown-type error, got {:?}",
+        result.diagnostics
+    );
+    assert!(
+        result.diagnostics.iter().all(|diagnostic| !diagnostic
+            .message
+            .contains("default values are only supported")),
+        "expected Unknown to suppress default cascades, got {:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
+fn let_without_type_or_value_is_an_error() {
+    let result = check_source(
+        r#"
+fn main() {
+    let value
+}
+"#,
+    );
+
+    assert!(
+        result
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.severity == Severity::Error
+                && diagnostic
+                    .message
+                    .contains("expected `=` or type annotation")),
+        "expected missing-let-value error, got {:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
+fn mismatched_annotated_initializer_is_an_error() {
+    let result = check_source(
+        r#"
+fn main() {
+    let value: u32 = "not a number"
+}
+"#,
+    );
+
+    assert!(
+        result
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.severity == Severity::Error
+                && diagnostic
+                    .message
+                    .contains("expected value of type `u32`, got `String`")),
+        "expected type-mismatch error, got {:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
+fn unannotated_numeric_literals_default_to_i32() {
+    let result = check_source(
+        r#"
+fn main() {
+    let value = 1
+    let copy: u32 = value
+}
+"#,
+    );
+
+    assert!(
+        result
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.severity == Severity::Error
+                && diagnostic
+                    .message
+                    .contains("expected value of type `u32`, got `i32`")),
+        "expected default-i32 mismatch, got {:?}",
         result.diagnostics
     );
 }

@@ -1,3 +1,4 @@
+use gustc::ast::BasicType;
 use gustc::c_codegen::emit_c;
 use gustc::check_source;
 use gustc::diagnostic::Severity;
@@ -47,11 +48,12 @@ fn string_local_lowers_successfully() {
     assert_eq!(
         lowered.statements,
         vec![
-            LoweredStatement::StringLocal {
+            LoweredStatement::Local {
                 name: "message".to_string(),
-                value: "Hello, string local!".to_string(),
+                type_: BasicType::String,
+                value: LoweredValue::StringLiteral("Hello, string local!".to_string()),
             },
-            LoweredStatement::Println(LoweredValue::StringLocal("message".to_string())),
+            LoweredStatement::Println(LoweredValue::Local("message".to_string())),
         ]
     );
 }
@@ -83,7 +85,60 @@ fn string_local_c_output_is_stable() {
 
     assert_eq!(
         emit_c(&lowered),
-        "#include <stdio.h>\n\nint main(void) {\n    const char* message = \"Hello, string local!\";\n    puts(message);\n    return 0;\n}\n"
+        "#include <stdio.h>\n\nint main(void) {\n    const char* gust_message = \"Hello, string local!\";\n    puts(gust_message);\n    return 0;\n}\n"
+    );
+}
+
+#[test]
+fn basic_local_defaults_c_output_is_stable() {
+    let result = check_source(
+        r#"fn main() {
+    let message: String
+    let count: i32
+    let flag: bool
+    let byte: u8
+    let size: usize
+}"#,
+    );
+    let lowered = lower_program(&result.program).expect("basic defaults should lower");
+
+    assert_eq!(
+        emit_c(&lowered),
+        "#include <stdbool.h>\n#include <stddef.h>\n#include <stdint.h>\n#include <stdio.h>\n\nint main(void) {\n    const char* gust_message = \"\";\n    int32_t gust_count = 0;\n    bool gust_flag = false;\n    uint8_t gust_byte = 0;\n    size_t gust_size = 0;\n    return 0;\n}\n"
+    );
+}
+
+#[test]
+fn initialized_basic_locals_c_output_is_stable() {
+    let result = check_source(
+        r#"fn main() {
+    let message = "Hello, initialized!"
+    let count: u64 = 42
+    let flag = true
+}"#,
+    );
+    let lowered = lower_program(&result.program).expect("initialized basics should lower");
+
+    assert_eq!(
+        emit_c(&lowered),
+        "#include <stdbool.h>\n#include <stdint.h>\n#include <stdio.h>\n\nint main(void) {\n    const char* gust_message = \"Hello, initialized!\";\n    uint64_t gust_count = 42;\n    bool gust_flag = true;\n    return 0;\n}\n"
+    );
+}
+
+#[test]
+fn c_output_mangles_local_names_that_are_c_keywords() {
+    let result = check_source(
+        r#"fn main() {
+    let short: u16 = 16
+    let unsigned: u32 = 32
+    let signed = 32
+}"#,
+    );
+    let lowered = lower_program(&result.program).expect("keyword-like locals should lower");
+
+    assert_eq!(
+        emit_c(&lowered),
+        "#include <stdint.h>\n#include <stdio.h>\n\nint main(void) {\n    uint16_t gust_short = 16;\n    uint32_t gust_unsigned = 32;\n    int32_t gust_signed = 32;\n    return 0;\n}\n"
     );
 }
 
@@ -103,15 +158,47 @@ fn c_output_escapes_string_values() {
 }
 
 #[test]
-fn unsupported_string_local_forms_are_errors() {
+fn println_rejects_non_string_operands() {
     let result = check_source(
         r#"fn main() {
     let count = 1
     io.println(count)
-    let mut mutable = "Gust"
-    io.println(mutable)
-    let typed: String = "Gust"
-    io.println(typed)
+    let flag = true
+    io.println(flag)
+}"#,
+    );
+
+    assert!(
+        !result.has_errors(),
+        "expected no frontend errors, got {:?}",
+        result.diagnostics
+    );
+
+    let diagnostics = lower_program(&result.program).expect_err("source should not lower");
+
+    assert!(
+        diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.severity == Severity::Error
+                && diagnostic.message.contains("only accepts `String` values")
+                && diagnostic.message.contains("`i32`")),
+        "expected numeric println diagnostic, got {diagnostics:?}"
+    );
+    assert!(
+        diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.severity == Severity::Error
+                && diagnostic.message.contains("only accepts `String` values")
+                && diagnostic.message.contains("`bool`")),
+        "expected bool println diagnostic, got {diagnostics:?}"
+    );
+}
+
+#[test]
+fn mutable_local_is_still_rejected_by_backend() {
+    let result = check_source(
+        r#"fn main() {
+    let mut message = "Gust"
 }"#,
     );
 
@@ -129,33 +216,52 @@ fn unsupported_string_local_forms_are_errors() {
             .any(|diagnostic| diagnostic.severity == Severity::Error
                 && diagnostic
                     .message
-                    .contains("only string literal let values are supported")),
-        "expected non-string local diagnostic, got {diagnostics:?}"
-    );
-    assert!(
-        diagnostics
-            .iter()
-            .any(|diagnostic| diagnostic.severity == Severity::Error
-                && diagnostic.message.contains("unknown string local `count`")),
-        "expected unknown count diagnostic, got {diagnostics:?}"
-    );
-    assert!(
-        diagnostics
-            .iter()
-            .any(|diagnostic| diagnostic.severity == Severity::Error
-                && diagnostic
-                    .message
                     .contains("`let mut` bindings are not supported")),
         "expected mutable local diagnostic, got {diagnostics:?}"
     );
+}
+
+#[test]
+fn typed_non_basic_local_is_rejected_by_backend() {
+    let result = check_source(
+        r#"
+struct Person {
+    name: String
+}
+
+fn main() {
+    let person: Person = Person {
+        name: "Gust",
+    }
+}
+"#,
+    );
+
+    assert!(
+        !result.has_errors(),
+        "expected no frontend errors, got {:?}",
+        result.diagnostics
+    );
+
+    let diagnostics = lower_program(&result.program).expect_err("source should not lower");
+
     assert!(
         diagnostics
             .iter()
             .any(|diagnostic| diagnostic.severity == Severity::Error
                 && diagnostic
                     .message
-                    .contains("typed let bindings are not supported")),
-        "expected typed local diagnostic, got {diagnostics:?}"
+                    .contains("only basic local types are supported")),
+        "expected non-basic local diagnostic, got {diagnostics:?}"
+    );
+    assert!(
+        diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.severity == Severity::Error
+                && diagnostic
+                    .message
+                    .contains("structs are not supported in executable builds")),
+        "expected unsupported-struct diagnostic, got {diagnostics:?}"
     );
 }
 
@@ -180,7 +286,7 @@ fn unknown_println_local_is_frontend_error() {
 
 #[test]
 fn basics_reaches_build_mode_rejection() {
-    let source = include_str!("../../examples/basics.gust");
+    let source = include_str!("../../examples/milestone.gust");
     let result = check_source(source);
 
     assert!(

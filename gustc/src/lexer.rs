@@ -37,6 +37,7 @@ pub enum TokenKind {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Keyword {
     Enum,
+    False,
     Fn,
     For,
     From,
@@ -47,6 +48,7 @@ pub enum Keyword {
     Mut,
     Return,
     Struct,
+    True,
 }
 
 pub struct Lexer<'source> {
@@ -209,6 +211,7 @@ impl<'source> Lexer<'source> {
         let lexeme = self.source[start..self.position].to_string();
         let kind = match lexeme.as_str() {
             "enum" => TokenKind::Keyword(Keyword::Enum),
+            "false" => TokenKind::Keyword(Keyword::False),
             "fn" => TokenKind::Keyword(Keyword::Fn),
             "for" => TokenKind::Keyword(Keyword::For),
             "from" => TokenKind::Keyword(Keyword::From),
@@ -219,6 +222,7 @@ impl<'source> Lexer<'source> {
             "mut" => TokenKind::Keyword(Keyword::Mut),
             "return" => TokenKind::Keyword(Keyword::Return),
             "struct" => TokenKind::Keyword(Keyword::Struct),
+            "true" => TokenKind::Keyword(Keyword::True),
             _ => TokenKind::Identifier(lexeme.clone()),
         };
 

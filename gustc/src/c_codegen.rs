@@ -1,16 +1,68 @@
+use crate::ast::BasicType;
 use crate::lower::{LoweredProgram, LoweredStatement, LoweredValue};
 
 pub fn emit_c(program: &LoweredProgram) -> String {
-    let mut source = String::from("#include <stdio.h>\n\nint main(void) {\n");
+    let uses_bool = program.statements.iter().any(|statement| {
+        matches!(
+            statement,
+            LoweredStatement::Local {
+                type_: BasicType::Bool,
+                ..
+            }
+        )
+    });
+    let uses_usize = program.statements.iter().any(|statement| {
+        matches!(
+            statement,
+            LoweredStatement::Local {
+                type_: BasicType::Usize,
+                ..
+            }
+        )
+    });
+    let uses_fixed_width_int = program.statements.iter().any(|statement| {
+        matches!(
+            statement,
+            LoweredStatement::Local {
+                type_: BasicType::U8
+                    | BasicType::U16
+                    | BasicType::U32
+                    | BasicType::U64
+                    | BasicType::I8
+                    | BasicType::I16
+                    | BasicType::I32
+                    | BasicType::I64,
+                ..
+            }
+        )
+    });
+
+    let mut source = String::new();
+
+    if uses_bool {
+        source.push_str("#include <stdbool.h>\n");
+    }
+
+    if uses_usize {
+        source.push_str("#include <stddef.h>\n");
+    }
+
+    if uses_fixed_width_int {
+        source.push_str("#include <stdint.h>\n");
+    }
+
+    source.push_str("#include <stdio.h>\n\nint main(void) {\n");
 
     for statement in &program.statements {
         match statement {
-            LoweredStatement::StringLocal { name, value } => {
-                source.push_str("    const char* ");
-                source.push_str(name);
-                source.push_str(" = \"");
-                push_c_string_value(&mut source, value);
-                source.push_str("\";\n");
+            LoweredStatement::Local { name, type_, value } => {
+                source.push_str("    ");
+                source.push_str(c_type(*type_));
+                source.push(' ');
+                push_c_local_name(&mut source, name);
+                source.push_str(" = ");
+                push_c_value(&mut source, value);
+                source.push_str(";\n");
             }
             LoweredStatement::Println(value) => match value {
                 LoweredValue::StringLiteral(value) => {
@@ -18,10 +70,13 @@ pub fn emit_c(program: &LoweredProgram) -> String {
                     push_c_string_value(&mut source, value);
                     source.push_str("\");\n");
                 }
-                LoweredValue::StringLocal(name) => {
+                LoweredValue::Local(name) => {
                     source.push_str("    puts(");
-                    source.push_str(name);
+                    push_c_local_name(&mut source, name);
                     source.push_str(");\n");
+                }
+                LoweredValue::BoolLiteral(_) | LoweredValue::NumberLiteral(_) => {
+                    unreachable!("println only lowers String values")
                 }
             },
         }
@@ -29,6 +84,46 @@ pub fn emit_c(program: &LoweredProgram) -> String {
 
     source.push_str("    return 0;\n}\n");
     source
+}
+
+fn push_c_local_name(source: &mut String, name: &str) {
+    source.push_str("gust_");
+    source.push_str(name);
+}
+
+fn c_type(type_: BasicType) -> &'static str {
+    match type_ {
+        BasicType::String => "const char*",
+        BasicType::Bool => "bool",
+        BasicType::U8 => "uint8_t",
+        BasicType::U16 => "uint16_t",
+        BasicType::U32 => "uint32_t",
+        BasicType::U64 => "uint64_t",
+        BasicType::Usize => "size_t",
+        BasicType::I8 => "int8_t",
+        BasicType::I16 => "int16_t",
+        BasicType::I32 => "int32_t",
+        BasicType::I64 => "int64_t",
+    }
+}
+
+fn push_c_value(source: &mut String, value: &LoweredValue) {
+    match value {
+        LoweredValue::StringLiteral(value) => {
+            source.push('"');
+            push_c_string_value(source, value);
+            source.push('"');
+        }
+        LoweredValue::BoolLiteral(value) => {
+            if *value {
+                source.push_str("true");
+            } else {
+                source.push_str("false");
+            }
+        }
+        LoweredValue::NumberLiteral(value) => source.push_str(value),
+        LoweredValue::Local(name) => push_c_local_name(source, name),
+    }
 }
 
 fn push_c_string_value(source: &mut String, value: &str) {

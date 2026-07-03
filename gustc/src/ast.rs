@@ -115,7 +115,7 @@ pub enum StmtKind {
         name: String,
         mutable: bool,
         type_annotation: Option<TypeRef>,
-        value: Expr,
+        value: Option<Expr>,
     },
     Return {
         value: Option<Expr>,
@@ -139,6 +139,7 @@ pub enum ExprKind {
     Identifier(String),
     Number(String),
     String(String),
+    Bool(bool),
     Array(Vec<Expr>),
     Call {
         callee: Box<Expr>,
@@ -208,4 +209,69 @@ pub struct TypeRef {
     pub name: String,
     pub args: Vec<TypeRef>,
     pub span: Span,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum BasicType {
+    String,
+    Bool,
+    U8,
+    U16,
+    U32,
+    U64,
+    Usize,
+    I8,
+    I16,
+    I32,
+    I64,
+}
+
+impl BasicType {
+    pub fn from_name(name: &str) -> Option<Self> {
+        match name {
+            "String" => Some(Self::String),
+            "bool" => Some(Self::Bool),
+            "u8" => Some(Self::U8),
+            "u16" => Some(Self::U16),
+            "u32" => Some(Self::U32),
+            "u64" => Some(Self::U64),
+            "usize" => Some(Self::Usize),
+            "i8" => Some(Self::I8),
+            "i16" => Some(Self::I16),
+            "i32" => Some(Self::I32),
+            "i64" => Some(Self::I64),
+            _ => None,
+        }
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::String => "String",
+            Self::Bool => "bool",
+            Self::U8 => "u8",
+            Self::U16 => "u16",
+            Self::U32 => "u32",
+            Self::U64 => "u64",
+            Self::Usize => "usize",
+            Self::I8 => "i8",
+            Self::I16 => "i16",
+            Self::I32 => "i32",
+            Self::I64 => "i64",
+        }
+    }
+
+    pub fn is_numeric(self) -> bool {
+        matches!(
+            self,
+            Self::U8
+                | Self::U16
+                | Self::U32
+                | Self::U64
+                | Self::Usize
+                | Self::I8
+                | Self::I16
+                | Self::I32
+                | Self::I64
+        )
+    }
 }
