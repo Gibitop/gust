@@ -1,8 +1,8 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::ast::{
-    Block, Expr, ExprKind, FunctionBody, FunctionDecl, Item, Pattern, Program, Stmt, StmtKind,
-    StructMember, TypeRef,
+    BasicType, Block, Expr, ExprKind, FunctionBody, FunctionDecl, Item, Pattern, Program, Stmt,
+    StmtKind, StructMember, TypeRef,
 };
 use crate::diagnostic::Diagnostic;
 use crate::span::Span;
@@ -25,17 +25,19 @@ struct Analyzer {
 #[derive(Debug, Clone, Copy)]
 struct Binding {
     mutable: bool,
+    type_: Type,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Type {
+    Basic(BasicType),
+    Unknown,
 }
 
 impl Analyzer {
     fn new() -> Self {
         let values = HashSet::from(["io".to_string()]);
-        let types = HashSet::from([
-            "String".to_string(),
-            "u32".to_string(),
-            "void".to_string(),
-            "ArrayList".to_string(),
-        ]);
+        let types = HashSet::from(["void".to_string(), "ArrayList".to_string()]);
 
         Self {
             diagnostics: Vec::new(),
@@ -140,7 +142,9 @@ impl Analyzer {
 
                     for member in &item.members {
                         match member {
-                            StructMember::Field(field) => self.validate_type(&field.type_ref),
+                            StructMember::Field(field) => {
+                                self.validate_type(&field.type_ref);
+                            }
                             StructMember::Method(method) => {
                                 self.unsupported(
                                     method.span,
@@ -160,7 +164,7 @@ impl Analyzer {
         self.push_scope();
 
         if has_self {
-            self.define("self", false);
+            self.define("self", false, Type::Unknown);
         }
 
         for param in &function.params {
@@ -171,11 +175,12 @@ impl Analyzer {
                 );
             }
 
-            if let Some(type_ref) = &param.type_ref {
-                self.validate_type(type_ref);
-            }
+            let type_ = param
+                .type_ref
+                .as_ref()
+                .map_or(Type::Unknown, |type_ref| self.validate_type(type_ref));
 
-            self.define(&param.name, param.mutable);
+            self.define(&param.name, param.mutable, type_);
         }
 
         if let Some(type_ref) = &function.return_type {
@@ -184,7 +189,9 @@ impl Analyzer {
 
         match &function.body {
             FunctionBody::Block(block) => self.validate_block(block),
-            FunctionBody::Expr(expr) => self.validate_expr(expr),
+            FunctionBody::Expr(expr) => {
+                self.validate_expr(expr);
+            }
         }
 
         self.pop_scope();
@@ -215,12 +222,46 @@ impl Analyzer {
                     );
                 }
 
-                if let Some(type_ref) = type_annotation {
-                    self.validate_type(type_ref);
+                let annotated_type = type_annotation
+                    .as_ref()
+                    .map(|type_ref| self.validate_type(type_ref));
+                let value_type = if let Some(value) = value {
+                    self.validate_expr_with_context(value, annotated_type)
+                } else {
+                    if type_annotation.is_none() {
+                        self.diagnostics.push(Diagnostic::error(
+                            statement.span,
+                            "let declarations without values must include a type annotation",
+                        ));
+                    } else if type_annotation
+                        .as_ref()
+                        .is_some_and(|type_ref| self.requires_unsupported_default(type_ref))
+                    {
+                        self.diagnostics.push(Diagnostic::error(
+                            statement.span,
+                            "default values are only supported for basic types",
+                        ));
+                    }
+
+                    Type::Unknown
+                };
+
+                if let (Some(Type::Basic(annotated_type)), Type::Basic(value_type)) =
+                    (annotated_type, value_type)
+                {
+                    if annotated_type != value_type {
+                        self.diagnostics.push(Diagnostic::error(
+                            statement.span,
+                            format!(
+                                "expected value of type `{}`, got `{}`",
+                                annotated_type.name(),
+                                value_type.name()
+                            ),
+                        ));
+                    }
                 }
 
-                self.validate_expr(value);
-                self.define(name, *mutable);
+                self.define(name, *mutable, annotated_type.unwrap_or(value_type));
             }
             StmtKind::Return { value } => {
                 if let Some(value) = value {
@@ -238,7 +279,7 @@ impl Analyzer {
                 );
                 self.validate_expr(iterable);
                 self.push_scope();
-                self.define(name, false);
+                self.define(name, false, Type::Unknown);
 
                 for statement in &body.statements {
                     self.validate_statement(statement);
@@ -246,21 +287,47 @@ impl Analyzer {
 
                 self.pop_scope();
             }
-            StmtKind::Expr(expr) => self.validate_expr(expr),
+            StmtKind::Expr(expr) => {
+                self.validate_expr(expr);
+            }
         }
     }
 
-    fn validate_expr(&mut self, expr: &Expr) {
+    fn validate_expr(&mut self, expr: &Expr) -> Type {
+        self.validate_expr_with_context(expr, None)
+    }
+
+    fn validate_expr_with_context(&mut self, expr: &Expr, expected_type: Option<Type>) -> Type {
         match &expr.kind {
             ExprKind::Identifier(name) => {
-                if !self.is_declared(name) {
+                if let Some(binding) = self.lookup(name) {
+                    binding.type_
+                } else if self.values.contains(name) {
+                    Type::Unknown
+                } else {
                     self.diagnostics.push(Diagnostic::error(
                         expr.span,
                         format!("unknown name `{name}`"),
                     ));
+                    Type::Unknown
                 }
             }
-            ExprKind::Number(_) | ExprKind::String(_) | ExprKind::Missing => {}
+            ExprKind::Number(_) => {
+                if let Some(Type::Basic(type_)) = expected_type {
+                    if type_.is_numeric() {
+                        Type::Basic(type_)
+                    } else {
+                        Type::Basic(BasicType::I32)
+                    }
+                } else if matches!(expected_type, Some(Type::Unknown)) {
+                    Type::Unknown
+                } else {
+                    Type::Basic(BasicType::I32)
+                }
+            }
+            ExprKind::String(_) => Type::Basic(BasicType::String),
+            ExprKind::Bool(_) => Type::Basic(BasicType::Bool),
+            ExprKind::Missing => Type::Unknown,
             ExprKind::Array(items) => {
                 self.unsupported(
                     expr.span,
@@ -270,6 +337,8 @@ impl Analyzer {
                 for item in items {
                     self.validate_expr(item);
                 }
+
+                Type::Unknown
             }
             ExprKind::Call { callee, args } => {
                 self.validate_expr(callee);
@@ -277,15 +346,20 @@ impl Analyzer {
                 for arg in args {
                     self.validate_expr(arg);
                 }
+
+                Type::Unknown
             }
-            ExprKind::Member { object, .. } => self.validate_expr(object),
+            ExprKind::Member { object, .. } => {
+                self.validate_expr(object);
+                Type::Unknown
+            }
             ExprKind::StructInit { name, fields } => {
                 self.unsupported(
                     expr.span,
                     "struct literals are parsed but construction is not implemented yet",
                 );
 
-                if !self.types.contains(name) {
+                if BasicType::from_name(name).is_none() && !self.types.contains(name) {
                     self.diagnostics.push(Diagnostic::error(
                         expr.span,
                         format!("unknown type `{name}`"),
@@ -295,10 +369,13 @@ impl Analyzer {
                 for field in fields {
                     self.validate_expr(&field.value);
                 }
+
+                Type::Unknown
             }
             ExprKind::Binary { left, right, .. } => {
                 self.validate_expr(left);
                 self.validate_expr(right);
+                Type::Unknown
             }
             ExprKind::Match { value, branches } => {
                 self.unsupported(
@@ -313,6 +390,8 @@ impl Analyzer {
                     self.validate_expr(&branch.value);
                     self.pop_scope();
                 }
+
+                Type::Unknown
             }
             ExprKind::Lambda(function) => {
                 self.unsupported(
@@ -320,6 +399,7 @@ impl Analyzer {
                     "lambda functions are parsed but closure lowering is not implemented yet",
                 );
                 self.validate_function(function, false);
+                Type::Unknown
             }
             ExprKind::PostfixIncrement(target) => {
                 self.unsupported(
@@ -338,6 +418,8 @@ impl Analyzer {
                         }
                     }
                 }
+
+                Type::Unknown
             }
         }
     }
@@ -357,14 +439,16 @@ impl Analyzer {
                 }
 
                 if let Some(binding) = binding {
-                    self.define(binding, false);
+                    self.define(binding, false, Type::Unknown);
                 }
             }
         }
     }
 
-    fn validate_type(&mut self, type_ref: &TypeRef) {
-        if !self.types.contains(&type_ref.name) {
+    fn validate_type(&mut self, type_ref: &TypeRef) -> Type {
+        let basic_type = BasicType::from_name(&type_ref.name);
+
+        if basic_type.is_none() && !self.types.contains(&type_ref.name) {
             self.diagnostics.push(Diagnostic::error(
                 type_ref.span,
                 format!("unknown type `{}`", type_ref.name),
@@ -381,6 +465,22 @@ impl Analyzer {
         for arg in &type_ref.args {
             self.validate_type(arg);
         }
+
+        if !type_ref.args.is_empty() {
+            Type::Unknown
+        } else if let Some(basic_type) = basic_type {
+            Type::Basic(basic_type)
+        } else {
+            Type::Unknown
+        }
+    }
+
+    fn requires_unsupported_default(&self, type_ref: &TypeRef) -> bool {
+        if BasicType::from_name(&type_ref.name).is_some() {
+            return !type_ref.args.is_empty();
+        }
+
+        self.types.contains(&type_ref.name)
     }
 
     fn unsupported(&mut self, span: Span, message: &'static str) {
@@ -389,14 +489,10 @@ impl Analyzer {
         }
     }
 
-    fn define(&mut self, name: &str, mutable: bool) {
+    fn define(&mut self, name: &str, mutable: bool, type_: Type) {
         if let Some(scope) = self.scopes.last_mut() {
-            scope.insert(name.to_string(), Binding { mutable });
+            scope.insert(name.to_string(), Binding { mutable, type_ });
         }
-    }
-
-    fn is_declared(&self, name: &str) -> bool {
-        self.lookup(name).is_some() || self.values.contains(name)
     }
 
     fn lookup(&self, name: &str) -> Option<Binding> {

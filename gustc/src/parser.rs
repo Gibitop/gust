@@ -275,9 +275,20 @@ impl Parser {
             None
         };
 
-        self.expect_kind(&TokenKind::Equal, "`=`");
-        let value = self.parse_expression();
-        let span = start.join(value.span);
+        let value = if self.match_kind(&TokenKind::Equal) {
+            Some(self.parse_expression())
+        } else {
+            if type_annotation.is_none() {
+                self.error_here("expected `=` or type annotation in let statement");
+            }
+
+            None
+        };
+        let span = start.join(
+            value
+                .as_ref()
+                .map_or_else(|| self.previous_span(), |value| value.span),
+        );
 
         Stmt {
             kind: StmtKind::Let {
@@ -453,6 +464,14 @@ impl Parser {
             },
             TokenKind::StringLiteral(value) => Expr {
                 kind: ExprKind::String(value),
+                span: token.span,
+            },
+            TokenKind::Keyword(Keyword::False) => Expr {
+                kind: ExprKind::Bool(false),
+                span: token.span,
+            },
+            TokenKind::Keyword(Keyword::True) => Expr {
+                kind: ExprKind::Bool(true),
                 span: token.span,
             },
             TokenKind::LeftBracket => self.finish_array(token.span),

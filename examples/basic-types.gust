@@ -1,0 +1,32 @@
+// Basic primitive types supported by the executable backend.
+
+fn main() {
+    // Strings default to the empty string.
+    let emptyMessage: String
+    let greeting = "Hello from basic types!"
+
+    io.println(emptyMessage)
+    io.println(greeting)
+
+    // Booleans default to false.
+    let defaultFlag: bool
+    let enabled = true
+    let disabled: bool = false
+
+    // Numeric locals default to 0 when they have an explicit type.
+    let defaultUnsigned: u32
+    let defaultSigned: i32
+
+    let byte: u8 = 8
+    let short: u16 = 16
+    let unsigned: u32 = 32
+    let wideUnsigned: u64 = 64
+    let pointerSized: usize = 128
+
+    let tinySigned: i8 = 8
+    let smallSigned: i16 = 16
+    let signed = 32 // Unannotated numeric literals default to i32.
+    let wideSigned: i64 = 64
+
+    // Numeric and bool locals are valid, but io.println currently accepts only String values.
+}
