@@ -2,7 +2,9 @@ use gustc::ast::BasicType;
 use gustc::c_codegen::emit_c;
 use gustc::check_source;
 use gustc::diagnostic::Severity;
-use gustc::lower::{LoweredExpr, LoweredExprKind, LoweredStatement, lower_program};
+use gustc::lower::{
+    LoweredExpr, LoweredExprKind, LoweredFunction, LoweredParam, LoweredStatement, lower_program,
+};
 
 #[test]
 fn hello_world_lowers_successfully() {
@@ -166,6 +168,76 @@ fn direct_string_concat_println_lowers_successfully() {
 }
 
 #[test]
+fn string_returning_helper_lowers_successfully() {
+    let result = check_source(
+        r#"fn greet(name: String): String {
+    return "Hello, " + name
+}
+
+fn main() {
+    let message = greet("Gust")
+    io.println(message)
+}"#,
+    );
+
+    assert!(
+        !result.has_errors(),
+        "expected no frontend errors, got {:?}",
+        result.diagnostics
+    );
+
+    let lowered = lower_program(&result.program).expect("function call should lower");
+
+    assert_eq!(
+        lowered.functions,
+        vec![LoweredFunction {
+            name: "greet".to_string(),
+            params: vec![LoweredParam {
+                name: "name".to_string(),
+                type_: BasicType::String,
+            }],
+            return_type: BasicType::String,
+            statements: vec![],
+            return_value: LoweredExpr {
+                type_: BasicType::String,
+                kind: LoweredExprKind::StringConcat(
+                    Box::new(LoweredExpr {
+                        type_: BasicType::String,
+                        kind: LoweredExprKind::StringLiteral("Hello, ".to_string()),
+                    }),
+                    Box::new(LoweredExpr {
+                        type_: BasicType::String,
+                        kind: LoweredExprKind::Local("name".to_string()),
+                    }),
+                ),
+            },
+        }]
+    );
+    assert_eq!(
+        lowered.statements,
+        vec![
+            LoweredStatement::Local {
+                name: "message".to_string(),
+                value: LoweredExpr {
+                    type_: BasicType::String,
+                    kind: LoweredExprKind::Call {
+                        name: "greet".to_string(),
+                        args: vec![LoweredExpr {
+                            type_: BasicType::String,
+                            kind: LoweredExprKind::StringLiteral("Gust".to_string()),
+                        }],
+                    },
+                },
+            },
+            LoweredStatement::Println(LoweredExpr {
+                type_: BasicType::String,
+                kind: LoweredExprKind::Local("message".to_string()),
+            }),
+        ]
+    );
+}
+
+#[test]
 fn hello_world_c_output_is_stable() {
     let result = check_source(
         r#"fn main() {
@@ -176,7 +248,7 @@ fn hello_world_c_output_is_stable() {
 
     assert_eq!(
         emit_c(&lowered),
-        "#include <stdio.h>\n\nstatic void gust_io_println(const char* value) {\n    puts(value);\n}\n\nint main(void) {\n    gust_io_println(\"Hello, world!\");\n    return 0;\n}\n"
+        "#include <stdio.h>\n\nstatic void gust_rt_io_println(const char* value) {\n    puts(value);\n}\n\nint main(void) {\n    gust_rt_io_println(\"Hello, world!\");\n    return 0;\n}\n"
     );
 }
 
@@ -192,7 +264,7 @@ fn string_local_c_output_is_stable() {
 
     assert_eq!(
         emit_c(&lowered),
-        "#include <stdio.h>\n\nstatic void gust_io_println(const char* value) {\n    puts(value);\n}\n\nint main(void) {\n    const char* gust_message = \"Hello, string local!\";\n    gust_io_println(gust_message);\n    return 0;\n}\n"
+        "#include <stdio.h>\n\nstatic void gust_rt_io_println(const char* value) {\n    puts(value);\n}\n\nint main(void) {\n    const char* gust_message = \"Hello, string local!\";\n    gust_rt_io_println(gust_message);\n    return 0;\n}\n"
     );
 }
 
@@ -211,11 +283,69 @@ fn string_concat_c_output_is_stable() {
 
     assert_eq!(
         source,
-        "#include <stdio.h>\n#include <stdlib.h>\n#include <string.h>\n\nstatic void* gust_alloc(size_t size) {\n    return malloc(size);\n}\n\nstatic char* gust_string_concat(const char* left, const char* right) {\n    size_t left_len = strlen(left);\n    size_t right_len = strlen(right);\n    char* result = gust_alloc(left_len + right_len + 1);\n    memcpy(result, left, left_len);\n    memcpy(result + left_len, right, right_len + 1);\n    return result;\n}\n\nstatic void gust_io_println(const char* value) {\n    puts(value);\n}\n\nint main(void) {\n    const char* gust_name = \"Gust\";\n    const char* gust_message = gust_string_concat(gust_string_concat(\"Hello, \", gust_name), \"!\");\n    gust_io_println(gust_string_concat(\"Inline \", \"concat\"));\n    gust_io_println(gust_message);\n    return 0;\n}\n"
+        "#include <stdio.h>\n#include <stdlib.h>\n#include <string.h>\n\nstatic void* gust_rt_alloc(size_t size) {\n    return malloc(size);\n}\n\nstatic char* gust_rt_string_concat(const char* left, const char* right) {\n    size_t left_len = strlen(left);\n    size_t right_len = strlen(right);\n    char* result = gust_rt_alloc(left_len + right_len + 1);\n    memcpy(result, left, left_len);\n    memcpy(result + left_len, right, right_len + 1);\n    return result;\n}\n\nstatic void gust_rt_io_println(const char* value) {\n    puts(value);\n}\n\nint main(void) {\n    const char* gust_name = \"Gust\";\n    const char* gust_message = gust_rt_string_concat(gust_rt_string_concat(\"Hello, \", gust_name), \"!\");\n    gust_rt_io_println(gust_rt_string_concat(\"Inline \", \"concat\"));\n    gust_rt_io_println(gust_message);\n    return 0;\n}\n"
     );
     assert_eq!(source.matches("malloc(").count(), 1);
     assert!(source.contains("return malloc(size);"));
-    assert!(source.contains("char* result = gust_alloc(left_len + right_len + 1);"));
+    assert!(source.contains("char* result = gust_rt_alloc(left_len + right_len + 1);"));
+}
+
+#[test]
+fn numeric_helper_call_c_output_is_stable() {
+    let result = check_source(
+        r#"fn answer(): u64 {
+    return 42
+}
+
+fn main() {
+    let count = answer()
+}"#,
+    );
+    let lowered = lower_program(&result.program).expect("numeric helper should lower");
+
+    assert_eq!(
+        emit_c(&lowered),
+        "#include <stdint.h>\n\n// Gust function: answer\nstatic uint64_t gust_fn_848019df_answer() {\n    return 42;\n}\n\nint main(void) {\n    uint64_t gust_count = gust_fn_848019df_answer();\n    return 0;\n}\n"
+    );
+}
+
+#[test]
+fn string_helper_call_c_output_is_stable() {
+    let result = check_source(
+        r#"fn greet(name: String): String {
+    return "Hello, " + name
+}
+
+fn main() {
+    io.println(greet("Gust") + "!")
+}"#,
+    );
+    let lowered = lower_program(&result.program).expect("string helper should lower");
+
+    assert_eq!(
+        emit_c(&lowered),
+        "#include <stdio.h>\n#include <stdlib.h>\n#include <string.h>\n\nstatic void* gust_rt_alloc(size_t size) {\n    return malloc(size);\n}\n\nstatic char* gust_rt_string_concat(const char* left, const char* right) {\n    size_t left_len = strlen(left);\n    size_t right_len = strlen(right);\n    char* result = gust_rt_alloc(left_len + right_len + 1);\n    memcpy(result, left, left_len);\n    memcpy(result + left_len, right, right_len + 1);\n    return result;\n}\n\nstatic void gust_rt_io_println(const char* value) {\n    puts(value);\n}\n\n// Gust function: greet\nstatic const char* gust_fn_fb1de34a_greet(const char* gust_name) {\n    return gust_rt_string_concat(\"Hello, \", gust_name);\n}\n\nint main(void) {\n    gust_rt_io_println(gust_rt_string_concat(gust_fn_fb1de34a_greet(\"Gust\"), \"!\"));\n    return 0;\n}\n"
+    );
+}
+
+#[test]
+fn user_function_named_alloc_does_not_collide_with_runtime_alloc() {
+    let result = check_source(
+        r#"fn alloc(name: String): String {
+    return "Hello, " + name
+}
+
+fn main() {
+    io.println(alloc("Gust"))
+}"#,
+    );
+    let lowered = lower_program(&result.program).expect("alloc helper should lower");
+    let source = emit_c(&lowered);
+
+    assert!(source.contains("static void* gust_rt_alloc(size_t size)"));
+    assert!(source.contains("// Gust function: alloc"));
+    assert!(source.contains("static const char* gust_fn_bab1bb16_alloc("));
+    assert!(source.contains("gust_rt_io_println(gust_fn_bab1bb16_alloc(\"Gust\"));"));
 }
 
 #[test]
@@ -282,7 +412,7 @@ fn c_output_escapes_string_values() {
 
     assert_eq!(
         emit_c(&lowered),
-        "#include <stdio.h>\n\nstatic void gust_io_println(const char* value) {\n    puts(value);\n}\n\nint main(void) {\n    gust_io_println(\"line\\n\\\"quote\\\"\\\\slash\");\n    return 0;\n}\n"
+        "#include <stdio.h>\n\nstatic void gust_rt_io_println(const char* value) {\n    puts(value);\n}\n\nint main(void) {\n    gust_rt_io_println(\"line\\n\\\"quote\\\"\\\\slash\");\n    return 0;\n}\n"
     );
 }
 

@@ -18,8 +18,16 @@ struct Analyzer {
     diagnostics: Vec<Diagnostic>,
     values: HashSet<String>,
     types: HashSet<String>,
+    functions: HashMap<String, FunctionSignature>,
     unsupported_features: HashSet<&'static str>,
     scopes: Vec<HashMap<String, Binding>>,
+    return_types: Vec<Type>,
+}
+
+#[derive(Debug, Clone)]
+struct FunctionSignature {
+    params: Vec<Type>,
+    return_type: Type,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -43,8 +51,10 @@ impl Analyzer {
             diagnostics: Vec::new(),
             values,
             types,
+            functions: HashMap::new(),
             unsupported_features: HashSet::new(),
             scopes: Vec::new(),
+            return_types: Vec::new(),
         }
     }
 
@@ -81,6 +91,17 @@ impl Analyzer {
                         }
 
                         self.values.insert(name.clone());
+                        self.functions.insert(
+                            name.clone(),
+                            FunctionSignature {
+                                params: item
+                                    .params
+                                    .iter()
+                                    .map(|param| basic_type_ref(param.type_ref.as_ref()))
+                                    .collect(),
+                                return_type: basic_type_ref(item.return_type.as_ref()),
+                            },
+                        );
                         self.insert_top_level(&mut names, name, item.span);
                     }
                 }
@@ -183,17 +204,22 @@ impl Analyzer {
             self.define(&param.name, param.mutable, type_);
         }
 
-        if let Some(type_ref) = &function.return_type {
-            self.validate_type(type_ref);
-        }
+        let return_type = function
+            .return_type
+            .as_ref()
+            .map_or(Type::Unknown, |type_ref| self.validate_type(type_ref));
+        self.return_types.push(return_type);
 
         match &function.body {
             FunctionBody::Block(block) => self.validate_block(block),
             FunctionBody::Expr(expr) => {
-                self.validate_expr(expr);
+                let value_type = self.validate_expr_with_context(expr, Some(return_type));
+                self.report_type_mismatch(expr.span, return_type, value_type);
             }
         }
 
+        self.validate_missing_return(function, return_type);
+        self.return_types.pop();
         self.pop_scope();
     }
 
@@ -264,8 +290,16 @@ impl Analyzer {
                 self.define(name, *mutable, annotated_type.unwrap_or(value_type));
             }
             StmtKind::Return { value } => {
+                let expected_type = self.current_return_type();
+
                 if let Some(value) = value {
-                    self.validate_expr(value);
+                    let value_type = self.validate_expr_with_context(value, Some(expected_type));
+                    self.report_type_mismatch(value.span, expected_type, value_type);
+                } else if matches!(expected_type, Type::Basic(_)) {
+                    self.diagnostics.push(Diagnostic::error(
+                        statement.span,
+                        "return value required for this function",
+                    ));
                 }
             }
             StmtKind::For {
@@ -341,6 +375,10 @@ impl Analyzer {
                 Type::Unknown
             }
             ExprKind::Call { callee, args } => {
+                if let ExprKind::Identifier(name) = &callee.kind {
+                    return self.validate_call(expr, name, args);
+                }
+
                 self.validate_expr(callee);
 
                 for arg in args {
@@ -443,6 +481,97 @@ impl Analyzer {
         }
     }
 
+    fn validate_call(&mut self, expr: &Expr, name: &str, args: &[Expr]) -> Type {
+        let Some(signature) = self.functions.get(name).cloned() else {
+            if self.values.contains(name) {
+                for arg in args {
+                    self.validate_expr(arg);
+                }
+
+                return Type::Unknown;
+            }
+
+            if self.lookup(name).is_none() {
+                self.diagnostics.push(Diagnostic::error(
+                    expr.span,
+                    format!("unknown name `{name}`"),
+                ));
+            } else {
+                self.diagnostics.push(Diagnostic::error(
+                    expr.span,
+                    format!("`{name}` is not callable"),
+                ));
+            }
+
+            for arg in args {
+                self.validate_expr(arg);
+            }
+
+            return Type::Unknown;
+        };
+
+        if args.len() != signature.params.len() {
+            self.diagnostics.push(Diagnostic::error(
+                expr.span,
+                format!(
+                    "function `{name}` expects {} arguments, got {}",
+                    signature.params.len(),
+                    args.len()
+                ),
+            ));
+
+            for arg in args {
+                self.validate_expr(arg);
+            }
+
+            return signature.return_type;
+        }
+
+        for (arg, expected_type) in args.iter().zip(signature.params) {
+            let arg_type = self.validate_expr_with_context(arg, Some(expected_type));
+            self.report_type_mismatch(arg.span, expected_type, arg_type);
+        }
+
+        signature.return_type
+    }
+
+    fn validate_missing_return(&mut self, function: &FunctionDecl, return_type: Type) {
+        if !matches!(return_type, Type::Basic(_)) {
+            return;
+        }
+
+        let FunctionBody::Block(block) = &function.body else {
+            return;
+        };
+
+        if matches!(
+            block.statements.last().map(|statement| &statement.kind),
+            Some(StmtKind::Return { value: Some(_) })
+        ) {
+            return;
+        }
+
+        self.diagnostics.push(Diagnostic::error(
+            function.span,
+            "missing return value for function with explicit return type",
+        ));
+    }
+
+    fn report_type_mismatch(&mut self, span: Span, expected_type: Type, value_type: Type) {
+        if let (Type::Basic(expected_type), Type::Basic(value_type)) = (expected_type, value_type) {
+            if expected_type != value_type {
+                self.diagnostics.push(Diagnostic::error(
+                    span,
+                    format!(
+                        "expected value of type `{}`, got `{}`",
+                        expected_type.name(),
+                        value_type.name()
+                    ),
+                ));
+            }
+        }
+    }
+
     fn validate_pattern(&mut self, pattern: &Pattern) {
         match pattern {
             Pattern::Identifier {
@@ -531,6 +660,22 @@ impl Analyzer {
     fn pop_scope(&mut self) {
         self.scopes.pop();
     }
+
+    fn current_return_type(&self) -> Type {
+        self.return_types.last().copied().unwrap_or(Type::Unknown)
+    }
+}
+
+fn basic_type_ref(type_ref: Option<&TypeRef>) -> Type {
+    type_ref
+        .and_then(|type_ref| {
+            if type_ref.args.is_empty() {
+                BasicType::from_name(&type_ref.name)
+            } else {
+                None
+            }
+        })
+        .map_or(Type::Unknown, Type::Basic)
 }
 
 fn root_identifier(expr: &Expr) -> Option<&str> {

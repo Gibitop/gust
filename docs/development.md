@@ -17,3 +17,5 @@ The current C backend may temporarily leak heap-allocated string concat results.
 ## Runtime development
 
 Generated C should route operations that will later be runtime-managed through Gust-shaped helpers instead of calling C primitives directly.
+
+Generated C reserves `gust_rt_*` for runtime helpers. User-defined functions should use deterministic internal names shaped like `gust_fn_<hash>_<source_name>` with a nearby comment containing the original Gust function name.
