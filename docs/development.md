@@ -27,3 +27,10 @@ User-defined functions should use deterministic internal names shaped like `gust
 User-defined structs should use deterministic internal names shaped like `gust_struct_<hash>_<source_name>` with a nearby comment containing the original Gust struct name.
 
 Generated local variables and struct fields should use `gust_<source_name>`. Keep source-name suffixes sanitized so generated identifiers stay valid C identifiers.
+
+
+## Equality
+
+`==` and `!=` compare numeric and boolean values directly. Strings compare by value through a Gust runtime helper, never by backend pointer identity.
+
+Struct and enum equality will be introduced with trait-based equality rather than receiving implicit field-by-field semantics.

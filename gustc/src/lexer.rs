@@ -27,7 +27,10 @@ pub enum TokenKind {
     Plus,
     PlusPlus,
     Equal,
+    EqualEqual,
+    BangEqual,
     FatArrow,
+    LessEqual,
     GreaterEqual,
     Less,
     Greater,
@@ -105,7 +108,13 @@ impl<'source> Lexer<'source> {
             ',' => self.single(TokenKind::Comma, start),
             '.' => self.single(TokenKind::Dot, start),
             '/' => self.single(TokenKind::Slash, start),
-            '<' => self.single(TokenKind::Less, start),
+            '<' => {
+                if self.match_character('=') {
+                    self.token(TokenKind::LessEqual, start, self.position)
+                } else {
+                    self.single(TokenKind::Less, start)
+                }
+            }
             '>' => {
                 if self.match_character('=') {
                     self.token(TokenKind::GreaterEqual, start, self.position)
@@ -121,10 +130,22 @@ impl<'source> Lexer<'source> {
                 }
             }
             '=' => {
-                if self.match_character('>') {
+                if self.match_character('=') {
+                    self.token(TokenKind::EqualEqual, start, self.position)
+                } else if self.match_character('>') {
                     self.token(TokenKind::FatArrow, start, self.position)
                 } else {
                     self.single(TokenKind::Equal, start)
+                }
+            }
+            '!' => {
+                if self.match_character('=') {
+                    self.token(TokenKind::BangEqual, start, self.position)
+                } else {
+                    let span = Span::new(start, self.position);
+                    self.diagnostics
+                        .push(Diagnostic::error(span, "unexpected character `!`"));
+                    self.token(TokenKind::Identifier(String::new()), start, self.position)
                 }
             }
             '"' => self.string_literal(start),

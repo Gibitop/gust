@@ -464,29 +464,30 @@ impl Analyzer {
             ExprKind::StructInit { name, fields } => {
                 self.validate_struct_init(expr.span, name, fields)
             }
-            ExprKind::Binary { left, op, right } => {
+            ExprKind::Binary {
+                left,
+                op: BinaryOp::Add,
+                right,
+            } => {
                 let left_type = self.validate_expr(left);
                 let right_type = self.validate_expr(right);
 
-                match op {
-                    BinaryOp::Add => {
-                        if matches!(left_type, Type::Unknown) || matches!(right_type, Type::Unknown)
-                        {
-                            Type::Unknown
-                        } else if left_type == Type::Basic(BasicType::String)
-                            && right_type == Type::Basic(BasicType::String)
-                        {
-                            Type::Basic(BasicType::String)
-                        } else {
-                            self.diagnostics.push(Diagnostic::error(
-                                expr.span,
-                                "operator + only supports String operands for now",
-                            ));
-                            Type::Unknown
-                        }
-                    }
-                    BinaryOp::GreaterEqual => Type::Unknown,
+                if matches!(left_type, Type::Unknown) || matches!(right_type, Type::Unknown) {
+                    Type::Unknown
+                } else if left_type == Type::Basic(BasicType::String)
+                    && right_type == Type::Basic(BasicType::String)
+                {
+                    Type::Basic(BasicType::String)
+                } else {
+                    self.diagnostics.push(Diagnostic::error(
+                        expr.span,
+                        "operator + only supports String operands for now",
+                    ));
+                    Type::Unknown
                 }
+            }
+            ExprKind::Binary { left, op, right } => {
+                self.validate_comparison(expr.span, left, *op, right)
             }
             ExprKind::Match { value, branches } => {
                 self.unsupported(
@@ -533,6 +534,64 @@ impl Analyzer {
                 Type::Unknown
             }
         }
+    }
+
+    fn validate_comparison(&mut self, span: Span, left: &Expr, op: BinaryOp, right: &Expr) -> Type {
+        let (left_type, right_type) = if matches!(left.kind, ExprKind::Number(_))
+            && !matches!(right.kind, ExprKind::Number(_))
+        {
+            let right_type = self.validate_expr(right);
+            let left_type = self.validate_expr_with_context(left, Some(right_type.clone()));
+            (left_type, right_type)
+        } else {
+            let left_type = self.validate_expr(left);
+            let right_type = self.validate_expr_with_context(right, Some(left_type.clone()));
+            (left_type, right_type)
+        };
+
+        if matches!(left_type, Type::Unknown) || matches!(right_type, Type::Unknown) {
+            return Type::Unknown;
+        }
+
+        if left_type != right_type {
+            self.report_type_mismatch(right.span, left_type, right_type);
+            return Type::Unknown;
+        }
+
+        let supported = match op {
+            BinaryOp::Equal | BinaryOp::NotEqual => {
+                matches!(left_type, Type::Basic(BasicType::String | BasicType::Bool))
+                    || matches!(&left_type, Type::Basic(type_) if type_.is_numeric())
+            }
+            BinaryOp::Less | BinaryOp::LessEqual | BinaryOp::Greater | BinaryOp::GreaterEqual => {
+                matches!(&left_type, Type::Basic(type_) if type_.is_numeric())
+            }
+            BinaryOp::Add => unreachable!("addition is validated separately"),
+        };
+
+        if !supported {
+            let requirement = match op {
+                BinaryOp::Equal | BinaryOp::NotEqual => {
+                    "only supports numeric, bool, and String operands"
+                }
+                BinaryOp::Less
+                | BinaryOp::LessEqual
+                | BinaryOp::Greater
+                | BinaryOp::GreaterEqual => "only supports numeric operands",
+                BinaryOp::Add => unreachable!("addition is validated separately"),
+            };
+            self.diagnostics.push(Diagnostic::error(
+                span,
+                format!(
+                    "operator {} {requirement}, got `{}`",
+                    op.symbol(),
+                    left_type.name()
+                ),
+            ));
+            return Type::Unknown;
+        }
+
+        Type::Basic(BasicType::Bool)
     }
 
     fn validate_call(&mut self, expr: &Expr, name: &str, args: &[Expr]) -> Type {

@@ -88,6 +88,11 @@ pub enum LoweredExprKind {
     NumberLiteral(String),
     Local(String),
     StringConcat(Box<LoweredExpr>, Box<LoweredExpr>),
+    Comparison {
+        left: Box<LoweredExpr>,
+        op: BinaryOp,
+        right: Box<LoweredExpr>,
+    },
     StructLiteral {
         name: String,
         fields: Vec<LoweredStructFieldValue>,
@@ -586,7 +591,17 @@ fn infer_expr_type(
         | ExprKind::Binary {
             op: BinaryOp::Add, ..
         } => Some(LoweredType::Basic(BasicType::String)),
-        ExprKind::Bool(_) => Some(LoweredType::Basic(BasicType::Bool)),
+        ExprKind::Bool(_)
+        | ExprKind::Binary {
+            op:
+                BinaryOp::Equal
+                | BinaryOp::NotEqual
+                | BinaryOp::Less
+                | BinaryOp::LessEqual
+                | BinaryOp::Greater
+                | BinaryOp::GreaterEqual,
+            ..
+        } => Some(LoweredType::Basic(BasicType::Bool)),
         ExprKind::Number(_) => Some(LoweredType::Basic(BasicType::I32)),
         ExprKind::Identifier(name) => locals.get(name).cloned(),
         ExprKind::StructInit { name, .. } if structs.contains_key(name) => {
@@ -615,10 +630,6 @@ fn infer_expr_type(
         }
         ExprKind::Array(_)
         | ExprKind::StructInit { .. }
-        | ExprKind::Binary {
-            op: BinaryOp::GreaterEqual,
-            ..
-        }
         | ExprKind::Lambda(_)
         | ExprKind::Match { .. }
         | ExprKind::Missing
@@ -1349,6 +1360,88 @@ fn lower_expr(
             LoweredExpr {
                 type_: LoweredType::Basic(BasicType::String),
                 kind: LoweredExprKind::StringConcat(Box::new(left), Box::new(right)),
+            }
+        }
+        ExprKind::Binary { left, op, right } => {
+            let (left, right) = if matches!(left.kind, ExprKind::Number(_))
+                && !matches!(right.kind, ExprKind::Number(_))
+            {
+                let right = lower_expr(
+                    right,
+                    locals,
+                    signatures,
+                    structs,
+                    diagnostics,
+                    None,
+                    "expected supported comparison operand in executable builds",
+                )?;
+                let left = lower_expr(
+                    left,
+                    locals,
+                    signatures,
+                    structs,
+                    diagnostics,
+                    Some(right.type_.clone()),
+                    "expected supported comparison operand in executable builds",
+                )?;
+                (left, right)
+            } else {
+                let left = lower_expr(
+                    left,
+                    locals,
+                    signatures,
+                    structs,
+                    diagnostics,
+                    None,
+                    "expected supported comparison operand in executable builds",
+                )?;
+                let right = lower_expr(
+                    right,
+                    locals,
+                    signatures,
+                    structs,
+                    diagnostics,
+                    Some(left.type_.clone()),
+                    "expected supported comparison operand in executable builds",
+                )?;
+                (left, right)
+            };
+
+            let supported = match op {
+                BinaryOp::Equal | BinaryOp::NotEqual => {
+                    matches!(
+                        &left.type_,
+                        LoweredType::Basic(BasicType::String | BasicType::Bool)
+                    ) || matches!(&left.type_, LoweredType::Basic(type_) if type_.is_numeric())
+                }
+                BinaryOp::Less
+                | BinaryOp::LessEqual
+                | BinaryOp::Greater
+                | BinaryOp::GreaterEqual => {
+                    matches!(&left.type_, LoweredType::Basic(type_) if type_.is_numeric())
+                }
+                BinaryOp::Add => unreachable!("addition is lowered separately"),
+            };
+
+            if !supported {
+                diagnostics.push(Diagnostic::error(
+                    expr.span,
+                    format!(
+                        "operator {} does not support values of type `{}` in executable builds",
+                        op.symbol(),
+                        left.type_.name()
+                    ),
+                ));
+                return None;
+            }
+
+            LoweredExpr {
+                type_: LoweredType::Basic(BasicType::Bool),
+                kind: LoweredExprKind::Comparison {
+                    left: Box::new(left),
+                    op: *op,
+                    right: Box::new(right),
+                },
             }
         }
         ExprKind::StructInit { name, fields } => {

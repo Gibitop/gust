@@ -895,3 +895,108 @@ fn main() {
         result.diagnostics
     );
 }
+
+#[test]
+fn comparison_operators_validate() {
+    let result = check_source(
+        r#"
+fn main() {
+    let age: u32 = 30
+    let name = "Gust"
+
+    let equal: bool = age == 30
+    let notEqual: bool = age != 0
+    let less: bool = age < 31
+    let lessEqual: bool = 29 <= age
+    let greater: bool = age > 29
+    let greaterEqual: bool = age >= 30
+    let sameName: bool = name == "Gust"
+    let differentName: bool = name != "Rust"
+    let sameFlag: bool = true == true
+}
+"#,
+    );
+
+    assert!(
+        !result.has_errors(),
+        "expected comparisons to validate, got {:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
+fn comparison_operands_must_have_matching_types() {
+    let result = check_source(
+        r#"
+fn main() {
+    let left: u32 = 1
+    let right: i32 = 1
+    let equal = left == right
+}
+"#,
+    );
+
+    assert!(
+        result
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.severity == Severity::Error
+                && diagnostic
+                    .message
+                    .contains("expected value of type `u32`, got `i32`")),
+        "expected comparison type mismatch, got {:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
+fn ordering_requires_numeric_operands() {
+    let result = check_source(
+        r#"
+fn main() {
+    let ordered = "Gust" < "Rust"
+}
+"#,
+    );
+
+    assert!(
+        result
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.severity == Severity::Error
+                && diagnostic
+                    .message
+                    .contains("operator < only supports numeric operands")),
+        "expected numeric ordering error, got {:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
+fn struct_equality_is_rejected_until_trait_equality_exists() {
+    let result = check_source(
+        r#"
+struct Person {
+    name: String
+}
+
+fn main() {
+    let left = Person { name: "Gust" }
+    let right = Person { name: "Gust" }
+    let equal = left == right
+}
+"#,
+    );
+
+    assert!(
+        result
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.severity == Severity::Error
+                && diagnostic
+                    .message
+                    .contains("operator == only supports numeric, bool, and String operands")),
+        "expected unsupported struct equality error, got {:?}",
+        result.diagnostics
+    );
+}

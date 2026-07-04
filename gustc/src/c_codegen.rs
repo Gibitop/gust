@@ -1,4 +1,4 @@
-use crate::ast::BasicType;
+use crate::ast::{BasicType, BinaryOp};
 use crate::lower::{
     LoweredExpr, LoweredExprKind, LoweredFunction, LoweredProgram, LoweredStatement, LoweredStruct,
     LoweredType,
@@ -9,6 +9,7 @@ pub fn emit_c(program: &LoweredProgram) -> String {
     let uses_usize = program_uses_type(program, BasicType::Usize);
     let uses_fixed_width_int = program_uses_fixed_width_int(program);
     let uses_string_concat = program_uses_string_concat(program);
+    let uses_string_equality = program_uses_string_equality(program);
     let uses_println = program.statements.iter().any(statement_uses_println)
         || program
             .functions
@@ -35,6 +36,8 @@ pub fn emit_c(program: &LoweredProgram) -> String {
 
     if uses_string_concat {
         source.push_str("#include <stdlib.h>\n#include <string.h>\n");
+    } else if uses_string_equality {
+        source.push_str("#include <string.h>\n");
     }
 
     if !source.is_empty() {
@@ -59,6 +62,13 @@ pub fn emit_c(program: &LoweredProgram) -> String {
         source.push_str("    memcpy(result, left, left_len);\n");
         source.push_str("    memcpy(result + left_len, right, right_len + 1);\n");
         source.push_str("    return result;\n");
+        source.push_str("}\n\n");
+    }
+
+    if uses_string_equality {
+        source
+            .push_str("static bool gust_rt_string_equal(const char* left, const char* right) {\n");
+        source.push_str("    return strcmp(left, right) == 0;\n");
         source.push_str("}\n\n");
     }
 
@@ -155,6 +165,9 @@ fn expr_uses_type(expr: &LoweredExpr, type_: BasicType) -> bool {
             LoweredExprKind::StringConcat(left, right) => {
                 expr_uses_type(left, type_) || expr_uses_type(right, type_)
             }
+            LoweredExprKind::Comparison { left, right, .. } => {
+                expr_uses_type(left, type_) || expr_uses_type(right, type_)
+            }
             LoweredExprKind::StructLiteral { fields, .. } => fields
                 .iter()
                 .any(|field| expr_uses_type(&field.value, type_)),
@@ -191,6 +204,63 @@ fn program_uses_string_concat(program: &LoweredProgram) -> bool {
         || program.statements.iter().any(statement_uses_string_concat)
 }
 
+fn program_uses_string_equality(program: &LoweredProgram) -> bool {
+    program.functions.iter().any(|function| {
+        function
+            .statements
+            .iter()
+            .any(statement_uses_string_equality)
+            || expr_uses_string_equality(&function.return_value)
+    }) || program
+        .statements
+        .iter()
+        .any(statement_uses_string_equality)
+}
+
+fn statement_uses_string_equality(statement: &LoweredStatement) -> bool {
+    match statement {
+        LoweredStatement::Local { value, .. }
+        | LoweredStatement::Println(value)
+        | LoweredStatement::Expr(value) => expr_uses_string_equality(value),
+        LoweredStatement::Return(value) => value.as_ref().is_some_and(expr_uses_string_equality),
+        LoweredStatement::If {
+            condition,
+            then_branch,
+            else_branch,
+        } => {
+            expr_uses_string_equality(condition)
+                || then_branch.iter().any(statement_uses_string_equality)
+                || else_branch
+                    .as_ref()
+                    .is_some_and(|statements| statements.iter().any(statement_uses_string_equality))
+        }
+    }
+}
+
+fn expr_uses_string_equality(expr: &LoweredExpr) -> bool {
+    match &expr.kind {
+        LoweredExprKind::Comparison { left, op, right } => {
+            matches!(op, BinaryOp::Equal | BinaryOp::NotEqual)
+                && left.type_ == LoweredType::Basic(BasicType::String)
+                || expr_uses_string_equality(left)
+                || expr_uses_string_equality(right)
+        }
+        LoweredExprKind::StringConcat(left, right) => {
+            expr_uses_string_equality(left) || expr_uses_string_equality(right)
+        }
+        LoweredExprKind::StructLiteral { fields, .. } => fields
+            .iter()
+            .any(|field| expr_uses_string_equality(&field.value)),
+        LoweredExprKind::FieldAccess { object, .. } => expr_uses_string_equality(object),
+        LoweredExprKind::Call { args, .. } => args.iter().any(expr_uses_string_equality),
+        LoweredExprKind::Void
+        | LoweredExprKind::StringLiteral(_)
+        | LoweredExprKind::BoolLiteral(_)
+        | LoweredExprKind::NumberLiteral(_)
+        | LoweredExprKind::Local(_) => false,
+    }
+}
+
 fn function_uses_string_concat(function: &LoweredFunction) -> bool {
     function.statements.iter().any(statement_uses_string_concat)
         || expr_uses_string_concat(&function.return_value)
@@ -219,6 +289,9 @@ fn statement_uses_string_concat(statement: &LoweredStatement) -> bool {
 fn expr_uses_string_concat(expr: &LoweredExpr) -> bool {
     match &expr.kind {
         LoweredExprKind::StringConcat(_, _) => true,
+        LoweredExprKind::Comparison { left, right, .. } => {
+            expr_uses_string_concat(left) || expr_uses_string_concat(right)
+        }
         LoweredExprKind::StructLiteral { fields, .. } => fields
             .iter()
             .any(|field| expr_uses_string_concat(&field.value)),
@@ -324,6 +397,9 @@ fn expr_calls_name(expr: &LoweredExpr, name: &str) -> bool {
         LoweredExprKind::StringConcat(left, right) => {
             expr_calls_name(left, name) || expr_calls_name(right, name)
         }
+        LoweredExprKind::Comparison { left, right, .. } => {
+            expr_calls_name(left, name) || expr_calls_name(right, name)
+        }
         LoweredExprKind::StructLiteral { fields, .. } => fields
             .iter()
             .any(|field| expr_calls_name(&field.value, name)),
@@ -427,6 +503,7 @@ fn push_c_statement(source: &mut String, statement: &LoweredStatement, indent: u
                 source.push_str(");\n");
             }
             LoweredExprKind::StringConcat(_, _)
+            | LoweredExprKind::Comparison { .. }
             | LoweredExprKind::FieldAccess { .. }
             | LoweredExprKind::Call { .. } => {
                 push_c_indent(source, indent);
@@ -580,6 +657,27 @@ fn push_c_value(source: &mut String, value: &LoweredExpr) {
             source.push_str(", ");
             push_c_value(source, right);
             source.push(')');
+        }
+        LoweredExprKind::Comparison { left, op, right } => {
+            if left.type_ == LoweredType::Basic(BasicType::String) {
+                if *op == BinaryOp::NotEqual {
+                    source.push('!');
+                }
+
+                source.push_str("gust_rt_string_equal(");
+                push_c_value(source, left);
+                source.push_str(", ");
+                push_c_value(source, right);
+                source.push(')');
+            } else {
+                source.push('(');
+                push_c_value(source, left);
+                source.push(' ');
+                source.push_str(op.symbol());
+                source.push(' ');
+                push_c_value(source, right);
+                source.push(')');
+            }
         }
         LoweredExprKind::StructLiteral { name, fields } => {
             source.push('(');
