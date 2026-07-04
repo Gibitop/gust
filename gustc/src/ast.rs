@@ -201,6 +201,11 @@ pub enum BinaryOp {
     Multiply,
     Divide,
     Remainder,
+    BitwiseAnd,
+    BitwiseOr,
+    BitwiseXor,
+    ShiftLeft,
+    ShiftRight,
     LogicalAnd,
     LogicalOr,
     Equal,
@@ -219,6 +224,11 @@ impl BinaryOp {
             BinaryOp::Multiply => "*",
             BinaryOp::Divide => "/",
             BinaryOp::Remainder => "%",
+            BinaryOp::BitwiseAnd => "&",
+            BinaryOp::BitwiseOr => "|",
+            BinaryOp::BitwiseXor => "^",
+            BinaryOp::ShiftLeft => "<<",
+            BinaryOp::ShiftRight => ">>",
             BinaryOp::LogicalAnd => "&&",
             BinaryOp::LogicalOr => "||",
             BinaryOp::Equal => "==",
@@ -358,6 +368,10 @@ impl BasicType {
 
     pub fn is_float(self) -> bool {
         matches!(self, Self::F32 | Self::F64)
+    }
+
+    pub fn is_integer(self) -> bool {
+        self.is_numeric() && !self.is_float()
     }
 }
 

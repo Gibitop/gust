@@ -38,9 +38,19 @@ pub enum TokenKind {
     EqualEqual,
     Bang,
     BangEqual,
+    Ampersand,
+    AmpersandEqual,
     AndAnd,
+    Pipe,
+    PipeEqual,
     OrOr,
+    Caret,
+    CaretEqual,
     FatArrow,
+    ShiftLeft,
+    ShiftLeftEqual,
+    ShiftRight,
+    ShiftRightEqual,
     LessEqual,
     GreaterEqual,
     Less,
@@ -147,14 +157,26 @@ impl<'source> Lexer<'source> {
                 }
             }
             '<' => {
-                if self.match_character('=') {
+                if self.match_character('<') {
+                    if self.match_character('=') {
+                        self.token(TokenKind::ShiftLeftEqual, start, self.position)
+                    } else {
+                        self.token(TokenKind::ShiftLeft, start, self.position)
+                    }
+                } else if self.match_character('=') {
                     self.token(TokenKind::LessEqual, start, self.position)
                 } else {
                     self.single(TokenKind::Less, start)
                 }
             }
             '>' => {
-                if self.match_character('=') {
+                if self.match_character('>') {
+                    if self.match_character('=') {
+                        self.token(TokenKind::ShiftRightEqual, start, self.position)
+                    } else {
+                        self.token(TokenKind::ShiftRight, start, self.position)
+                    }
+                } else if self.match_character('=') {
                     self.token(TokenKind::GreaterEqual, start, self.position)
                 } else {
                     self.single(TokenKind::Greater, start)
@@ -188,21 +210,26 @@ impl<'source> Lexer<'source> {
             '&' => {
                 if self.match_character('&') {
                     self.token(TokenKind::AndAnd, start, self.position)
+                } else if self.match_character('=') {
+                    self.token(TokenKind::AmpersandEqual, start, self.position)
                 } else {
-                    let span = Span::new(start, self.position);
-                    self.diagnostics
-                        .push(Diagnostic::error(span, "unexpected character `&`"));
-                    self.token(TokenKind::Identifier(String::new()), start, self.position)
+                    self.single(TokenKind::Ampersand, start)
                 }
             }
             '|' => {
                 if self.match_character('|') {
                     self.token(TokenKind::OrOr, start, self.position)
+                } else if self.match_character('=') {
+                    self.token(TokenKind::PipeEqual, start, self.position)
                 } else {
-                    let span = Span::new(start, self.position);
-                    self.diagnostics
-                        .push(Diagnostic::error(span, "unexpected character `|`"));
-                    self.token(TokenKind::Identifier(String::new()), start, self.position)
+                    self.single(TokenKind::Pipe, start)
+                }
+            }
+            '^' => {
+                if self.match_character('=') {
+                    self.token(TokenKind::CaretEqual, start, self.position)
+                } else {
+                    self.single(TokenKind::Caret, start)
                 }
             }
             '"' => self.string_literal(start),

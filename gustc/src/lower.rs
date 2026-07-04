@@ -810,7 +810,12 @@ fn infer_expr_type(
                 | BinaryOp::Subtract
                 | BinaryOp::Multiply
                 | BinaryOp::Divide
-                | BinaryOp::Remainder,
+                | BinaryOp::Remainder
+                | BinaryOp::BitwiseAnd
+                | BinaryOp::BitwiseOr
+                | BinaryOp::BitwiseXor
+                | BinaryOp::ShiftLeft
+                | BinaryOp::ShiftRight,
             right,
         } => {
             if number_pair_contains_float(left, right) {
@@ -1884,12 +1889,31 @@ fn lower_expr(
                 | BinaryOp::Subtract
                 | BinaryOp::Multiply
                 | BinaryOp::Divide
-                | BinaryOp::Remainder),
+                | BinaryOp::Remainder
+                | BinaryOp::BitwiseAnd
+                | BinaryOp::BitwiseOr
+                | BinaryOp::BitwiseXor
+                | BinaryOp::ShiftLeft
+                | BinaryOp::ShiftRight),
             right,
         } => {
+            let is_bitwise = matches!(
+                op,
+                BinaryOp::BitwiseAnd
+                    | BinaryOp::BitwiseOr
+                    | BinaryOp::BitwiseXor
+                    | BinaryOp::ShiftLeft
+                    | BinaryOp::ShiftRight
+            );
             let contextual_type = expected_type.as_ref().filter(|type_| {
-                matches!(type_, LoweredType::Basic(type_) if type_.is_numeric())
-                    || *op == BinaryOp::Add && **type_ == LoweredType::Basic(BasicType::String)
+                matches!(
+                    type_,
+                    LoweredType::Basic(type_) if if is_bitwise {
+                        type_.is_integer()
+                    } else {
+                        type_.is_numeric()
+                    }
+                ) || *op == BinaryOp::Add && **type_ == LoweredType::Basic(BasicType::String)
             });
             let (left, right) = if let Some(type_) = contextual_type {
                 let left = lower_expr(
@@ -1913,7 +1937,7 @@ fn lower_expr(
                     "expected supported arithmetic operand in executable builds",
                 )?;
                 (left, right)
-            } else if number_pair_contains_float(left, right) {
+            } else if !is_bitwise && number_pair_contains_float(left, right) {
                 let type_ = LoweredType::Basic(BasicType::F64);
                 let left = lower_expr(
                     left,
@@ -1991,7 +2015,11 @@ fn lower_expr(
                 }
             } else if matches!(
                 left.type_,
-                LoweredType::Basic(type_) if type_.is_numeric()
+                LoweredType::Basic(type_) if if is_bitwise {
+                    type_.is_integer()
+                } else {
+                    type_.is_numeric()
+                }
             ) {
                 LoweredExpr {
                     type_: left.type_.clone(),
@@ -2103,6 +2131,11 @@ fn lower_expr(
                 | BinaryOp::Multiply
                 | BinaryOp::Divide
                 | BinaryOp::Remainder
+                | BinaryOp::BitwiseAnd
+                | BinaryOp::BitwiseOr
+                | BinaryOp::BitwiseXor
+                | BinaryOp::ShiftLeft
+                | BinaryOp::ShiftRight
                 | BinaryOp::LogicalAnd
                 | BinaryOp::LogicalOr => {
                     unreachable!("non-comparison operator is lowered separately")

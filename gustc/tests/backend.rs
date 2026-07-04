@@ -1076,6 +1076,39 @@ fn compound_assignments_emit_c() {
 }
 
 #[test]
+fn bitwise_shift_and_compound_assignments_emit_c() {
+    let result = check_source(
+        r#"fn main() {
+    let value: u32 = 1 | 2 ^ 3 & 4 << 1 + 1
+    let shifted = value >> 2
+    let mut flags: u8 = 1
+    flags &= 7
+    flags |= 2
+    flags ^= 1
+    flags <<= 2
+    flags >>= 1
+}"#,
+    );
+
+    assert!(
+        !result.has_errors(),
+        "expected no frontend errors, got {:?}",
+        result.diagnostics
+    );
+
+    let lowered = lower_program(&result.program).expect("bitwise operations should lower");
+    let source = emit_c(&lowered);
+
+    assert!(source.contains("uint32_t gust_value = (1 | (2 ^ (3 & (4 << (1 + 1)))));"));
+    assert!(source.contains("uint32_t gust_shifted = (gust_value >> 2);"));
+    assert!(source.contains("gust_flags = (gust_flags & 7);"));
+    assert!(source.contains("gust_flags = (gust_flags | 2);"));
+    assert!(source.contains("gust_flags = (gust_flags ^ 1);"));
+    assert!(source.contains("gust_flags = (gust_flags << 2);"));
+    assert!(source.contains("gust_flags = (gust_flags >> 1);"));
+}
+
+#[test]
 fn mutable_struct_helper_signature_is_rejected_by_backend() {
     let result = check_source(
         r#"

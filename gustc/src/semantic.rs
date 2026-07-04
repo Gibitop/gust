@@ -418,13 +418,30 @@ impl Analyzer {
                 }
 
                 let value_type = if let Some(op) = op {
-                    self.validate_arithmetic(
-                        statement.span,
-                        target,
-                        *op,
-                        value,
-                        Some(binding.type_.clone()),
-                    )
+                    if matches!(
+                        op,
+                        BinaryOp::BitwiseAnd
+                            | BinaryOp::BitwiseOr
+                            | BinaryOp::BitwiseXor
+                            | BinaryOp::ShiftLeft
+                            | BinaryOp::ShiftRight
+                    ) {
+                        self.validate_bitwise(
+                            statement.span,
+                            target,
+                            *op,
+                            value,
+                            Some(binding.type_.clone()),
+                        )
+                    } else {
+                        self.validate_arithmetic(
+                            statement.span,
+                            target,
+                            *op,
+                            value,
+                            Some(binding.type_.clone()),
+                        )
+                    }
                 } else {
                     self.validate_expr_with_context(value, Some(binding.type_.clone()))
                 };
@@ -641,6 +658,16 @@ impl Analyzer {
                     | BinaryOp::Remainder),
                 right,
             } => self.validate_arithmetic(expr.span, left, *op, right, expected_type.clone()),
+            ExprKind::Binary {
+                left,
+                op:
+                    op @ (BinaryOp::BitwiseAnd
+                    | BinaryOp::BitwiseOr
+                    | BinaryOp::BitwiseXor
+                    | BinaryOp::ShiftLeft
+                    | BinaryOp::ShiftRight),
+                right,
+            } => self.validate_bitwise(expr.span, left, *op, right, expected_type.clone()),
             ExprKind::Binary { left, op, right } => {
                 self.validate_comparison(expr.span, left, *op, right)
             }
@@ -845,6 +872,56 @@ impl Analyzer {
         Type::Unknown
     }
 
+    fn validate_bitwise(
+        &mut self,
+        span: Span,
+        left: &Expr,
+        op: BinaryOp,
+        right: &Expr,
+        expected_type: Option<Type>,
+    ) -> Type {
+        let contextual_type =
+            expected_type.filter(|type_| matches!(type_, Type::Basic(type_) if type_.is_integer()));
+        let (left_type, right_type) = if let Some(type_) = contextual_type {
+            let left_type = self.validate_expr_with_context(left, Some(type_.clone()));
+            let right_type = self.validate_expr_with_context(right, Some(type_));
+            (left_type, right_type)
+        } else if matches!(left.kind, ExprKind::Number(_))
+            && !matches!(right.kind, ExprKind::Number(_))
+        {
+            let right_type = self.validate_expr(right);
+            let left_type = self.validate_expr_with_context(left, Some(right_type.clone()));
+            (left_type, right_type)
+        } else {
+            let left_type = self.validate_expr(left);
+            let right_type = self.validate_expr_with_context(right, Some(left_type.clone()));
+            (left_type, right_type)
+        };
+
+        if matches!(left_type, Type::Unknown) || matches!(right_type, Type::Unknown) {
+            return Type::Unknown;
+        }
+
+        if left_type != right_type {
+            self.report_type_mismatch(right.span, left_type, right_type);
+            return Type::Unknown;
+        }
+
+        if matches!(&left_type, Type::Basic(type_) if type_.is_integer()) {
+            return left_type;
+        }
+
+        self.diagnostics.push(Diagnostic::error(
+            span,
+            format!(
+                "operator {} only supports integer operands, got `{}`",
+                op.symbol(),
+                left_type.name()
+            ),
+        ));
+        Type::Unknown
+    }
+
     fn validate_comparison(&mut self, span: Span, left: &Expr, op: BinaryOp, right: &Expr) -> Type {
         let (left_type, right_type) = if number_pair_contains_float(left, right) {
             let type_ = Type::Basic(BasicType::F64);
@@ -885,6 +962,11 @@ impl Analyzer {
             | BinaryOp::Multiply
             | BinaryOp::Divide
             | BinaryOp::Remainder
+            | BinaryOp::BitwiseAnd
+            | BinaryOp::BitwiseOr
+            | BinaryOp::BitwiseXor
+            | BinaryOp::ShiftLeft
+            | BinaryOp::ShiftRight
             | BinaryOp::LogicalAnd
             | BinaryOp::LogicalOr => {
                 unreachable!("non-comparison operator is validated separately")
@@ -905,6 +987,11 @@ impl Analyzer {
                 | BinaryOp::Multiply
                 | BinaryOp::Divide
                 | BinaryOp::Remainder
+                | BinaryOp::BitwiseAnd
+                | BinaryOp::BitwiseOr
+                | BinaryOp::BitwiseXor
+                | BinaryOp::ShiftLeft
+                | BinaryOp::ShiftRight
                 | BinaryOp::LogicalAnd
                 | BinaryOp::LogicalOr => {
                     unreachable!("non-comparison operator is validated separately")

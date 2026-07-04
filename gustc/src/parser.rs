@@ -650,8 +650,9 @@ impl Parser {
         };
 
         let mut args = Vec::new();
+        let mut end = self.previous_span();
         if self.match_kind(&TokenKind::Less) {
-            while !self.at_eof() && !self.check_kind(&TokenKind::Greater) {
+            while !self.at_eof() && !self.check_type_greater() {
                 if let Some(type_ref) = self.parse_type() {
                     args.push(type_ref);
                 }
@@ -661,13 +662,13 @@ impl Parser {
                 }
             }
 
-            self.expect_kind(&TokenKind::Greater, "`>`");
+            end = self.expect_type_greater().span;
         }
 
         Some(TypeRef {
             name,
             args,
-            span: start.join(self.previous_span()),
+            span: start.join(end),
         })
     }
 
@@ -678,6 +679,11 @@ impl Parser {
             TokenKind::Star => Some((BinaryOp::Multiply, 11)),
             TokenKind::Slash => Some((BinaryOp::Divide, 11)),
             TokenKind::Percent => Some((BinaryOp::Remainder, 11)),
+            TokenKind::Ampersand => Some((BinaryOp::BitwiseAnd, 8)),
+            TokenKind::Pipe => Some((BinaryOp::BitwiseOr, 6)),
+            TokenKind::Caret => Some((BinaryOp::BitwiseXor, 7)),
+            TokenKind::ShiftLeft => Some((BinaryOp::ShiftLeft, 9)),
+            TokenKind::ShiftRight => Some((BinaryOp::ShiftRight, 9)),
             TokenKind::AndAnd => Some((BinaryOp::LogicalAnd, 3)),
             TokenKind::OrOr => Some((BinaryOp::LogicalOr, 2)),
             TokenKind::EqualEqual => Some((BinaryOp::Equal, 4)),
@@ -755,6 +761,56 @@ impl Parser {
         self.synthetic_current()
     }
 
+    fn expect_type_greater(&mut self) -> Token {
+        let token = self.current().clone();
+
+        match token.kind {
+            TokenKind::Greater => self.advance(),
+            TokenKind::GreaterEqual => {
+                self.tokens[self.position] = Token {
+                    kind: TokenKind::Equal,
+                    span: Span::new(token.span.start + 1, token.span.end),
+                    lexeme: "=".to_string(),
+                };
+                Token {
+                    kind: TokenKind::Greater,
+                    span: Span::new(token.span.start, token.span.start + 1),
+                    lexeme: ">".to_string(),
+                }
+            }
+            TokenKind::ShiftRight | TokenKind::ShiftRightEqual => {
+                self.tokens[self.position] = Token {
+                    kind: if matches!(token.kind, TokenKind::ShiftRightEqual) {
+                        TokenKind::GreaterEqual
+                    } else {
+                        TokenKind::Greater
+                    },
+                    span: Span::new(token.span.start + 1, token.span.end),
+                    lexeme: token.lexeme[1..].to_string(),
+                };
+                Token {
+                    kind: TokenKind::Greater,
+                    span: Span::new(token.span.start, token.span.start + 1),
+                    lexeme: ">".to_string(),
+                }
+            }
+            _ => {
+                self.error_here("expected `>`");
+                self.synthetic_current()
+            }
+        }
+    }
+
+    fn check_type_greater(&self) -> bool {
+        matches!(
+            self.current().kind,
+            TokenKind::Greater
+                | TokenKind::GreaterEqual
+                | TokenKind::ShiftRight
+                | TokenKind::ShiftRightEqual
+        )
+    }
+
     fn match_keyword(&mut self, keyword: Keyword) -> bool {
         if self.current_keyword() != Some(keyword) {
             return false;
@@ -781,6 +837,11 @@ impl Parser {
             TokenKind::StarEqual => Some(BinaryOp::Multiply),
             TokenKind::SlashEqual => Some(BinaryOp::Divide),
             TokenKind::PercentEqual => Some(BinaryOp::Remainder),
+            TokenKind::AmpersandEqual => Some(BinaryOp::BitwiseAnd),
+            TokenKind::PipeEqual => Some(BinaryOp::BitwiseOr),
+            TokenKind::CaretEqual => Some(BinaryOp::BitwiseXor),
+            TokenKind::ShiftLeftEqual => Some(BinaryOp::ShiftLeft),
+            TokenKind::ShiftRightEqual => Some(BinaryOp::ShiftRight),
             _ => return None,
         };
         self.advance();
@@ -867,9 +928,19 @@ fn simple_kind_eq(left: &TokenKind, right: &TokenKind) -> bool {
             | (TokenKind::EqualEqual, TokenKind::EqualEqual)
             | (TokenKind::Bang, TokenKind::Bang)
             | (TokenKind::BangEqual, TokenKind::BangEqual)
+            | (TokenKind::Ampersand, TokenKind::Ampersand)
+            | (TokenKind::AmpersandEqual, TokenKind::AmpersandEqual)
             | (TokenKind::AndAnd, TokenKind::AndAnd)
+            | (TokenKind::Pipe, TokenKind::Pipe)
+            | (TokenKind::PipeEqual, TokenKind::PipeEqual)
             | (TokenKind::OrOr, TokenKind::OrOr)
+            | (TokenKind::Caret, TokenKind::Caret)
+            | (TokenKind::CaretEqual, TokenKind::CaretEqual)
             | (TokenKind::FatArrow, TokenKind::FatArrow)
+            | (TokenKind::ShiftLeft, TokenKind::ShiftLeft)
+            | (TokenKind::ShiftLeftEqual, TokenKind::ShiftLeftEqual)
+            | (TokenKind::ShiftRight, TokenKind::ShiftRight)
+            | (TokenKind::ShiftRightEqual, TokenKind::ShiftRightEqual)
             | (TokenKind::LessEqual, TokenKind::LessEqual)
             | (TokenKind::GreaterEqual, TokenKind::GreaterEqual)
             | (TokenKind::Less, TokenKind::Less)
