@@ -2100,3 +2100,89 @@ fn main() {}"#,
         result.diagnostics
     );
 }
+
+#[test]
+fn string_matches_support_literals_and_require_a_final_wildcard() {
+    let result = check_source(
+        r#"fn label(value: String): String {
+    return match value {
+        "ready" => "Ready",
+        _ => "Unknown",
+    }
+}
+
+fn main() {
+    io.println(label("ready"))
+}"#,
+    );
+
+    assert!(
+        !result.has_errors(),
+        "expected string patterns to validate, got {:?}",
+        result.diagnostics
+    );
+
+    let missing_wildcard = check_source(
+        r#"fn label(value: String): String {
+    return match value {
+        "ready" => "Ready",
+    }
+}
+
+fn main() {}"#,
+    );
+    assert!(missing_wildcard.diagnostics.iter().any(|diagnostic| {
+        diagnostic
+            .message
+            .contains("non-exhaustive match for `String`; add a wildcard branch")
+    }));
+
+    let unreachable = check_source(
+        r#"fn label(value: String): String {
+    return match value {
+        _ => "Unknown",
+        "ready" => "Ready",
+    }
+}
+
+fn main() {}"#,
+    );
+    assert!(unreachable.diagnostics.iter().any(|diagnostic| {
+        diagnostic
+            .message
+            .contains("match branches after a wildcard are unreachable")
+    }));
+}
+
+#[test]
+fn block_match_branches_and_shared_string_rebinding_validate() {
+    let result = check_source(
+        r#"enum Being {
+    Person(String)
+    Unknown
+}
+
+fn makeBeing(): Being {
+    return Being.Person("Ada")
+}
+
+fn main() {
+    let mut name = ""
+    match makeBeing() {
+        Being.Person(personName) => {
+            name = personName
+        },
+        Being.Unknown => {
+            name = "stranger"
+        },
+    }
+    io.println(name)
+}"#,
+    );
+
+    assert!(
+        !result.has_errors(),
+        "expected block matches and string rebinding to validate, got {:?}",
+        result.diagnostics
+    );
+}

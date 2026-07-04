@@ -250,8 +250,23 @@ pub enum UnaryOp {
 #[derive(Debug, Clone)]
 pub struct MatchBranch {
     pub pattern: Pattern,
-    pub value: Expr,
+    pub body: MatchBranchBody,
     pub span: Span,
+}
+
+#[derive(Debug, Clone)]
+pub enum MatchBranchBody {
+    Expr(Expr),
+    Block(Block),
+}
+
+impl MatchBranchBody {
+    pub fn span(&self) -> Span {
+        match self {
+            MatchBranchBody::Expr(expr) => expr.span,
+            MatchBranchBody::Block(block) => block.span,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -262,12 +277,21 @@ pub enum Pattern {
         binding: Option<String>,
         span: Span,
     },
+    String {
+        value: String,
+        span: Span,
+    },
+    Wildcard {
+        span: Span,
+    },
 }
 
 impl Pattern {
     pub fn span(&self) -> Span {
         match self {
-            Pattern::Variant { span, .. } => *span,
+            Pattern::Variant { span, .. }
+            | Pattern::String { span, .. }
+            | Pattern::Wildcard { span } => *span,
         }
     }
 }

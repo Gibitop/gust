@@ -2,18 +2,18 @@ use std::collections::HashSet;
 
 use crate::ast::{BasicType, BinaryOp};
 use crate::lower::{
-    LoweredEnum, LoweredExpr, LoweredExprKind, LoweredFunction, LoweredProgram, LoweredStatement,
-    LoweredStruct, LoweredType,
+    LoweredEnum, LoweredExpr, LoweredExprKind, LoweredFunction, LoweredPattern, LoweredProgram,
+    LoweredStatement, LoweredStruct, LoweredType,
 };
 
 pub fn emit_c(program: &LoweredProgram) -> String {
-    let uses_bool = program_uses_type(program, BasicType::Bool);
+    let uses_string_equality = program_uses_string_equality(program);
+    let uses_bool = program_uses_type(program, BasicType::Bool) || uses_string_equality;
     let uses_usize = program_uses_type(program, BasicType::Usize);
     let uses_float =
         program_uses_type(program, BasicType::F32) || program_uses_type(program, BasicType::F64);
     let uses_fixed_width_int = program_uses_fixed_width_int(program);
     let uses_string_concat = program_uses_string_concat(program);
-    let uses_string_equality = program_uses_string_equality(program);
     let uses_println = program.statements.iter().any(statement_uses_println)
         || program
             .functions
@@ -177,6 +177,17 @@ fn statement_uses_type(statement: &LoweredStatement, type_: BasicType) -> bool {
                         .any(|statement| statement_uses_type(statement, type_))
                 })
         }
+        LoweredStatement::Match {
+            value, branches, ..
+        } => {
+            expr_uses_type(value, type_)
+                || branches.iter().any(|branch| {
+                    branch
+                        .statements
+                        .iter()
+                        .any(|statement| statement_uses_type(statement, type_))
+                })
+        }
     }
 }
 
@@ -217,7 +228,8 @@ fn expr_uses_type(expr: &LoweredExpr, type_: BasicType) -> bool {
             | LoweredExprKind::StringLiteral(_)
             | LoweredExprKind::BoolLiteral(_)
             | LoweredExprKind::NumberLiteral(_)
-            | LoweredExprKind::Local(_) => false,
+            | LoweredExprKind::Local(_)
+            | LoweredExprKind::MatchValue(_) => false,
         }
 }
 
@@ -277,6 +289,15 @@ fn statement_uses_string_equality(statement: &LoweredStatement) -> bool {
                     .as_ref()
                     .is_some_and(|statements| statements.iter().any(statement_uses_string_equality))
         }
+        LoweredStatement::Match {
+            value, branches, ..
+        } => {
+            expr_uses_string_equality(value)
+                || branches.iter().any(|branch| {
+                    matches!(branch.pattern, LoweredPattern::String(_))
+                        || branch.statements.iter().any(statement_uses_string_equality)
+                })
+        }
     }
 }
 
@@ -309,9 +330,10 @@ fn expr_uses_string_equality(expr: &LoweredExpr) -> bool {
             value, branches, ..
         } => {
             expr_uses_string_equality(value)
-                || branches
-                    .iter()
-                    .any(|branch| expr_uses_string_equality(&branch.value))
+                || branches.iter().any(|branch| {
+                    matches!(branch.pattern, LoweredPattern::String(_))
+                        || expr_uses_string_equality(&branch.value)
+                })
         }
         LoweredExprKind::FieldAccess { object, .. } | LoweredExprKind::Clone(object) => {
             expr_uses_string_equality(object)
@@ -321,7 +343,8 @@ fn expr_uses_string_equality(expr: &LoweredExpr) -> bool {
         | LoweredExprKind::StringLiteral(_)
         | LoweredExprKind::BoolLiteral(_)
         | LoweredExprKind::NumberLiteral(_)
-        | LoweredExprKind::Local(_) => false,
+        | LoweredExprKind::Local(_)
+        | LoweredExprKind::MatchValue(_) => false,
     }
 }
 
@@ -349,6 +372,14 @@ fn statement_uses_string_concat(statement: &LoweredStatement) -> bool {
                 || else_branch
                     .as_ref()
                     .is_some_and(|statements| statements.iter().any(statement_uses_string_concat))
+        }
+        LoweredStatement::Match {
+            value, branches, ..
+        } => {
+            expr_uses_string_concat(value)
+                || branches
+                    .iter()
+                    .any(|branch| branch.statements.iter().any(statement_uses_string_concat))
         }
     }
 }
@@ -387,7 +418,8 @@ fn expr_uses_string_concat(expr: &LoweredExpr) -> bool {
         | LoweredExprKind::StringLiteral(_)
         | LoweredExprKind::BoolLiteral(_)
         | LoweredExprKind::NumberLiteral(_)
-        | LoweredExprKind::Local(_) => false,
+        | LoweredExprKind::Local(_)
+        | LoweredExprKind::MatchValue(_) => false,
     }
 }
 
@@ -404,6 +436,9 @@ fn statement_uses_println(statement: &LoweredStatement) -> bool {
                     .as_ref()
                     .is_some_and(|statements| statements.iter().any(statement_uses_println))
         }
+        LoweredStatement::Match { branches, .. } => branches
+            .iter()
+            .any(|branch| branch.statements.iter().any(statement_uses_println)),
         LoweredStatement::Local { .. }
         | LoweredStatement::Assignment { .. }
         | LoweredStatement::Expr(_)
@@ -479,6 +514,17 @@ fn statement_calls_name(statement: &LoweredStatement, name: &str) -> bool {
                         .any(|statement| statement_calls_name(statement, name))
                 })
         }
+        LoweredStatement::Match {
+            value, branches, ..
+        } => {
+            expr_calls_name(value, name)
+                || branches.iter().any(|branch| {
+                    branch
+                        .statements
+                        .iter()
+                        .any(|statement| statement_calls_name(statement, name))
+                })
+        }
     }
 }
 
@@ -521,7 +567,8 @@ fn expr_calls_name(expr: &LoweredExpr, name: &str) -> bool {
         | LoweredExprKind::StringLiteral(_)
         | LoweredExprKind::BoolLiteral(_)
         | LoweredExprKind::NumberLiteral(_)
-        | LoweredExprKind::Local(_) => false,
+        | LoweredExprKind::Local(_)
+        | LoweredExprKind::MatchValue(_) => false,
     }
 }
 
@@ -910,6 +957,7 @@ fn push_c_statement(source: &mut String, statement: &LoweredStatement, indent: u
             | LoweredExprKind::Comparison { .. }
             | LoweredExprKind::FieldAccess { .. }
             | LoweredExprKind::EnumPayload { .. }
+            | LoweredExprKind::MatchValue(_)
             | LoweredExprKind::Match { .. }
             | LoweredExprKind::Call { .. } => {
                 push_c_indent(source, indent);
@@ -975,6 +1023,66 @@ fn push_c_statement(source: &mut String, statement: &LoweredStatement, indent: u
 
             source.push('\n');
         }
+        LoweredStatement::Match {
+            value,
+            temp_name,
+            branches,
+        } => {
+            push_c_indent(source, indent);
+            source.push_str("{\n");
+            push_c_indent(source, indent + 1);
+            push_c_type(source, &value.type_);
+            source.push(' ');
+            source.push_str(temp_name);
+            source.push_str(" = ");
+            push_c_value(source, value);
+            source.push_str(";\n");
+
+            for (index, branch) in branches.iter().enumerate() {
+                push_c_indent(source, indent + 1);
+                if index + 1 < branches.len() {
+                    if index > 0 {
+                        source.push_str("else ");
+                    }
+                    source.push_str("if (");
+                    push_c_match_condition(source, temp_name, &branch.pattern);
+                    source.push_str(") {\n");
+                } else {
+                    if index > 0 {
+                        source.push_str("else ");
+                    }
+                    source.push_str("{\n");
+                }
+
+                for statement in &branch.statements {
+                    push_c_statement(source, statement, indent + 2);
+                }
+
+                push_c_indent(source, indent + 1);
+                source.push_str("}\n");
+            }
+
+            push_c_indent(source, indent);
+            source.push_str("}\n");
+        }
+    }
+}
+
+fn push_c_match_condition(source: &mut String, temp_name: &str, pattern: &LoweredPattern) {
+    match pattern {
+        LoweredPattern::Variant { enum_name, variant } => {
+            source.push_str(temp_name);
+            source.push_str(".gust_tag == ");
+            push_c_enum_variant_tag(source, enum_name, variant);
+        }
+        LoweredPattern::String(value) => {
+            source.push_str("gust_rt_string_equal(");
+            source.push_str(temp_name);
+            source.push_str(", \"");
+            push_c_string_value(source, value);
+            source.push_str("\")");
+        }
+        LoweredPattern::Wildcard => source.push_str("true"),
     }
 }
 
@@ -1299,18 +1407,23 @@ fn push_c_value(source: &mut String, value: &LoweredExpr) {
             source.push_str(".gust_payload.");
             push_c_local_name(source, variant);
         }
+        LoweredExprKind::MatchValue(name) => source.push_str(name),
         LoweredExprKind::Match {
             value,
-            enum_name,
+            temp_name,
             branches,
         } => {
-            source.push('(');
+            source.push_str("({ ");
+            push_c_type(source, &value.type_);
+            source.push(' ');
+            source.push_str(temp_name);
+            source.push_str(" = ");
+            push_c_value(source, value);
+            source.push_str("; (");
 
             for (index, branch) in branches.iter().enumerate() {
                 if index + 1 < branches.len() {
-                    push_c_value(source, value);
-                    source.push_str(".gust_tag == ");
-                    push_c_enum_variant_tag(source, enum_name, &branch.variant);
+                    push_c_match_condition(source, temp_name, &branch.pattern);
                     source.push_str(" ? ");
                 }
 
@@ -1321,7 +1434,7 @@ fn push_c_value(source: &mut String, value: &LoweredExpr) {
                 }
             }
 
-            source.push(')');
+            source.push_str("); })");
         }
         LoweredExprKind::FieldAccess { object, field } => {
             push_c_value(source, object);

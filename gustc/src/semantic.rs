@@ -2,8 +2,8 @@ use std::collections::{HashMap, HashSet};
 
 use crate::ast::{
     BasicType, BinaryOp, Block, ElseBranch, Expr, ExprKind, FunctionBody, FunctionDecl, Item,
-    Pattern, Program, Stmt, StmtKind, StructDecl, StructInitField, StructMember, TypeRef, UnaryOp,
-    number_literal_is_float,
+    MatchBranchBody, Pattern, Program, Stmt, StmtKind, StructDecl, StructInitField, StructMember,
+    TypeRef, UnaryOp, number_literal_is_float,
 };
 use crate::diagnostic::Diagnostic;
 use crate::span::Span;
@@ -670,60 +670,85 @@ impl Analyzer {
                 self.validate_comparison(expr.span, left, *op, right)
             }
             ExprKind::Match { value, branches } => {
-                if !is_stable_match_value(value) {
-                    self.unsupported(
-                        value.span,
-                        "matching computed expressions is not implemented in executable builds yet",
-                    );
-                }
-
                 let value_type = self.validate_expr(value);
-                let Type::Enum(enum_name) = value_type else {
-                    if !matches!(value_type, Type::Unknown) {
-                        self.diagnostics.push(Diagnostic::error(
-                            value.span,
-                            "match expressions require an enum value",
-                        ));
-                    }
-
-                    for branch in branches {
-                        self.push_scope();
-                        self.validate_pattern(&branch.pattern, None);
-                        self.validate_expr_with_context(&branch.value, expected_type.clone());
-                        self.pop_scope();
-                    }
-
-                    return Type::Unknown;
-                };
                 let mut seen = HashSet::new();
+                let mut has_wildcard = false;
                 let mut branch_type = None;
 
                 for branch in branches {
+                    if has_wildcard {
+                        self.diagnostics.push(Diagnostic::error(
+                            branch.pattern.span(),
+                            "match branches after a wildcard are unreachable",
+                        ));
+                    }
                     self.push_scope();
-                    let variant_name =
-                        self.validate_pattern(&branch.pattern, Some(enum_name.as_str()));
-                    if let Some(variant_name) = variant_name {
-                        if !seen.insert(variant_name.clone()) {
+                    match (&value_type, &branch.pattern) {
+                        (Type::Enum(enum_name), Pattern::Variant { .. }) => {
+                            if let Some(variant_name) =
+                                self.validate_pattern(&branch.pattern, Some(enum_name.as_str()))
+                                && !seen.insert(variant_name.clone())
+                            {
+                                self.diagnostics.push(Diagnostic::error(
+                                    branch.pattern.span(),
+                                    format!("duplicate match branch for variant `{variant_name}`"),
+                                ));
+                            }
+                        }
+                        (Type::Basic(BasicType::String), Pattern::String { value, span }) => {
+                            if !seen.insert(value.clone()) {
+                                self.diagnostics.push(Diagnostic::error(
+                                    *span,
+                                    format!("duplicate match branch for string `{value}`"),
+                                ));
+                            }
+                        }
+                        (
+                            Type::Enum(_) | Type::Basic(BasicType::String),
+                            Pattern::Wildcard { span },
+                        ) => {
+                            if has_wildcard {
+                                self.diagnostics.push(Diagnostic::error(
+                                    *span,
+                                    "duplicate wildcard match branch",
+                                ));
+                            }
+                            has_wildcard = true;
+                        }
+                        (Type::Enum(enum_name), Pattern::String { span, .. }) => {
                             self.diagnostics.push(Diagnostic::error(
-                                branch.pattern.span(),
-                                format!("duplicate match branch for variant `{variant_name}`"),
+                                *span,
+                                format!("string patterns cannot match enum `{enum_name}`"),
                             ));
                         }
+                        (Type::Basic(BasicType::String), Pattern::Variant { span, .. }) => {
+                            self.diagnostics.push(Diagnostic::error(
+                                *span,
+                                "enum patterns cannot match a `String` value",
+                            ));
+                        }
+                        (Type::Unknown, _) => {
+                            self.validate_pattern(&branch.pattern, None);
+                        }
+                        (_, _) => {}
                     }
                     let value_type =
-                        self.validate_expr_with_context(&branch.value, expected_type.clone());
+                        self.validate_match_branch_body(&branch.body, expected_type.clone());
                     self.pop_scope();
 
                     if !matches!(value_type, Type::Unknown) {
                         if let Some(first_type) = branch_type.clone() {
-                            self.report_type_mismatch(branch.value.span, first_type, value_type);
+                            self.report_type_mismatch(branch.body.span(), first_type, value_type);
                         } else {
                             branch_type = Some(value_type);
                         }
                     }
                 }
 
-                if let Some(definition) = self.enums.get(&enum_name) {
+                if let Type::Enum(enum_name) = &value_type
+                    && !has_wildcard
+                    && let Some(definition) = self.enums.get(enum_name)
+                {
                     let mut missing = definition
                         .variants
                         .keys()
@@ -745,6 +770,19 @@ impl Analyzer {
                             ),
                         ));
                     }
+                } else if value_type == Type::Basic(BasicType::String) && !has_wildcard {
+                    self.diagnostics.push(Diagnostic::error(
+                        expr.span,
+                        "non-exhaustive match for `String`; add a wildcard branch",
+                    ));
+                } else if !matches!(
+                    value_type,
+                    Type::Enum(_) | Type::Basic(BasicType::String) | Type::Unknown
+                ) {
+                    self.diagnostics.push(Diagnostic::error(
+                        value.span,
+                        "match expressions require an enum or `String` value",
+                    ));
                 }
 
                 branch_type.unwrap_or(Type::Unknown)
@@ -1478,6 +1516,21 @@ impl Analyzer {
 
                 Some(variant.clone())
             }
+            Pattern::String { .. } | Pattern::Wildcard { .. } => None,
+        }
+    }
+
+    fn validate_match_branch_body(
+        &mut self,
+        body: &MatchBranchBody,
+        expected_type: Option<Type>,
+    ) -> Type {
+        match body {
+            MatchBranchBody::Expr(expr) => self.validate_expr_with_context(expr, expected_type),
+            MatchBranchBody::Block(block) => {
+                self.validate_block(block);
+                Type::Unknown
+            }
         }
     }
 
@@ -1544,7 +1597,7 @@ impl Analyzer {
     }
 
     fn requires_mutable_capability(&self, type_: &Type) -> bool {
-        matches!(type_, Type::Struct(_) | Type::Basic(BasicType::String))
+        matches!(type_, Type::Struct(_))
     }
 
     fn expr_has_mutable_capability(&self, expr: &Expr) -> bool {
@@ -1614,14 +1667,6 @@ impl Analyzer {
 
     fn current_return_type(&self) -> Type {
         self.return_types.last().cloned().unwrap_or(Type::Unknown)
-    }
-}
-
-fn is_stable_match_value(expr: &Expr) -> bool {
-    match &expr.kind {
-        ExprKind::Identifier(_) => true,
-        ExprKind::Member { object, .. } => is_stable_match_value(object),
-        _ => false,
     }
 }
 

@@ -2,8 +2,8 @@ use std::collections::HashMap;
 
 use crate::ast::{
     BasicType, BinaryOp, Block, ElseBranch, Expr, ExprKind, FunctionBody, FunctionDecl, Item,
-    Pattern, Program, Stmt, StmtKind, StructDecl, StructInitField, StructMember, TypeRef, UnaryOp,
-    number_literal_is_float,
+    MatchBranchBody, Pattern, Program, Stmt, StmtKind, StructDecl, StructInitField, StructMember,
+    TypeRef, UnaryOp, number_literal_is_float,
 };
 use crate::diagnostic::Diagnostic;
 use crate::span::Span;
@@ -73,6 +73,11 @@ pub enum LoweredStatement {
         then_branch: Vec<LoweredStatement>,
         else_branch: Option<Vec<LoweredStatement>>,
     },
+    Match {
+        value: LoweredExpr,
+        temp_name: String,
+        branches: Vec<LoweredMatchStatementBranch>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -139,9 +144,10 @@ pub enum LoweredExprKind {
         object: Box<LoweredExpr>,
         variant: String,
     },
+    MatchValue(String),
     Match {
         value: Box<LoweredExpr>,
-        enum_name: String,
+        temp_name: String,
         branches: Vec<LoweredMatchBranch>,
     },
     FieldAccess {
@@ -157,8 +163,21 @@ pub enum LoweredExprKind {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LoweredMatchBranch {
-    pub variant: String,
+    pub pattern: LoweredPattern,
     pub value: LoweredExpr,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LoweredMatchStatementBranch {
+    pub pattern: LoweredPattern,
+    pub statements: Vec<LoweredStatement>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LoweredPattern {
+    Variant { enum_name: String, variant: String },
+    String(String),
+    Wildcard,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -901,9 +920,12 @@ fn infer_expr_type(
         | ExprKind::StructInit { .. }
         | ExprKind::Lambda(_)
         | ExprKind::Missing => None,
-        ExprKind::Match { branches, .. } => branches
-            .first()
-            .and_then(|branch| infer_expr_type(&branch.value, locals, signatures, structs, enums)),
+        ExprKind::Match { branches, .. } => branches.iter().find_map(|branch| {
+            let MatchBranchBody::Expr(expr) = &branch.body else {
+                return None;
+            };
+            infer_expr_type(expr, locals, signatures, structs, enums)
+        }),
         ExprKind::PostfixIncrement(target) => {
             infer_expr_type(target, locals, signatures, structs, enums)
         }
@@ -1019,6 +1041,7 @@ fn lower_function(
                             structs,
                             enums,
                             diagnostics,
+                            Some(&signature.return_type),
                         ) {
                             statements.push(statement);
                         }
@@ -1104,6 +1127,7 @@ fn lower_main(
                             structs,
                             enums,
                             diagnostics,
+                            None,
                         ) {
                             statements.push(statement);
                         }
@@ -1324,6 +1348,7 @@ fn lower_conditional_block(
                     structs,
                     enums,
                     diagnostics,
+                    return_type,
                 ) {
                     statements.push(statement);
                 }
@@ -1354,6 +1379,7 @@ fn lowered_statement_always_returns_value(statement: &LoweredStatement) -> bool 
         | LoweredStatement::Println(_)
         | LoweredStatement::Expr(_)
         | LoweredStatement::Return(None)
+        | LoweredStatement::Match { .. }
         | LoweredStatement::If {
             else_branch: None, ..
         } => false,
@@ -1367,7 +1393,24 @@ fn lower_expression_statement(
     structs: &HashMap<String, LoweredStruct>,
     enums: &HashMap<String, LoweredEnum>,
     diagnostics: &mut Vec<Diagnostic>,
+    return_type: Option<&LoweredType>,
 ) -> Option<LoweredStatement> {
+    if let ExprKind::Match { branches, .. } = &expr.kind
+        && branches
+            .iter()
+            .any(|branch| matches!(&branch.body, MatchBranchBody::Block(_)))
+    {
+        return lower_match_statement(
+            expr,
+            locals,
+            signatures,
+            structs,
+            enums,
+            diagnostics,
+            return_type,
+        );
+    }
+
     if matches!(expr.kind, ExprKind::PostfixIncrement(_)) {
         return lower_expr(
             expr,
@@ -1442,6 +1485,86 @@ fn lower_expression_statement(
         "expected supported function call in executable builds",
     )
     .map(LoweredStatement::Expr)
+}
+
+fn lower_match_statement(
+    expr: &Expr,
+    locals: &HashMap<String, LoweringLocal>,
+    signatures: &HashMap<String, FunctionSignature>,
+    structs: &HashMap<String, LoweredStruct>,
+    enums: &HashMap<String, LoweredEnum>,
+    diagnostics: &mut Vec<Diagnostic>,
+    return_type: Option<&LoweredType>,
+) -> Option<LoweredStatement> {
+    let ExprKind::Match { value, branches } = &expr.kind else {
+        return None;
+    };
+    let value = lower_expr(
+        value,
+        locals,
+        signatures,
+        structs,
+        enums,
+        diagnostics,
+        None,
+        "expected supported match value in executable builds",
+    )?;
+    if !matches!(
+        value.type_,
+        LoweredType::Enum(_) | LoweredType::Basic(BasicType::String)
+    ) {
+        diagnostics.push(Diagnostic::error(
+            expr.span,
+            "match statements require an enum or `String` value in executable builds",
+        ));
+        return None;
+    }
+
+    let mut lowered_branches = Vec::new();
+    let temp_name = match_temp_name(expr.span);
+    for branch in branches {
+        let mut branch_locals = locals.clone();
+        let pattern = lower_match_pattern(
+            &branch.pattern,
+            &value.type_,
+            &mut branch_locals,
+            enums,
+            diagnostics,
+            &temp_name,
+        )?;
+        let statements = match &branch.body {
+            MatchBranchBody::Block(block) => lower_conditional_block(
+                block,
+                &mut branch_locals,
+                signatures,
+                structs,
+                enums,
+                diagnostics,
+                return_type,
+            ),
+            MatchBranchBody::Expr(branch_expr) => lower_expression_statement(
+                branch_expr,
+                &branch_locals,
+                signatures,
+                structs,
+                enums,
+                diagnostics,
+                return_type,
+            )
+            .into_iter()
+            .collect(),
+        };
+        lowered_branches.push(LoweredMatchStatementBranch {
+            pattern,
+            statements,
+        });
+    }
+
+    Some(LoweredStatement::Match {
+        value,
+        temp_name,
+        branches: lowered_branches,
+    })
 }
 
 fn void_expr() -> LoweredExpr {
@@ -2448,14 +2571,6 @@ fn lower_expr(
             }
         }
         ExprKind::Match { value, branches } => {
-            if !is_stable_match_value(value) {
-                diagnostics.push(Diagnostic::error(
-                    value.span,
-                    "executable matches currently require a local, parameter, or field path",
-                ));
-                return None;
-            }
-
             let value = lower_expr(
                 value,
                 locals,
@@ -2466,65 +2581,40 @@ fn lower_expr(
                 None,
                 "expected supported match value in executable builds",
             )?;
-            let LoweredType::Enum(enum_name) = &value.type_ else {
+            if !matches!(
+                value.type_,
+                LoweredType::Enum(_) | LoweredType::Basic(BasicType::String)
+            ) {
                 diagnostics.push(Diagnostic::error(
                     expr.span,
-                    "match expressions require an enum value in executable builds",
+                    "match expressions require an enum or `String` value in executable builds",
                 ));
                 return None;
-            };
-            let enum_name = enum_name.clone();
-            let enum_ = enums.get(&enum_name)?;
+            }
             let mut lowered_branches = Vec::new();
             let mut result_type = None;
+            let temp_name = match_temp_name(expr.span);
 
             for branch in branches {
-                let Pattern::Variant {
-                    enum_name: pattern_enum_name,
-                    variant: name,
-                    binding,
-                    span,
-                } = &branch.pattern;
-                if pattern_enum_name != &enum_name {
+                let MatchBranchBody::Expr(branch_value) = &branch.body else {
                     diagnostics.push(Diagnostic::error(
-                        *span,
-                        format!(
-                            "pattern `{pattern_enum_name}.{name}` does not belong to enum `{enum_name}`"
-                        ),
-                    ));
-                    return None;
-                }
-                let Some(variant) = enum_.variants.iter().find(|variant| variant.name == *name)
-                else {
-                    diagnostics.push(Diagnostic::error(
-                        *span,
-                        format!("unknown variant `{name}` for enum `{enum_name}`"),
+                        branch.body.span(),
+                        "block-bodied match branches can only be used when the match is a statement",
                     ));
                     return None;
                 };
                 let mut branch_locals = locals.clone();
-
-                if let (Some(binding), Some(payload_type)) = (binding, &variant.payload)
-                    && binding != "_"
-                {
-                    branch_locals.insert(
-                        binding.clone(),
-                        LoweringLocal {
-                            type_: payload_type.clone(),
-                            mutable: false,
-                            replacement: Some(LoweredExpr {
-                                type_: payload_type.clone(),
-                                kind: LoweredExprKind::EnumPayload {
-                                    object: Box::new(value.clone()),
-                                    variant: name.clone(),
-                                },
-                            }),
-                        },
-                    );
-                }
+                let pattern = lower_match_pattern(
+                    &branch.pattern,
+                    &value.type_,
+                    &mut branch_locals,
+                    enums,
+                    diagnostics,
+                    &temp_name,
+                )?;
 
                 let branch_value = lower_expr(
-                    &branch.value,
+                    branch_value,
                     &branch_locals,
                     signatures,
                     structs,
@@ -2535,7 +2625,7 @@ fn lower_expr(
                 )?;
                 result_type.get_or_insert_with(|| branch_value.type_.clone());
                 lowered_branches.push(LoweredMatchBranch {
-                    variant: name.clone(),
+                    pattern,
                     value: branch_value,
                 });
             }
@@ -2552,7 +2642,7 @@ fn lower_expr(
                 type_: result_type,
                 kind: LoweredExprKind::Match {
                     value: Box::new(value),
-                    enum_name,
+                    temp_name,
                     branches: lowered_branches,
                 },
             }
@@ -2592,6 +2682,89 @@ fn find_qualified_variant<'a>(
         .find(|variant| variant.name == variant_name)
 }
 
+fn lower_match_pattern(
+    pattern: &Pattern,
+    value_type: &LoweredType,
+    locals: &mut HashMap<String, LoweringLocal>,
+    enums: &HashMap<String, LoweredEnum>,
+    diagnostics: &mut Vec<Diagnostic>,
+    match_value_name: &str,
+) -> Option<LoweredPattern> {
+    match (pattern, value_type) {
+        (
+            Pattern::Variant {
+                enum_name,
+                variant,
+                binding,
+                span,
+            },
+            LoweredType::Enum(value_enum_name),
+        ) => {
+            if enum_name != value_enum_name {
+                diagnostics.push(Diagnostic::error(
+                    *span,
+                    format!(
+                        "pattern `{enum_name}.{variant}` does not belong to enum `{value_enum_name}`"
+                    ),
+                ));
+                return None;
+            }
+            let Some(variant_definition) = enums
+                .get(enum_name)
+                .and_then(|enum_| enum_.variants.iter().find(|item| item.name == *variant))
+            else {
+                diagnostics.push(Diagnostic::error(
+                    *span,
+                    format!("unknown variant `{variant}` for enum `{enum_name}`"),
+                ));
+                return None;
+            };
+
+            if let (Some(binding), Some(payload_type)) = (binding, &variant_definition.payload)
+                && binding != "_"
+            {
+                locals.insert(
+                    binding.clone(),
+                    LoweringLocal {
+                        type_: payload_type.clone(),
+                        mutable: false,
+                        replacement: Some(LoweredExpr {
+                            type_: payload_type.clone(),
+                            kind: LoweredExprKind::EnumPayload {
+                                object: Box::new(LoweredExpr {
+                                    type_: value_type.clone(),
+                                    kind: LoweredExprKind::MatchValue(match_value_name.to_string()),
+                                }),
+                                variant: variant.clone(),
+                            },
+                        }),
+                    },
+                );
+            }
+
+            Some(LoweredPattern::Variant {
+                enum_name: enum_name.clone(),
+                variant: variant.clone(),
+            })
+        }
+        (Pattern::String { value, .. }, LoweredType::Basic(BasicType::String)) => {
+            Some(LoweredPattern::String(value.clone()))
+        }
+        (Pattern::Wildcard { .. }, _) => Some(LoweredPattern::Wildcard),
+        _ => {
+            diagnostics.push(Diagnostic::error(
+                pattern.span(),
+                "match pattern does not apply to the matched value",
+            ));
+            None
+        }
+    }
+}
+
+fn match_temp_name(span: Span) -> String {
+    format!("gust_internal_match_value_{}", span.start)
+}
+
 fn mutable_member_root(expr: &Expr) -> Option<&str> {
     match &expr.kind {
         ExprKind::Identifier(name) => Some(name),
@@ -2605,12 +2778,4 @@ fn number_pair_contains_float(left: &Expr, right: &Expr) -> bool {
         && matches!(&right.kind, ExprKind::Number(_))
         && (matches!(&left.kind, ExprKind::Number(value) if number_literal_is_float(value))
             || matches!(&right.kind, ExprKind::Number(value) if number_literal_is_float(value)))
-}
-
-fn is_stable_match_value(expr: &Expr) -> bool {
-    match &expr.kind {
-        ExprKind::Identifier(_) => true,
-        ExprKind::Member { object, .. } => is_stable_match_value(object),
-        _ => false,
-    }
 }

@@ -1,0 +1,43 @@
+fn main() {
+    let mut extractedName = ""
+    match constructBeing("person") {
+        Being.Person(person) => {
+            let name = person.name
+            extractedName = name
+        },
+        Being.Dog(dog) => {
+            let name = dog.name
+            extractedName = name
+        },
+        Being.Unknown => {
+            extractedName = "stranger"
+        },
+    }
+    io.println("Hello, " + extractedName)
+}
+
+struct Person {
+    name: String
+}
+
+struct Dog {
+    name: String
+}
+
+enum Being {
+    Person(Person)
+    Dog(Dog)
+    Unknown
+}
+
+fn constructBeing(kind: String) {
+    return match kind {
+        "person" => Being.Person(Person {
+            name: "John",
+        }),
+        "dog" => Being.Dog(Dog {
+            name: "Fido",
+        }),
+        _ => Being.Unknown,
+    }
+}
