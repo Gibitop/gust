@@ -1127,6 +1127,64 @@ fn numeric_comparisons_emit_native_c_operators() {
 }
 
 #[test]
+fn math_operators_lower_and_emit_native_c_with_precedence() {
+    let result = check_source(
+        r#"fn main() {
+    let value: i32 = -2 + 3 * 4 - 8 / 2 % 3
+}"#,
+    );
+
+    assert!(
+        !result.has_errors(),
+        "expected no frontend errors, got {:?}",
+        result.diagnostics
+    );
+
+    let lowered = lower_program(&result.program).expect("math operators should lower");
+    let source = emit_c(&lowered);
+
+    assert!(source.contains("(((-2) + (3 * 4)) - ((8 / 2) % 3))"));
+}
+
+#[test]
+fn numeric_add_preserves_annotated_integer_type() {
+    let result = check_source(
+        r#"fn main() {
+    let value: u64 = 1 + 2
+}"#,
+    );
+
+    assert!(
+        !result.has_errors(),
+        "expected no frontend errors, got {:?}",
+        result.diagnostics
+    );
+
+    let lowered = lower_program(&result.program).expect("numeric add should lower");
+
+    assert_eq!(
+        lowered.statements[0],
+        LoweredStatement::Local {
+            name: "value".to_string(),
+            value: LoweredExpr {
+                type_: basic(BasicType::U64),
+                kind: LoweredExprKind::Arithmetic {
+                    left: Box::new(LoweredExpr {
+                        type_: basic(BasicType::U64),
+                        kind: LoweredExprKind::NumberLiteral("1".to_string()),
+                    }),
+                    op: gustc::ast::BinaryOp::Add,
+                    right: Box::new(LoweredExpr {
+                        type_: basic(BasicType::U64),
+                        kind: LoweredExprKind::NumberLiteral("2".to_string()),
+                    }),
+                },
+            },
+        }
+    );
+}
+
+#[test]
 fn logical_operators_lower_and_emit_native_c() {
     let result = check_source(
         r#"fn main() {

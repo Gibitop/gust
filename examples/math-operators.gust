@@ -1,0 +1,7 @@
+fn main() {
+    let result = -2 + 3 * 4 - 8 / 2 % 3
+
+    if result == 9 {
+        io.println("math works")
+    }
+}

@@ -578,11 +578,34 @@ fn main() {
 }
 
 #[test]
-fn numeric_add_is_rejected_for_now() {
+fn numeric_math_operators_validate() {
     let result = check_source(
         r#"
 fn main() {
-    let count = 1 + 2
+    let add = 1 + 2
+    let subtract = 5 - 3
+    let multiply = 4 * 2
+    let divide = 8 / 2
+    let remainder = 9 % 4
+    let negative = -5
+    let contextual: u64 = (1 + 2) * 3
+}
+"#,
+    );
+
+    assert!(
+        !result.has_errors(),
+        "expected numeric math operators to validate, got {:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
+fn math_operators_require_numeric_operands() {
+    let result = check_source(
+        r#"
+fn main() {
+    let invalid = "Gust" * "Gust"
 }
 "#,
     );
@@ -594,18 +617,42 @@ fn main() {
             .any(|diagnostic| diagnostic.severity == Severity::Error
                 && diagnostic
                     .message
-                    .contains("operator + only supports String operands for now")),
-        "expected string-only add diagnostic, got {:?}",
+                    .contains("operator * only supports numeric operands")),
+        "expected numeric operand diagnostic, got {:?}",
         result.diagnostics
     );
 }
 
 #[test]
-fn unknown_add_operand_suppresses_followup_string_operand_error() {
+fn unary_negation_requires_signed_numeric_operand() {
     let result = check_source(
         r#"
 fn main() {
-    let message = missing + "!"
+    let count: u32 = 5
+    let invalid = -count
+}
+"#,
+    );
+
+    assert!(
+        result
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.severity == Severity::Error
+                && diagnostic
+                    .message
+                    .contains("operator - only supports signed numeric operands")),
+        "expected signed numeric operand diagnostic, got {:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
+fn unknown_math_operand_suppresses_followup_operand_error() {
+    let result = check_source(
+        r#"
+fn main() {
+    let count = missing * 2
 }
 "#,
     );
@@ -622,8 +669,8 @@ fn main() {
     assert!(
         result.diagnostics.iter().all(|diagnostic| !diagnostic
             .message
-            .contains("operator + only supports String operands")),
-        "expected Unknown to suppress concat operand cascades, got {:?}",
+            .contains("operator * only supports numeric operands")),
+        "expected Unknown to suppress arithmetic operand cascades, got {:?}",
         result.diagnostics
     );
 }

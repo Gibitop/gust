@@ -26,6 +26,9 @@ pub enum TokenKind {
     Slash,
     Plus,
     PlusPlus,
+    Minus,
+    Star,
+    Percent,
     Equal,
     EqualEqual,
     Bang,
@@ -111,6 +114,9 @@ impl<'source> Lexer<'source> {
             ',' => self.single(TokenKind::Comma, start),
             '.' => self.single(TokenKind::Dot, start),
             '/' => self.single(TokenKind::Slash, start),
+            '-' => self.single(TokenKind::Minus, start),
+            '*' => self.single(TokenKind::Star, start),
+            '%' => self.single(TokenKind::Percent, start),
             '<' => {
                 if self.match_character('=') {
                     self.token(TokenKind::LessEqual, start, self.position)
