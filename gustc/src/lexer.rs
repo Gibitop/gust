@@ -24,11 +24,16 @@ pub enum TokenKind {
     Comma,
     Dot,
     Slash,
+    SlashEqual,
     Plus,
     PlusPlus,
+    PlusEqual,
     Minus,
+    MinusEqual,
     Star,
+    StarEqual,
     Percent,
+    PercentEqual,
     Equal,
     EqualEqual,
     Bang,
@@ -113,10 +118,34 @@ impl<'source> Lexer<'source> {
             ':' => self.single(TokenKind::Colon, start),
             ',' => self.single(TokenKind::Comma, start),
             '.' => self.single(TokenKind::Dot, start),
-            '/' => self.single(TokenKind::Slash, start),
-            '-' => self.single(TokenKind::Minus, start),
-            '*' => self.single(TokenKind::Star, start),
-            '%' => self.single(TokenKind::Percent, start),
+            '/' => {
+                if self.match_character('=') {
+                    self.token(TokenKind::SlashEqual, start, self.position)
+                } else {
+                    self.single(TokenKind::Slash, start)
+                }
+            }
+            '-' => {
+                if self.match_character('=') {
+                    self.token(TokenKind::MinusEqual, start, self.position)
+                } else {
+                    self.single(TokenKind::Minus, start)
+                }
+            }
+            '*' => {
+                if self.match_character('=') {
+                    self.token(TokenKind::StarEqual, start, self.position)
+                } else {
+                    self.single(TokenKind::Star, start)
+                }
+            }
+            '%' => {
+                if self.match_character('=') {
+                    self.token(TokenKind::PercentEqual, start, self.position)
+                } else {
+                    self.single(TokenKind::Percent, start)
+                }
+            }
             '<' => {
                 if self.match_character('=') {
                     self.token(TokenKind::LessEqual, start, self.position)
@@ -134,6 +163,8 @@ impl<'source> Lexer<'source> {
             '+' => {
                 if self.match_character('+') {
                     self.token(TokenKind::PlusPlus, start, self.position)
+                } else if self.match_character('=') {
+                    self.token(TokenKind::PlusEqual, start, self.position)
                 } else {
                     self.single(TokenKind::Plus, start)
                 }

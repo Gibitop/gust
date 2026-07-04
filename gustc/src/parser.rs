@@ -265,11 +265,11 @@ impl Parser {
             _ => {
                 let target = self.parse_expression();
 
-                if self.match_kind(&TokenKind::Equal) {
+                if let Some(op) = self.match_assignment_operator() {
                     let value = self.parse_expression();
                     Stmt {
                         span: target.span.join(value.span),
-                        kind: StmtKind::Assign { target, value },
+                        kind: StmtKind::Assign { target, op, value },
                     }
                 } else {
                     Stmt {
@@ -773,6 +773,20 @@ impl Parser {
         true
     }
 
+    fn match_assignment_operator(&mut self) -> Option<Option<BinaryOp>> {
+        let op = match self.current().kind {
+            TokenKind::Equal => None,
+            TokenKind::PlusEqual => Some(BinaryOp::Add),
+            TokenKind::MinusEqual => Some(BinaryOp::Subtract),
+            TokenKind::StarEqual => Some(BinaryOp::Multiply),
+            TokenKind::SlashEqual => Some(BinaryOp::Divide),
+            TokenKind::PercentEqual => Some(BinaryOp::Remainder),
+            _ => return None,
+        };
+        self.advance();
+        Some(op)
+    }
+
     fn check_identifier(&self) -> bool {
         matches!(self.current().kind, TokenKind::Identifier(_))
     }
@@ -839,11 +853,16 @@ fn simple_kind_eq(left: &TokenKind, right: &TokenKind) -> bool {
             | (TokenKind::Comma, TokenKind::Comma)
             | (TokenKind::Dot, TokenKind::Dot)
             | (TokenKind::Slash, TokenKind::Slash)
+            | (TokenKind::SlashEqual, TokenKind::SlashEqual)
             | (TokenKind::Plus, TokenKind::Plus)
             | (TokenKind::PlusPlus, TokenKind::PlusPlus)
+            | (TokenKind::PlusEqual, TokenKind::PlusEqual)
             | (TokenKind::Minus, TokenKind::Minus)
+            | (TokenKind::MinusEqual, TokenKind::MinusEqual)
             | (TokenKind::Star, TokenKind::Star)
+            | (TokenKind::StarEqual, TokenKind::StarEqual)
             | (TokenKind::Percent, TokenKind::Percent)
+            | (TokenKind::PercentEqual, TokenKind::PercentEqual)
             | (TokenKind::Equal, TokenKind::Equal)
             | (TokenKind::EqualEqual, TokenKind::EqualEqual)
             | (TokenKind::Bang, TokenKind::Bang)
