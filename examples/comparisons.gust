@@ -1,0 +1,36 @@
+fn main() {
+    let age: u32 = 30
+    let name = "Gu" + "st"
+
+    if age == 30 {
+        io.println("equal")
+    }
+
+    if age != 0 {
+        io.println("not equal")
+    }
+
+    if age < 31 {
+        io.println("less")
+    }
+
+    if 29 <= age {
+        io.println("less or equal")
+    }
+
+    if age > 29 {
+        io.println("greater")
+    }
+
+    if age >= 30 {
+        io.println("greater or equal")
+    }
+
+    if name == "Gust" {
+        io.println("same string value")
+    }
+
+    if name != "Rust" {
+        io.println("different string value")
+    }
+}

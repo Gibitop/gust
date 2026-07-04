@@ -630,6 +630,11 @@ impl Parser {
     fn current_binary_op(&self) -> Option<(BinaryOp, u8)> {
         match self.current().kind {
             TokenKind::Plus => Some((BinaryOp::Add, 10)),
+            TokenKind::EqualEqual => Some((BinaryOp::Equal, 4)),
+            TokenKind::BangEqual => Some((BinaryOp::NotEqual, 4)),
+            TokenKind::Less => Some((BinaryOp::Less, 5)),
+            TokenKind::LessEqual => Some((BinaryOp::LessEqual, 5)),
+            TokenKind::Greater => Some((BinaryOp::Greater, 5)),
             TokenKind::GreaterEqual => Some((BinaryOp::GreaterEqual, 5)),
             _ => None,
         }
@@ -787,7 +792,10 @@ fn simple_kind_eq(left: &TokenKind, right: &TokenKind) -> bool {
             | (TokenKind::Plus, TokenKind::Plus)
             | (TokenKind::PlusPlus, TokenKind::PlusPlus)
             | (TokenKind::Equal, TokenKind::Equal)
+            | (TokenKind::EqualEqual, TokenKind::EqualEqual)
+            | (TokenKind::BangEqual, TokenKind::BangEqual)
             | (TokenKind::FatArrow, TokenKind::FatArrow)
+            | (TokenKind::LessEqual, TokenKind::LessEqual)
             | (TokenKind::GreaterEqual, TokenKind::GreaterEqual)
             | (TokenKind::Less, TokenKind::Less)
             | (TokenKind::Greater, TokenKind::Greater)

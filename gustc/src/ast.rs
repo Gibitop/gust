@@ -188,7 +188,26 @@ pub struct StructInitField {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BinaryOp {
     Add,
+    Equal,
+    NotEqual,
+    Less,
+    LessEqual,
+    Greater,
     GreaterEqual,
+}
+
+impl BinaryOp {
+    pub fn symbol(self) -> &'static str {
+        match self {
+            BinaryOp::Add => "+",
+            BinaryOp::Equal => "==",
+            BinaryOp::NotEqual => "!=",
+            BinaryOp::Less => "<",
+            BinaryOp::LessEqual => "<=",
+            BinaryOp::Greater => ">",
+            BinaryOp::GreaterEqual => ">=",
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
