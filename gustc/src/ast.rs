@@ -10,6 +10,7 @@ pub enum Item {
     Import(ImportDecl),
     Enum(EnumDecl),
     Struct(StructDecl),
+    Extension(ExtensionDecl),
     Function(FunctionDecl),
 }
 
@@ -19,6 +20,7 @@ impl Item {
             Item::Import(item) => item.span,
             Item::Enum(item) => item.span,
             Item::Struct(item) => item.span,
+            Item::Extension(item) => item.span,
             Item::Function(item) => item.span,
         }
     }
@@ -56,12 +58,21 @@ pub struct StructDecl {
 pub enum StructMember {
     Field(FieldDecl),
     Method(FunctionDecl),
+    StaticMethod(FunctionDecl),
 }
 
 #[derive(Debug, Clone)]
 pub struct FieldDecl {
     pub name: String,
     pub type_ref: TypeRef,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone)]
+pub struct ExtensionDecl {
+    pub type_ref: TypeRef,
+    pub function: FunctionDecl,
+    pub static_: bool,
     pub span: Span,
 }
 

@@ -86,3 +86,41 @@ Thread safety is currently the programmer's responsibility.
 The clone is independent and may initialize a mutable binding.
 
 Strings are immutable and may be shared between a value and its clone.
+
+## Struct methods
+
+Struct methods use an implicit immutable `self` parameter whose type is the enclosing struct.
+Method calls are statically dispatched and lower to functions with the receiver as their first
+argument.
+
+Methods that mutate receiver state declare `mut self` in their parameter list, without a type
+annotation. The receiver does not count as a call argument. Calling such a method requires a
+mutable-capable receiver.
+
+The method name `clone` is reserved for the built-in deep clone operation.
+
+## Extension functions
+
+An extension function is declared at the top level with `fn Type.functionName(...)`.
+It has an implicit immutable `self` parameter of the extended type and is statically dispatched.
+An extension function may similarly declare `mut self` when it mutates receiver state.
+
+Extension functions do not become members of the extended type. They are available only in the
+module where they are declared and in modules that explicitly import them. Importing or otherwise
+making a type available does not make its extension functions available. A module may extend a
+type declared by another module.
+
+Real type members take precedence over extension functions with the same name. The extension
+function name `clone` is reserved for the built-in deep clone operation.
+
+## Static functions
+
+A static function declared inside a type uses `static fn functionName(...)`. It is called through
+the type, does not receive `self`, and is available wherever the type is available.
+
+A static extension function uses `static fn Type.functionName(...)`. Like an instance extension,
+it is available only where it is declared or explicitly imported and does not become a member of
+the extended type.
+
+`Self` refers to the enclosing or extended type inside both static and instance functions. Real
+static functions take precedence over static extension functions with the same name.

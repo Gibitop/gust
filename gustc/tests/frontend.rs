@@ -407,14 +407,84 @@ fn main() {
 }
 
 #[test]
-fn struct_methods_remain_unsupported() {
+fn struct_methods_validate_with_typed_self_and_arguments() {
     let result = check_source(
         r#"
 struct Lang {
     name: String
 
-    fn displayName(): String {
-        return self.name
+    fn greeting(prefix: String): String {
+        return prefix + self.name
+    }
+}
+
+fn main() {
+    let lang = Lang { name: "Gust" }
+    io.println(lang.greeting("Hello, "))
+}
+"#,
+    );
+
+    assert!(
+        result.diagnostics.is_empty(),
+        "expected struct method to validate, got {:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
+fn struct_method_calls_report_unknown_methods_and_argument_mismatches() {
+    let result = check_source(
+        r#"
+struct Lang {
+    name: String
+
+    fn greeting(prefix: String): String {
+        return prefix + self.name
+    }
+}
+
+fn main() {
+    let lang = Lang { name: "Gust" }
+    lang.missing()
+    lang.greeting(1)
+}
+"#,
+    );
+
+    assert!(
+        result
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.severity == Severity::Error
+                && diagnostic
+                    .message
+                    .contains("unknown method `missing` for struct `Lang`")),
+        "expected unknown method error, got {:?}",
+        result.diagnostics
+    );
+    assert!(
+        result
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.severity == Severity::Error
+                && diagnostic
+                    .message
+                    .contains("expected value of type `String`, got `i32`")),
+        "expected method argument type error, got {:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
+fn struct_method_self_is_immutable() {
+    let result = check_source(
+        r#"
+struct Counter {
+    value: i32
+
+    fn increment(): void {
+        self.value++
     }
 }
 
@@ -426,11 +496,335 @@ fn main() {}
         result
             .diagnostics
             .iter()
-            .any(|diagnostic| diagnostic.severity == Severity::Warning
+            .any(|diagnostic| diagnostic.severity == Severity::Error
                 && diagnostic
                     .message
-                    .contains("methods are parsed but method dispatch is not implemented yet")),
-        "expected unsupported-method warning, got {:?}",
+                    .contains("cannot mutate field of immutable binding `self`")),
+        "expected immutable self error, got {:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
+fn struct_methods_reject_duplicate_and_reserved_names() {
+    let result = check_source(
+        r#"
+struct Value {
+    fn display(): void {}
+    fn display(): void {}
+    fn clone(): Value {
+        return self
+    }
+}
+
+fn main() {}
+"#,
+    );
+
+    assert!(
+        result
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.severity == Severity::Error
+                && diagnostic
+                    .message
+                    .contains("duplicate method `display` in struct `Value`")),
+        "expected duplicate method error, got {:?}",
+        result.diagnostics
+    );
+    assert!(
+        result
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.severity == Severity::Error
+                && diagnostic
+                    .message
+                    .contains("method name `clone` is reserved")),
+        "expected reserved method name error, got {:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
+fn mutable_self_allows_member_and_extension_mutation() {
+    let result = check_source(
+        r#"
+struct Counter {
+    value: i32
+
+    fn increment(mut self): void {
+        self.value++
+    }
+}
+
+fn Counter.add(mut self, amount: i32): void {
+    self.value += amount
+}
+
+fn main() {
+    let mut counter = Counter { value: 0 }
+    counter.increment()
+    counter.add(2)
+}
+"#,
+    );
+
+    assert!(
+        result.diagnostics.is_empty(),
+        "expected mutable receivers to validate, got {:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
+fn mutable_self_call_on_immutable_binding_has_a_dedicated_error() {
+    let result = check_source(
+        r#"
+struct Counter {
+    value: i32
+
+    fn increment(mut self): void {
+        self.value++
+    }
+}
+
+fn main() {
+    let counter = Counter { value: 0 }
+    counter.increment()
+}
+"#,
+    );
+
+    assert!(
+        result
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.severity == Severity::Error
+                && diagnostic.message.contains(
+                    "cannot call mutable function `Counter.increment` through immutable binding `counter`; declare it with `let mut counter`"
+                )),
+        "expected dedicated immutable receiver error, got {:?}",
+        result.diagnostics
+    );
+    assert!(
+        !result
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.message.contains("expects 1 arguments")),
+        "receiver must not count as a call argument, got {:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
+fn mutable_self_rejects_type_annotations() {
+    let result = check_source(
+        r#"
+struct Counter {
+    value: i32
+
+    fn increment(mut self: Self): void {
+        self.value++
+    }
+}
+
+fn main() {}
+"#,
+    );
+
+    assert!(
+        result
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.severity == Severity::Error
+                && diagnostic.message.contains(
+                    "mutable receivers must be written `mut self` without a type annotation"
+                )),
+        "expected mutable receiver syntax error, got {:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
+fn extension_functions_parse_and_validate_with_typed_self() {
+    use gustc::ast::{FunctionBody, Item};
+
+    let result = check_source(
+        r#"
+struct Greeter {
+    name: String
+}
+
+fn Greeter.greeting(prefix: String) {
+    return prefix + self.name
+}
+
+fn main() {
+    let greeter = Greeter { name: "Gust" }
+    io.println(greeter.greeting("Hello, "))
+}
+"#,
+    );
+
+    assert!(
+        result.diagnostics.is_empty(),
+        "expected extension function to validate, got {:?}",
+        result.diagnostics
+    );
+
+    let Item::Extension(extension) = &result.program.items[1] else {
+        panic!("expected extension declaration");
+    };
+    assert_eq!(extension.type_ref.name, "Greeter");
+    assert_eq!(extension.function.name.as_deref(), Some("greeting"));
+    assert!(matches!(extension.function.body, FunctionBody::Block(_)));
+}
+
+#[test]
+fn extension_functions_validate_for_basic_and_imported_types() {
+    let result = check_source(
+        r#"
+from package import { External, Other }
+
+fn String.withSuffix(suffix: String): String {
+    return self + suffix
+}
+
+fn External.label(): String {
+    return "external"
+}
+
+fn Other.label(): String {
+    return "other"
+}
+
+fn externalLabel(value: External): String {
+    return value.label()
+}
+
+fn otherLabel(value: Other): String {
+    return value.label()
+}
+
+fn main() {
+    io.println("Gust".withSuffix("!"))
+}
+"#,
+    );
+
+    assert!(
+        !result.has_errors(),
+        "expected extensions on non-local types to validate, got {:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
+fn extension_functions_reject_unknown_duplicate_and_reserved_declarations() {
+    let result = check_source(
+        r#"
+fn Missing.label(): String => "missing"
+fn String.label(): String => self
+fn String.label(): String => self
+fn String.clone(): String => self
+
+fn main() {}
+"#,
+    );
+
+    assert!(
+        result
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.severity == Severity::Error
+                && diagnostic.message.contains("unknown type `Missing`")),
+        "expected unknown extension type error, got {:?}",
+        result.diagnostics
+    );
+    assert!(
+        result
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.severity == Severity::Error
+                && diagnostic
+                    .message
+                    .contains("duplicate extension function `label` for type `String`")),
+        "expected duplicate extension error, got {:?}",
+        result.diagnostics
+    );
+    assert!(
+        result
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.severity == Severity::Error
+                && diagnostic
+                    .message
+                    .contains("extension function name `clone` is reserved")),
+        "expected reserved extension error, got {:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
+fn static_functions_parse_and_validate_with_contextual_self() {
+    use gustc::ast::{Item, StructMember};
+
+    let result = check_source(
+        r#"
+struct Greeter {
+    name: String
+
+    static fn new(name: String): Self => Self { name: name }
+}
+
+static fn Greeter.default(): Self => Self.new("Gust")
+
+fn main() {
+    let greeter = Greeter.default()
+    io.println(greeter.name)
+}
+"#,
+    );
+
+    assert!(
+        result.diagnostics.is_empty(),
+        "expected static functions to validate, got {:?}",
+        result.diagnostics
+    );
+
+    let Item::Struct(struct_) = &result.program.items[0] else {
+        panic!("expected struct");
+    };
+    assert!(matches!(
+        &struct_.members[1],
+        StructMember::StaticMethod(function)
+            if function.name.as_deref() == Some("new")
+    ));
+    let Item::Extension(extension) = &result.program.items[1] else {
+        panic!("expected static extension declaration");
+    };
+    assert!(extension.static_);
+}
+
+#[test]
+fn static_functions_do_not_define_an_instance_self() {
+    let result = check_source(
+        r#"
+struct Value {
+    static fn invalid(): String => self
+}
+
+fn main() {}
+"#,
+    );
+
+    assert!(
+        result
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.severity == Severity::Error
+                && diagnostic.message.contains("unknown name `self`")),
+        "expected static self error, got {:?}",
         result.diagnostics
     );
 }
