@@ -60,6 +60,7 @@ pub enum TokenKind {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Keyword {
+    As,
     Else,
     Enum,
     False,
@@ -345,6 +346,7 @@ impl<'source> Lexer<'source> {
 
         let lexeme = self.source[start..self.position].to_string();
         let kind = match lexeme.as_str() {
+            "as" => TokenKind::Keyword(Keyword::As),
             "else" => TokenKind::Keyword(Keyword::Else),
             "enum" => TokenKind::Keyword(Keyword::Enum),
             "false" => TokenKind::Keyword(Keyword::False),

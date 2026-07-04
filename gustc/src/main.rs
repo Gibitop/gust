@@ -5,9 +5,8 @@ use std::process::{self, Command, ExitCode};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use gustc::c_codegen::emit_c;
-use gustc::check_source;
 use gustc::lower::lower_program;
-use gustc::span::SourceMap;
+use gustc::project::check_project;
 
 const USAGE: &str = "usage: gustc <file.gust> [-o <output>] [--emit-c <output.c>]";
 
@@ -18,7 +17,12 @@ fn main() -> ExitCode {
         return ExitCode::FAILURE;
     };
 
-    let source_path = PathBuf::from(&path);
+    let requested_path = PathBuf::from(&path);
+    let source_path = if requested_path.is_dir() {
+        requested_path.join("main.gust")
+    } else {
+        requested_path
+    };
     let mut output_path = None;
     let mut emit_c_path = None;
 
@@ -62,19 +66,16 @@ fn main() -> ExitCode {
         }
     });
 
-    let source = match fs::read_to_string(&path) {
-        Ok(source) => source,
+    let result = match check_project(&source_path) {
+        Ok(result) => result,
         Err(error) => {
-            eprintln!("{path}: error: failed to read source file: {error}");
+            eprintln!("{path}: error: {error}");
             return ExitCode::FAILURE;
         }
     };
 
-    let source_map = SourceMap::new(&source);
-    let result = check_source(&source);
-
     for diagnostic in &result.diagnostics {
-        eprintln!("{}", diagnostic.render(&path, &source_map));
+        eprintln!("{}", result.sources.render(diagnostic));
     }
 
     if result.has_errors() {
@@ -85,7 +86,7 @@ fn main() -> ExitCode {
         Ok(program) => program,
         Err(diagnostics) => {
             for diagnostic in diagnostics {
-                eprintln!("{}", diagnostic.render(&path, &source_map));
+                eprintln!("{}", result.sources.render(&diagnostic));
             }
 
             return ExitCode::FAILURE;

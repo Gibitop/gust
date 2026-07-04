@@ -4,6 +4,7 @@ pub mod diagnostic;
 pub mod lexer;
 pub mod lower;
 pub mod parser;
+pub mod project;
 pub mod semantic;
 pub mod span;
 

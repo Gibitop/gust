@@ -29,7 +29,21 @@ impl Item {
 #[derive(Debug, Clone)]
 pub struct ImportDecl {
     pub path: String,
-    pub names: Vec<String>,
+    pub names: Vec<ImportName>,
+    pub namespace: Option<ImportNamespace>,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone)]
+pub struct ImportNamespace {
+    pub name: String,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone)]
+pub struct ImportName {
+    pub name: String,
+    pub alias: Option<String>,
     pub span: Span,
 }
 

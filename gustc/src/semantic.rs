@@ -19,6 +19,10 @@ fn extension_name(type_name: &str, function_name: &str) -> String {
     format!("extension {type_name}.{function_name}")
 }
 
+fn source_callable_name(name: &str) -> &str {
+    name.rsplit_once("::").map_or(name, |(_, name)| name)
+}
+
 struct Analyzer {
     diagnostics: Vec<Diagnostic>,
     values: HashSet<String>,
@@ -28,6 +32,7 @@ struct Analyzer {
     functions: HashMap<String, FunctionSignature>,
     extensions: HashMap<String, FunctionSignature>,
     static_extensions: HashMap<String, FunctionSignature>,
+    imported_namespaces: HashSet<String>,
     unsupported_features: HashSet<&'static str>,
     scopes: Vec<HashMap<String, Binding>>,
     return_types: Vec<Type>,
@@ -111,6 +116,7 @@ impl Analyzer {
             functions: HashMap::new(),
             extensions: HashMap::new(),
             static_extensions: HashMap::new(),
+            imported_namespaces: HashSet::new(),
             unsupported_features: HashSet::new(),
             scopes: Vec::new(),
             return_types: Vec::new(),
@@ -125,10 +131,16 @@ impl Analyzer {
         for item in &program.items {
             match item {
                 Item::Import(item) => {
-                    for name in &item.names {
+                    if let Some(namespace) = &item.namespace {
+                        self.values.insert(namespace.name.clone());
+                        self.imported_namespaces.insert(namespace.name.clone());
+                        self.insert_top_level(&mut names, &namespace.name, namespace.span);
+                    }
+                    for import in &item.names {
+                        let name = import.alias.as_ref().unwrap_or(&import.name);
                         self.values.insert(name.clone());
                         self.types.insert(name.clone());
-                        self.insert_top_level(&mut names, name, item.span);
+                        self.insert_top_level(&mut names, name, import.span);
                     }
                 }
                 Item::Enum(item) => {
@@ -1498,10 +1510,11 @@ impl Analyzer {
         name: &str,
         args: &[Expr],
     ) -> Type {
+        let source_name = source_callable_name(name);
         let intrinsic = if let Type::Struct(struct_name) = &type_ {
             self.structs
                 .get(struct_name)
-                .and_then(|struct_| struct_.static_methods.get(name))
+                .and_then(|struct_| struct_.static_methods.get(source_name))
                 .cloned()
         } else {
             None
@@ -1515,7 +1528,7 @@ impl Analyzer {
             self.diagnostics.push(Diagnostic::error(
                 expr.span,
                 format!(
-                    "unknown static function `{name}` for type `{}`",
+                    "unknown static function `{source_name}` for type `{}`",
                     type_.name()
                 ),
             ));
@@ -1524,7 +1537,7 @@ impl Analyzer {
             }
             return Type::Unknown;
         };
-        let qualified_name = format!("{}.{name}", type_.name());
+        let qualified_name = format!("{}.{source_name}", type_.name());
 
         if args.len() != signature.params.len() {
             self.diagnostics.push(Diagnostic::error(
@@ -1564,10 +1577,11 @@ impl Analyzer {
             return Type::Unknown;
         }
 
+        let source_name = source_callable_name(name);
         let intrinsic = if let Type::Struct(struct_name) = &object_type {
             self.structs
                 .get(struct_name)
-                .and_then(|struct_| struct_.methods.get(name))
+                .and_then(|struct_| struct_.methods.get(source_name))
                 .cloned()
         } else {
             None
@@ -1587,7 +1601,7 @@ impl Analyzer {
                 };
                 self.diagnostics.push(Diagnostic::error(
                     expr.span,
-                    format!("unknown method `{name}` for {target}"),
+                    format!("unknown method `{source_name}` for {target}"),
                 ));
             }
 
@@ -1597,7 +1611,7 @@ impl Analyzer {
 
             return Type::Unknown;
         };
-        let qualified_name = format!("{}.{name}", object_type.name());
+        let qualified_name = format!("{}.{source_name}", object_type.name());
 
         if signature.mutable_self && !self.expr_has_mutable_capability(object) {
             let message = if let Some(binding_name) = mutable_member_root(object)
@@ -1780,6 +1794,12 @@ impl Analyzer {
         };
         let name = resolved_name.as_str();
         let Some(definition) = self.structs.get(name).cloned() else {
+            if self.is_imported_namespace_member(name) {
+                for field in fields {
+                    self.validate_expr(&field.value);
+                }
+                return Type::Unknown;
+            }
             if BasicType::from_name(name).is_none() && !self.types.contains(name) {
                 self.diagnostics
                     .push(Diagnostic::error(span, format!("unknown type `{name}`")));
@@ -1993,8 +2013,12 @@ impl Analyzer {
         }
 
         let basic_type = BasicType::from_name(&type_ref.name);
+        let imported_namespace_member = self.is_imported_namespace_member(&type_ref.name);
 
-        if basic_type.is_none() && !self.types.contains(&type_ref.name) {
+        if basic_type.is_none()
+            && !self.types.contains(&type_ref.name)
+            && !imported_namespace_member
+        {
             self.diagnostics.push(Diagnostic::error(
                 type_ref.span,
                 format!("unknown type `{}`", type_ref.name),
@@ -2012,7 +2036,7 @@ impl Analyzer {
             self.validate_type(arg);
         }
 
-        if !type_ref.args.is_empty() {
+        if imported_namespace_member || !type_ref.args.is_empty() {
             Type::Unknown
         } else if let Some(basic_type) = basic_type {
             Type::Basic(basic_type)
@@ -2025,6 +2049,11 @@ impl Analyzer {
         } else {
             Type::Unknown
         }
+    }
+
+    fn is_imported_namespace_member(&self, name: &str) -> bool {
+        name.split_once('.')
+            .is_some_and(|(namespace, _)| self.imported_namespaces.contains(namespace))
     }
 
     fn requires_unsupported_default(&self, type_ref: &TypeRef) -> bool {

@@ -1,0 +1,13 @@
+from ./greeting import greet
+from ./greeting import { Greeter as GreeterType }
+from ../fib import { fib }
+
+fn main() {
+    let greeter = GreeterType { name: "Gust" }
+    io.println(greet.greeting(greeter))
+
+    let result = fib(10)
+    if result == 55 {
+        io.println("fib works")
+    }
+}

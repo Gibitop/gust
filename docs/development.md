@@ -8,6 +8,25 @@ First toolchain will be implemented in the rust programming language. Later the 
 
 Minimal gust project contains a single `.gust` file with a `main` function
 
+## Modules
+
+Local modules use relative paths and named imports. A relative import without an extension resolves
+to a `.gust` file next to the importing module. Top-level declarations are available for named
+import; explicit export visibility will be introduced separately. Imported names can be bound to a
+different local name with `from ./module import { original as localName }`.
+
+An unbraced import binds the module as a namespace:
+`from ./module import namespace`. Declarations are then accessed through the namespace, such as
+`namespace.function()` or `namespace.Struct { value: 1 }`. Extension functions must still be
+imported by name so their availability remains explicit at method call sites.
+
+The compiler loads the complete local module graph before semantic analysis. Imported modules use
+deterministic internal names derived from their import path so declarations with the same source
+name in different modules do not collide. Only names listed by an importing module are added to
+that module's scope. Extension functions follow the same rule and retain real-member precedence.
+
+Package module resolution is not implemented yet. Import cycles are rejected.
+
 ## Syntax
 
 Syntax is very similar to Rust. Notable differences:
@@ -18,7 +37,7 @@ Syntax is very similar to Rust. Notable differences:
 - Function return types are optional and can be inferred by the compiler
 - We prefer camelCase where rust uses snake_case
 - No syntax for features missing by design or not implemented in this language yet (eg. life times, macros, etc)
-- Imports are done very differently from rust. See the examples/milestone.gust file for an example. // TODO: replace with a module example, when modules are implemented
+- Imports are done very differently from rust. See the examples/modules directory for an example
 
 ## String memory management
 

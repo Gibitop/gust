@@ -1,7 +1,8 @@
 use crate::ast::{
     BinaryOp, Block, ElseBranch, EnumDecl, EnumVariant, Expr, ExprKind, ExtensionDecl, FieldDecl,
-    FunctionBody, FunctionDecl, ImportDecl, Item, MatchBranch, MatchBranchBody, Param, Pattern,
-    Program, Stmt, StmtKind, StructDecl, StructInitField, StructMember, TypeRef, UnaryOp,
+    FunctionBody, FunctionDecl, ImportDecl, ImportName, ImportNamespace, Item, MatchBranch,
+    MatchBranchBody, Param, Pattern, Program, Stmt, StmtKind, StructDecl, StructInitField,
+    StructMember, TypeRef, UnaryOp,
 };
 use crate::diagnostic::Diagnostic;
 use crate::lexer::{Keyword, Token, TokenKind};
@@ -63,29 +64,46 @@ impl Parser {
 
         let mut names = Vec::new();
         let braced = self.match_kind(&TokenKind::LeftBrace);
+        let namespace = if braced {
+            while !self.at_eof() && !self.check_kind(&TokenKind::RightBrace) {
+                let name_start = self.current().span;
+                if let Some(name) = self.consume_identifier() {
+                    let alias = if self.match_keyword(Keyword::As) {
+                        Some(self.expect_identifier("expected import alias after `as`"))
+                    } else {
+                        None
+                    };
+                    names.push(ImportName {
+                        name,
+                        alias,
+                        span: name_start.join(self.previous_span()),
+                    });
+                } else {
+                    self.error_here("expected imported name");
+                    break;
+                }
 
-        while !self.at_eof() && (!braced || !self.check_kind(&TokenKind::RightBrace)) {
-            if let Some(name) = self.consume_identifier() {
-                names.push(name);
-            } else {
-                self.error_here("expected imported name");
-                break;
+                if !self.match_kind(&TokenKind::Comma) {
+                    break;
+                }
             }
-
-            if !self.match_kind(&TokenKind::Comma) {
-                break;
-            }
-        }
-
-        if braced {
             self.expect_kind(&TokenKind::RightBrace, "`}`");
-        }
+            None
+        } else {
+            let namespace_start = self.current().span;
+            let name = self.expect_identifier("expected module namespace");
+            Some(ImportNamespace {
+                name,
+                span: namespace_start.join(self.previous_span()),
+            })
+        };
 
         let end = self.previous_span();
 
         ImportDecl {
             path,
             names,
+            namespace,
             span: start.join(end),
         }
     }
@@ -531,8 +549,7 @@ impl Parser {
                     kind: ExprKind::PostfixIncrement(Box::new(expr)),
                 };
             } else if self.allow_struct_init && self.check_kind(&TokenKind::LeftBrace) {
-                if let ExprKind::Identifier(name) = &expr.kind {
-                    let name = name.clone();
+                if let Some(name) = expression_path(&expr) {
                     expr = self.parse_struct_init(name, expr.span);
                 } else {
                     break;
@@ -684,9 +701,15 @@ impl Parser {
             return Pattern::Wildcard { span: start };
         }
 
-        let enum_name = self.expect_identifier("expected enum name in match pattern");
-        self.expect_kind(&TokenKind::Dot, "`.`");
-        let variant = self.expect_identifier("expected enum variant in match pattern");
+        let mut path = vec![self.expect_identifier("expected enum name in match pattern")];
+        while self.match_kind(&TokenKind::Dot) {
+            path.push(self.expect_identifier("expected enum variant in match pattern"));
+        }
+        let variant = path.pop().unwrap_or_default();
+        let enum_name = path.join(".");
+        if enum_name.is_empty() {
+            self.error_here("expected `.` and enum variant in match pattern");
+        }
         let binding = if self.match_kind(&TokenKind::LeftParen) {
             let binding = self.expect_identifier("expected pattern binding");
             self.expect_kind(&TokenKind::RightParen, "`)`");
@@ -706,12 +729,16 @@ impl Parser {
 
     fn parse_type(&mut self) -> Option<TypeRef> {
         let start = self.current().span;
-        let name = if let Some(name) = self.consume_identifier() {
+        let mut name = if let Some(name) = self.consume_identifier() {
             name
         } else {
             self.error_here("expected type name");
             return None;
         };
+        while self.match_kind(&TokenKind::Dot) {
+            name.push('.');
+            name.push_str(&self.expect_identifier("expected type name after `.`"));
+        }
 
         let mut args = Vec::new();
         let mut end = self.previous_span();
@@ -964,6 +991,14 @@ impl Parser {
     fn error_here(&mut self, message: impl Into<String>) {
         self.diagnostics
             .push(Diagnostic::error(self.current().span, message));
+    }
+}
+
+fn expression_path(expr: &Expr) -> Option<String> {
+    match &expr.kind {
+        ExprKind::Identifier(name) => Some(name.clone()),
+        ExprKind::Member { object, name } => Some(format!("{}.{name}", expression_path(object)?)),
+        _ => None,
     }
 }
 

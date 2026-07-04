@@ -226,6 +226,10 @@ fn extension_name(type_name: &str, function_name: &str) -> String {
     format!("extension {type_name}.{function_name}")
 }
 
+fn source_callable_name(name: &str) -> &str {
+    name.rsplit_once("::").map_or(name, |(_, name)| name)
+}
+
 fn static_method_name(type_name: &str, function_name: &str) -> String {
     format!("static {type_name}.{function_name}")
 }
@@ -240,7 +244,7 @@ fn callable_method_name(
     signatures: &HashMap<String, FunctionSignature>,
 ) -> Option<String> {
     if let LoweredType::Struct(struct_name) = type_ {
-        let name = method_name(struct_name, name);
+        let name = method_name(struct_name, source_callable_name(name));
         if signatures.contains_key(&name) {
             return Some(name);
         }
@@ -255,7 +259,7 @@ fn callable_static_name(
     name: &str,
     signatures: &HashMap<String, FunctionSignature>,
 ) -> Option<String> {
-    let method_name = static_method_name(&type_.name(), name);
+    let method_name = static_method_name(&type_.name(), source_callable_name(name));
     if signatures.contains_key(&method_name) {
         return Some(method_name);
     }
