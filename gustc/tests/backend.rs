@@ -1125,3 +1125,60 @@ fn numeric_comparisons_emit_native_c_operators() {
     assert!(source.contains("(gust_age > 29)"));
     assert!(source.contains("(gust_age >= 30)"));
 }
+
+#[test]
+fn logical_operators_lower_and_emit_native_c() {
+    let result = check_source(
+        r#"fn main() {
+    let age: u32 = 30
+    let enabled = true
+    let disabled = false
+
+    if age >= 18 && enabled && !disabled {
+        io.println("access granted")
+    }
+}"#,
+    );
+
+    assert!(
+        !result.has_errors(),
+        "expected no frontend errors, got {:?}",
+        result.diagnostics
+    );
+
+    let lowered = lower_program(&result.program).expect("logical operators should lower");
+    let source = emit_c(&lowered);
+
+    assert!(source.contains("&&"));
+    assert!(source.contains("(!gust_disabled)"));
+    assert!(source.contains("(gust_age >= 18)"));
+}
+
+#[test]
+fn logical_operators_preserve_short_circuiting_in_c() {
+    let result = check_source(
+        r#"fn shouldNotRun(): bool {
+    io.println("unexpected")
+    return true
+}
+
+fn main() {
+    if false && shouldNotRun() {}
+    if true || shouldNotRun() {
+        io.println("done")
+    }
+}"#,
+    );
+
+    assert!(
+        !result.has_errors(),
+        "expected no frontend errors, got {:?}",
+        result.diagnostics
+    );
+
+    let lowered = lower_program(&result.program).expect("logical operators should lower");
+    let source = emit_c(&lowered);
+
+    assert!(source.contains("(false && gust_fn_"));
+    assert!(source.contains("(true || gust_fn_"));
+}

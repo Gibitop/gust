@@ -165,7 +165,9 @@ fn expr_uses_type(expr: &LoweredExpr, type_: BasicType) -> bool {
             LoweredExprKind::StringConcat(left, right) => {
                 expr_uses_type(left, type_) || expr_uses_type(right, type_)
             }
-            LoweredExprKind::Comparison { left, right, .. } => {
+            LoweredExprKind::Not(operand) => expr_uses_type(operand, type_),
+            LoweredExprKind::Logical { left, right, .. }
+            | LoweredExprKind::Comparison { left, right, .. } => {
                 expr_uses_type(left, type_) || expr_uses_type(right, type_)
             }
             LoweredExprKind::StructLiteral { fields, .. } => fields
@@ -239,6 +241,10 @@ fn statement_uses_string_equality(statement: &LoweredStatement) -> bool {
 
 fn expr_uses_string_equality(expr: &LoweredExpr) -> bool {
     match &expr.kind {
+        LoweredExprKind::Not(operand) => expr_uses_string_equality(operand),
+        LoweredExprKind::Logical { left, right, .. } => {
+            expr_uses_string_equality(left) || expr_uses_string_equality(right)
+        }
         LoweredExprKind::Comparison { left, op, right } => {
             matches!(op, BinaryOp::Equal | BinaryOp::NotEqual)
                 && left.type_ == LoweredType::Basic(BasicType::String)
@@ -289,7 +295,9 @@ fn statement_uses_string_concat(statement: &LoweredStatement) -> bool {
 fn expr_uses_string_concat(expr: &LoweredExpr) -> bool {
     match &expr.kind {
         LoweredExprKind::StringConcat(_, _) => true,
-        LoweredExprKind::Comparison { left, right, .. } => {
+        LoweredExprKind::Not(operand) => expr_uses_string_concat(operand),
+        LoweredExprKind::Logical { left, right, .. }
+        | LoweredExprKind::Comparison { left, right, .. } => {
             expr_uses_string_concat(left) || expr_uses_string_concat(right)
         }
         LoweredExprKind::StructLiteral { fields, .. } => fields
@@ -397,7 +405,9 @@ fn expr_calls_name(expr: &LoweredExpr, name: &str) -> bool {
         LoweredExprKind::StringConcat(left, right) => {
             expr_calls_name(left, name) || expr_calls_name(right, name)
         }
-        LoweredExprKind::Comparison { left, right, .. } => {
+        LoweredExprKind::Not(operand) => expr_calls_name(operand, name),
+        LoweredExprKind::Logical { left, right, .. }
+        | LoweredExprKind::Comparison { left, right, .. } => {
             expr_calls_name(left, name) || expr_calls_name(right, name)
         }
         LoweredExprKind::StructLiteral { fields, .. } => fields
@@ -503,6 +513,8 @@ fn push_c_statement(source: &mut String, statement: &LoweredStatement, indent: u
                 source.push_str(");\n");
             }
             LoweredExprKind::StringConcat(_, _)
+            | LoweredExprKind::Not(_)
+            | LoweredExprKind::Logical { .. }
             | LoweredExprKind::Comparison { .. }
             | LoweredExprKind::FieldAccess { .. }
             | LoweredExprKind::Call { .. } => {
@@ -655,6 +667,20 @@ fn push_c_value(source: &mut String, value: &LoweredExpr) {
             source.push_str("gust_rt_string_concat(");
             push_c_value(source, left);
             source.push_str(", ");
+            push_c_value(source, right);
+            source.push(')');
+        }
+        LoweredExprKind::Not(operand) => {
+            source.push_str("(!");
+            push_c_value(source, operand);
+            source.push(')');
+        }
+        LoweredExprKind::Logical { left, op, right } => {
+            source.push('(');
+            push_c_value(source, left);
+            source.push(' ');
+            source.push_str(op.symbol());
+            source.push(' ');
             push_c_value(source, right);
             source.push(')');
         }

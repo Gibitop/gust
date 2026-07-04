@@ -1,0 +1,22 @@
+fn shouldNotRun(): bool {
+    io.println("short circuit failed")
+    return true
+}
+
+fn main() {
+    let age: u32 = 30
+    let enabled = true
+    let disabled = false
+
+    if age >= 18 && enabled && !disabled {
+        io.println("access granted")
+    }
+
+    if true || shouldNotRun() {
+        io.println("or short-circuited")
+    }
+
+    if false && shouldNotRun() {
+        io.println("unreachable")
+    }
+}

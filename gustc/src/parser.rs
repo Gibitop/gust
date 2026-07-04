@@ -1,7 +1,7 @@
 use crate::ast::{
     BinaryOp, Block, ElseBranch, EnumDecl, EnumVariant, Expr, ExprKind, FieldDecl, FunctionBody,
     FunctionDecl, ImportDecl, Item, MatchBranch, Param, Pattern, Program, Stmt, StmtKind,
-    StructDecl, StructInitField, StructMember, TypeRef,
+    StructDecl, StructInitField, StructMember, TypeRef, UnaryOp,
 };
 use crate::diagnostic::Diagnostic;
 use crate::lexer::{Keyword, Token, TokenKind};
@@ -377,7 +377,7 @@ impl Parser {
     }
 
     fn parse_binary_expression(&mut self, min_precedence: u8) -> Expr {
-        let mut left = self.parse_postfix_expression();
+        let mut left = self.parse_unary_expression();
 
         while let Some((op, precedence)) = self.current_binary_op() {
             if precedence < min_precedence {
@@ -398,6 +398,24 @@ impl Parser {
         }
 
         left
+    }
+
+    fn parse_unary_expression(&mut self) -> Expr {
+        if self.match_kind(&TokenKind::Bang) {
+            let start = self.previous_span();
+            let operand = self.parse_unary_expression();
+            let span = start.join(operand.span);
+
+            return Expr {
+                kind: ExprKind::Unary {
+                    op: UnaryOp::Not,
+                    operand: Box::new(operand),
+                },
+                span,
+            };
+        }
+
+        self.parse_postfix_expression()
     }
 
     fn parse_postfix_expression(&mut self) -> Expr {
@@ -630,6 +648,8 @@ impl Parser {
     fn current_binary_op(&self) -> Option<(BinaryOp, u8)> {
         match self.current().kind {
             TokenKind::Plus => Some((BinaryOp::Add, 10)),
+            TokenKind::AndAnd => Some((BinaryOp::LogicalAnd, 3)),
+            TokenKind::OrOr => Some((BinaryOp::LogicalOr, 2)),
             TokenKind::EqualEqual => Some((BinaryOp::Equal, 4)),
             TokenKind::BangEqual => Some((BinaryOp::NotEqual, 4)),
             TokenKind::Less => Some((BinaryOp::Less, 5)),
@@ -793,7 +813,10 @@ fn simple_kind_eq(left: &TokenKind, right: &TokenKind) -> bool {
             | (TokenKind::PlusPlus, TokenKind::PlusPlus)
             | (TokenKind::Equal, TokenKind::Equal)
             | (TokenKind::EqualEqual, TokenKind::EqualEqual)
+            | (TokenKind::Bang, TokenKind::Bang)
             | (TokenKind::BangEqual, TokenKind::BangEqual)
+            | (TokenKind::AndAnd, TokenKind::AndAnd)
+            | (TokenKind::OrOr, TokenKind::OrOr)
             | (TokenKind::FatArrow, TokenKind::FatArrow)
             | (TokenKind::LessEqual, TokenKind::LessEqual)
             | (TokenKind::GreaterEqual, TokenKind::GreaterEqual)

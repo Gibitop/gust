@@ -169,6 +169,10 @@ pub enum ExprKind {
         op: BinaryOp,
         right: Box<Expr>,
     },
+    Unary {
+        op: UnaryOp,
+        operand: Box<Expr>,
+    },
     Match {
         value: Box<Expr>,
         branches: Vec<MatchBranch>,
@@ -188,6 +192,8 @@ pub struct StructInitField {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BinaryOp {
     Add,
+    LogicalAnd,
+    LogicalOr,
     Equal,
     NotEqual,
     Less,
@@ -200,6 +206,8 @@ impl BinaryOp {
     pub fn symbol(self) -> &'static str {
         match self {
             BinaryOp::Add => "+",
+            BinaryOp::LogicalAnd => "&&",
+            BinaryOp::LogicalOr => "||",
             BinaryOp::Equal => "==",
             BinaryOp::NotEqual => "!=",
             BinaryOp::Less => "<",
@@ -208,6 +216,11 @@ impl BinaryOp {
             BinaryOp::GreaterEqual => ">=",
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UnaryOp {
+    Not,
 }
 
 #[derive(Debug, Clone)]

@@ -34,3 +34,10 @@ Generated local variables and struct fields should use `gust_<source_name>`. Kee
 `==` and `!=` compare numeric and boolean values directly. Strings compare by value through a Gust runtime helper, never by backend pointer identity.
 
 Struct and enum equality will be introduced with trait-based equality rather than receiving implicit field-by-field semantics.
+
+
+## Logical operators
+
+`!`, `&&`, and `||` operate only on boolean values.
+
+`&&` and `||` evaluate left to right and short-circuit the right operand.

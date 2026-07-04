@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 
 use crate::ast::{
     BasicType, BinaryOp, Block, ElseBranch, Expr, ExprKind, FunctionBody, FunctionDecl, Item,
-    Pattern, Program, Stmt, StmtKind, StructDecl, StructInitField, StructMember, TypeRef,
+    Pattern, Program, Stmt, StmtKind, StructDecl, StructInitField, StructMember, TypeRef, UnaryOp,
 };
 use crate::diagnostic::Diagnostic;
 use crate::span::Span;
@@ -464,6 +464,42 @@ impl Analyzer {
             ExprKind::StructInit { name, fields } => {
                 self.validate_struct_init(expr.span, name, fields)
             }
+            ExprKind::Unary {
+                op: UnaryOp::Not,
+                operand,
+            } => {
+                let operand_type =
+                    self.validate_expr_with_context(operand, Some(Type::Basic(BasicType::Bool)));
+                self.report_type_mismatch(
+                    operand.span,
+                    Type::Basic(BasicType::Bool),
+                    operand_type.clone(),
+                );
+
+                if matches!(operand_type, Type::Unknown) {
+                    Type::Unknown
+                } else {
+                    Type::Basic(BasicType::Bool)
+                }
+            }
+            ExprKind::Binary {
+                left,
+                op: BinaryOp::LogicalAnd | BinaryOp::LogicalOr,
+                right,
+            } => {
+                let expected_type = Type::Basic(BasicType::Bool);
+                let left_type = self.validate_expr_with_context(left, Some(expected_type.clone()));
+                let right_type =
+                    self.validate_expr_with_context(right, Some(expected_type.clone()));
+                self.report_type_mismatch(left.span, expected_type.clone(), left_type.clone());
+                self.report_type_mismatch(right.span, expected_type, right_type.clone());
+
+                if matches!(left_type, Type::Unknown) || matches!(right_type, Type::Unknown) {
+                    Type::Unknown
+                } else {
+                    Type::Basic(BasicType::Bool)
+                }
+            }
             ExprKind::Binary {
                 left,
                 op: BinaryOp::Add,
@@ -566,7 +602,9 @@ impl Analyzer {
             BinaryOp::Less | BinaryOp::LessEqual | BinaryOp::Greater | BinaryOp::GreaterEqual => {
                 matches!(&left_type, Type::Basic(type_) if type_.is_numeric())
             }
-            BinaryOp::Add => unreachable!("addition is validated separately"),
+            BinaryOp::Add | BinaryOp::LogicalAnd | BinaryOp::LogicalOr => {
+                unreachable!("non-comparison operator is validated separately")
+            }
         };
 
         if !supported {
@@ -578,7 +616,9 @@ impl Analyzer {
                 | BinaryOp::LessEqual
                 | BinaryOp::Greater
                 | BinaryOp::GreaterEqual => "only supports numeric operands",
-                BinaryOp::Add => unreachable!("addition is validated separately"),
+                BinaryOp::Add | BinaryOp::LogicalAnd | BinaryOp::LogicalOr => {
+                    unreachable!("non-comparison operator is validated separately")
+                }
             };
             self.diagnostics.push(Diagnostic::error(
                 span,
