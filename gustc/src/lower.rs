@@ -89,6 +89,12 @@ pub enum LoweredExprKind {
     Local(String),
     StringConcat(Box<LoweredExpr>, Box<LoweredExpr>),
     Not(Box<LoweredExpr>),
+    Negate(Box<LoweredExpr>),
+    Arithmetic {
+        left: Box<LoweredExpr>,
+        op: BinaryOp,
+        right: Box<LoweredExpr>,
+    },
     Logical {
         left: Box<LoweredExpr>,
         op: BinaryOp,
@@ -593,10 +599,7 @@ fn infer_expr_type(
     structs: &HashMap<String, LoweredStruct>,
 ) -> Option<LoweredType> {
     match &expr.kind {
-        ExprKind::String(_)
-        | ExprKind::Binary {
-            op: BinaryOp::Add, ..
-        } => Some(LoweredType::Basic(BasicType::String)),
+        ExprKind::String(_) => Some(LoweredType::Basic(BasicType::String)),
         ExprKind::Bool(_)
         | ExprKind::Unary {
             op: UnaryOp::Not, ..
@@ -613,6 +616,28 @@ fn infer_expr_type(
                 | BinaryOp::GreaterEqual,
             ..
         } => Some(LoweredType::Basic(BasicType::Bool)),
+        ExprKind::Unary {
+            op: UnaryOp::Negate,
+            operand,
+        } => infer_expr_type(operand, locals, signatures, structs),
+        ExprKind::Binary {
+            left,
+            op:
+                BinaryOp::Add
+                | BinaryOp::Subtract
+                | BinaryOp::Multiply
+                | BinaryOp::Divide
+                | BinaryOp::Remainder,
+            right,
+        } => {
+            if matches!(left.kind, ExprKind::Number(_))
+                && !matches!(right.kind, ExprKind::Number(_))
+            {
+                infer_expr_type(right, locals, signatures, structs)
+            } else {
+                infer_expr_type(left, locals, signatures, structs)
+            }
+        }
         ExprKind::Number(_) => Some(LoweredType::Basic(BasicType::I32)),
         ExprKind::Identifier(name) => locals.get(name).cloned(),
         ExprKind::StructInit { name, .. } if structs.contains_key(name) => {
@@ -1359,6 +1384,36 @@ fn lower_expr(
                 kind: LoweredExprKind::Not(Box::new(operand)),
             }
         }
+        ExprKind::Unary {
+            op: UnaryOp::Negate,
+            operand,
+        } => {
+            let operand = lower_expr(
+                operand,
+                locals,
+                signatures,
+                structs,
+                diagnostics,
+                expected_type.clone(),
+                "expected supported signed numeric operand in executable builds",
+            )?;
+
+            if !matches!(
+                operand.type_,
+                LoweredType::Basic(type_) if type_.is_signed_numeric()
+            ) {
+                diagnostics.push(Diagnostic::error(
+                    expr.span,
+                    "operator - requires a signed numeric operand in executable builds",
+                ));
+                return None;
+            }
+
+            LoweredExpr {
+                type_: operand.type_.clone(),
+                kind: LoweredExprKind::Negate(Box::new(operand)),
+            }
+        }
         ExprKind::Binary {
             left,
             op: op @ (BinaryOp::LogicalAnd | BinaryOp::LogicalOr),
@@ -1395,35 +1450,109 @@ fn lower_expr(
         }
         ExprKind::Binary {
             left,
-            op: BinaryOp::Add,
+            op:
+                op @ (BinaryOp::Add
+                | BinaryOp::Subtract
+                | BinaryOp::Multiply
+                | BinaryOp::Divide
+                | BinaryOp::Remainder),
             right,
         } => {
-            let left = lower_expr(
-                left,
-                locals,
-                signatures,
-                structs,
-                diagnostics,
-                Some(LoweredType::Basic(BasicType::String)),
-                "expected `String` value in executable builds",
-            );
-            let right = lower_expr(
-                right,
-                locals,
-                signatures,
-                structs,
-                diagnostics,
-                Some(LoweredType::Basic(BasicType::String)),
-                "expected `String` value in executable builds",
-            );
-
-            let (Some(left), Some(right)) = (left, right) else {
-                return None;
+            let contextual_type = expected_type.as_ref().filter(|type_| {
+                matches!(type_, LoweredType::Basic(type_) if type_.is_numeric())
+                    || *op == BinaryOp::Add && **type_ == LoweredType::Basic(BasicType::String)
+            });
+            let (left, right) = if let Some(type_) = contextual_type {
+                let left = lower_expr(
+                    left,
+                    locals,
+                    signatures,
+                    structs,
+                    diagnostics,
+                    Some(type_.clone()),
+                    "expected supported arithmetic operand in executable builds",
+                )?;
+                let right = lower_expr(
+                    right,
+                    locals,
+                    signatures,
+                    structs,
+                    diagnostics,
+                    Some(type_.clone()),
+                    "expected supported arithmetic operand in executable builds",
+                )?;
+                (left, right)
+            } else if matches!(left.kind, ExprKind::Number(_))
+                && !matches!(right.kind, ExprKind::Number(_))
+            {
+                let right = lower_expr(
+                    right,
+                    locals,
+                    signatures,
+                    structs,
+                    diagnostics,
+                    None,
+                    "expected supported arithmetic operand in executable builds",
+                )?;
+                let left = lower_expr(
+                    left,
+                    locals,
+                    signatures,
+                    structs,
+                    diagnostics,
+                    Some(right.type_.clone()),
+                    "expected supported arithmetic operand in executable builds",
+                )?;
+                (left, right)
+            } else {
+                let left = lower_expr(
+                    left,
+                    locals,
+                    signatures,
+                    structs,
+                    diagnostics,
+                    None,
+                    "expected supported arithmetic operand in executable builds",
+                )?;
+                let right = lower_expr(
+                    right,
+                    locals,
+                    signatures,
+                    structs,
+                    diagnostics,
+                    Some(left.type_.clone()),
+                    "expected supported arithmetic operand in executable builds",
+                )?;
+                (left, right)
             };
 
-            LoweredExpr {
-                type_: LoweredType::Basic(BasicType::String),
-                kind: LoweredExprKind::StringConcat(Box::new(left), Box::new(right)),
+            if *op == BinaryOp::Add && left.type_ == LoweredType::Basic(BasicType::String) {
+                LoweredExpr {
+                    type_: LoweredType::Basic(BasicType::String),
+                    kind: LoweredExprKind::StringConcat(Box::new(left), Box::new(right)),
+                }
+            } else if matches!(
+                left.type_,
+                LoweredType::Basic(type_) if type_.is_numeric()
+            ) {
+                LoweredExpr {
+                    type_: left.type_.clone(),
+                    kind: LoweredExprKind::Arithmetic {
+                        left: Box::new(left),
+                        op: *op,
+                        right: Box::new(right),
+                    },
+                }
+            } else {
+                diagnostics.push(Diagnostic::error(
+                    expr.span,
+                    format!(
+                        "operator {} does not support values of type `{}` in executable builds",
+                        op.symbol(),
+                        left.type_.name()
+                    ),
+                ));
+                return None;
             }
         }
         ExprKind::Binary { left, op, right } => {
@@ -1484,7 +1613,13 @@ fn lower_expr(
                 | BinaryOp::GreaterEqual => {
                     matches!(&left.type_, LoweredType::Basic(type_) if type_.is_numeric())
                 }
-                BinaryOp::Add | BinaryOp::LogicalAnd | BinaryOp::LogicalOr => {
+                BinaryOp::Add
+                | BinaryOp::Subtract
+                | BinaryOp::Multiply
+                | BinaryOp::Divide
+                | BinaryOp::Remainder
+                | BinaryOp::LogicalAnd
+                | BinaryOp::LogicalOr => {
                     unreachable!("non-comparison operator is lowered separately")
                 }
             };

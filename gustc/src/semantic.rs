@@ -482,6 +482,30 @@ impl Analyzer {
                     Type::Basic(BasicType::Bool)
                 }
             }
+            ExprKind::Unary {
+                op: UnaryOp::Negate,
+                operand,
+            } => {
+                let operand_type = self.validate_expr_with_context(operand, expected_type.clone());
+
+                if matches!(operand_type, Type::Unknown) {
+                    Type::Unknown
+                } else if matches!(
+                    operand_type,
+                    Type::Basic(type_) if type_.is_signed_numeric()
+                ) {
+                    operand_type
+                } else {
+                    self.diagnostics.push(Diagnostic::error(
+                        expr.span,
+                        format!(
+                            "operator - only supports signed numeric operands, got `{}`",
+                            operand_type.name()
+                        ),
+                    ));
+                    Type::Unknown
+                }
+            }
             ExprKind::Binary {
                 left,
                 op: BinaryOp::LogicalAnd | BinaryOp::LogicalOr,
@@ -502,26 +526,14 @@ impl Analyzer {
             }
             ExprKind::Binary {
                 left,
-                op: BinaryOp::Add,
+                op:
+                    op @ (BinaryOp::Add
+                    | BinaryOp::Subtract
+                    | BinaryOp::Multiply
+                    | BinaryOp::Divide
+                    | BinaryOp::Remainder),
                 right,
-            } => {
-                let left_type = self.validate_expr(left);
-                let right_type = self.validate_expr(right);
-
-                if matches!(left_type, Type::Unknown) || matches!(right_type, Type::Unknown) {
-                    Type::Unknown
-                } else if left_type == Type::Basic(BasicType::String)
-                    && right_type == Type::Basic(BasicType::String)
-                {
-                    Type::Basic(BasicType::String)
-                } else {
-                    self.diagnostics.push(Diagnostic::error(
-                        expr.span,
-                        "operator + only supports String operands for now",
-                    ));
-                    Type::Unknown
-                }
-            }
+            } => self.validate_arithmetic(expr.span, left, *op, right, expected_type.clone()),
             ExprKind::Binary { left, op, right } => {
                 self.validate_comparison(expr.span, left, *op, right)
             }
@@ -572,6 +584,65 @@ impl Analyzer {
         }
     }
 
+    fn validate_arithmetic(
+        &mut self,
+        span: Span,
+        left: &Expr,
+        op: BinaryOp,
+        right: &Expr,
+        expected_type: Option<Type>,
+    ) -> Type {
+        let contextual_type = expected_type.filter(|type_| {
+            matches!(type_, Type::Basic(type_) if type_.is_numeric())
+                || op == BinaryOp::Add && *type_ == Type::Basic(BasicType::String)
+        });
+        let (left_type, right_type) = if let Some(type_) = contextual_type {
+            let left_type = self.validate_expr_with_context(left, Some(type_.clone()));
+            let right_type = self.validate_expr_with_context(right, Some(type_));
+            (left_type, right_type)
+        } else if matches!(left.kind, ExprKind::Number(_))
+            && !matches!(right.kind, ExprKind::Number(_))
+        {
+            let right_type = self.validate_expr(right);
+            let left_type = self.validate_expr_with_context(left, Some(right_type.clone()));
+            (left_type, right_type)
+        } else {
+            let left_type = self.validate_expr(left);
+            let right_type = self.validate_expr_with_context(right, Some(left_type.clone()));
+            (left_type, right_type)
+        };
+
+        if matches!(left_type, Type::Unknown) || matches!(right_type, Type::Unknown) {
+            return Type::Unknown;
+        }
+
+        if left_type != right_type {
+            self.report_type_mismatch(right.span, left_type, right_type);
+            return Type::Unknown;
+        }
+
+        if matches!(&left_type, Type::Basic(type_) if type_.is_numeric())
+            || op == BinaryOp::Add && left_type == Type::Basic(BasicType::String)
+        {
+            return left_type;
+        }
+
+        let requirement = if op == BinaryOp::Add {
+            "only supports numeric or String operands"
+        } else {
+            "only supports numeric operands"
+        };
+        self.diagnostics.push(Diagnostic::error(
+            span,
+            format!(
+                "operator {} {requirement}, got `{}`",
+                op.symbol(),
+                left_type.name()
+            ),
+        ));
+        Type::Unknown
+    }
+
     fn validate_comparison(&mut self, span: Span, left: &Expr, op: BinaryOp, right: &Expr) -> Type {
         let (left_type, right_type) = if matches!(left.kind, ExprKind::Number(_))
             && !matches!(right.kind, ExprKind::Number(_))
@@ -602,7 +673,13 @@ impl Analyzer {
             BinaryOp::Less | BinaryOp::LessEqual | BinaryOp::Greater | BinaryOp::GreaterEqual => {
                 matches!(&left_type, Type::Basic(type_) if type_.is_numeric())
             }
-            BinaryOp::Add | BinaryOp::LogicalAnd | BinaryOp::LogicalOr => {
+            BinaryOp::Add
+            | BinaryOp::Subtract
+            | BinaryOp::Multiply
+            | BinaryOp::Divide
+            | BinaryOp::Remainder
+            | BinaryOp::LogicalAnd
+            | BinaryOp::LogicalOr => {
                 unreachable!("non-comparison operator is validated separately")
             }
         };
@@ -616,7 +693,13 @@ impl Analyzer {
                 | BinaryOp::LessEqual
                 | BinaryOp::Greater
                 | BinaryOp::GreaterEqual => "only supports numeric operands",
-                BinaryOp::Add | BinaryOp::LogicalAnd | BinaryOp::LogicalOr => {
+                BinaryOp::Add
+                | BinaryOp::Subtract
+                | BinaryOp::Multiply
+                | BinaryOp::Divide
+                | BinaryOp::Remainder
+                | BinaryOp::LogicalAnd
+                | BinaryOp::LogicalOr => {
                     unreachable!("non-comparison operator is validated separately")
                 }
             };

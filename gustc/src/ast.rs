@@ -192,6 +192,10 @@ pub struct StructInitField {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BinaryOp {
     Add,
+    Subtract,
+    Multiply,
+    Divide,
+    Remainder,
     LogicalAnd,
     LogicalOr,
     Equal,
@@ -206,6 +210,10 @@ impl BinaryOp {
     pub fn symbol(self) -> &'static str {
         match self {
             BinaryOp::Add => "+",
+            BinaryOp::Subtract => "-",
+            BinaryOp::Multiply => "*",
+            BinaryOp::Divide => "/",
+            BinaryOp::Remainder => "%",
             BinaryOp::LogicalAnd => "&&",
             BinaryOp::LogicalOr => "||",
             BinaryOp::Equal => "==",
@@ -221,6 +229,7 @@ impl BinaryOp {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UnaryOp {
     Not,
+    Negate,
 }
 
 #[derive(Debug, Clone)]
@@ -316,5 +325,9 @@ impl BasicType {
                 | Self::I32
                 | Self::I64
         )
+    }
+
+    pub fn is_signed_numeric(self) -> bool {
+        matches!(self, Self::I8 | Self::I16 | Self::I32 | Self::I64)
     }
 }

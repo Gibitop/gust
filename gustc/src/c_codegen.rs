@@ -165,8 +165,11 @@ fn expr_uses_type(expr: &LoweredExpr, type_: BasicType) -> bool {
             LoweredExprKind::StringConcat(left, right) => {
                 expr_uses_type(left, type_) || expr_uses_type(right, type_)
             }
-            LoweredExprKind::Not(operand) => expr_uses_type(operand, type_),
+            LoweredExprKind::Not(operand) | LoweredExprKind::Negate(operand) => {
+                expr_uses_type(operand, type_)
+            }
             LoweredExprKind::Logical { left, right, .. }
+            | LoweredExprKind::Arithmetic { left, right, .. }
             | LoweredExprKind::Comparison { left, right, .. } => {
                 expr_uses_type(left, type_) || expr_uses_type(right, type_)
             }
@@ -241,8 +244,11 @@ fn statement_uses_string_equality(statement: &LoweredStatement) -> bool {
 
 fn expr_uses_string_equality(expr: &LoweredExpr) -> bool {
     match &expr.kind {
-        LoweredExprKind::Not(operand) => expr_uses_string_equality(operand),
-        LoweredExprKind::Logical { left, right, .. } => {
+        LoweredExprKind::Not(operand) | LoweredExprKind::Negate(operand) => {
+            expr_uses_string_equality(operand)
+        }
+        LoweredExprKind::Logical { left, right, .. }
+        | LoweredExprKind::Arithmetic { left, right, .. } => {
             expr_uses_string_equality(left) || expr_uses_string_equality(right)
         }
         LoweredExprKind::Comparison { left, op, right } => {
@@ -295,8 +301,11 @@ fn statement_uses_string_concat(statement: &LoweredStatement) -> bool {
 fn expr_uses_string_concat(expr: &LoweredExpr) -> bool {
     match &expr.kind {
         LoweredExprKind::StringConcat(_, _) => true,
-        LoweredExprKind::Not(operand) => expr_uses_string_concat(operand),
+        LoweredExprKind::Not(operand) | LoweredExprKind::Negate(operand) => {
+            expr_uses_string_concat(operand)
+        }
         LoweredExprKind::Logical { left, right, .. }
+        | LoweredExprKind::Arithmetic { left, right, .. }
         | LoweredExprKind::Comparison { left, right, .. } => {
             expr_uses_string_concat(left) || expr_uses_string_concat(right)
         }
@@ -405,8 +414,11 @@ fn expr_calls_name(expr: &LoweredExpr, name: &str) -> bool {
         LoweredExprKind::StringConcat(left, right) => {
             expr_calls_name(left, name) || expr_calls_name(right, name)
         }
-        LoweredExprKind::Not(operand) => expr_calls_name(operand, name),
+        LoweredExprKind::Not(operand) | LoweredExprKind::Negate(operand) => {
+            expr_calls_name(operand, name)
+        }
         LoweredExprKind::Logical { left, right, .. }
+        | LoweredExprKind::Arithmetic { left, right, .. }
         | LoweredExprKind::Comparison { left, right, .. } => {
             expr_calls_name(left, name) || expr_calls_name(right, name)
         }
@@ -526,6 +538,8 @@ fn push_c_statement(source: &mut String, statement: &LoweredStatement, indent: u
             LoweredExprKind::Void
             | LoweredExprKind::BoolLiteral(_)
             | LoweredExprKind::NumberLiteral(_)
+            | LoweredExprKind::Negate(_)
+            | LoweredExprKind::Arithmetic { .. }
             | LoweredExprKind::StructLiteral { .. } => {
                 unreachable!("println only lowers String values")
             }
@@ -673,6 +687,20 @@ fn push_c_value(source: &mut String, value: &LoweredExpr) {
         LoweredExprKind::Not(operand) => {
             source.push_str("(!");
             push_c_value(source, operand);
+            source.push(')');
+        }
+        LoweredExprKind::Negate(operand) => {
+            source.push_str("(-");
+            push_c_value(source, operand);
+            source.push(')');
+        }
+        LoweredExprKind::Arithmetic { left, op, right } => {
+            source.push('(');
+            push_c_value(source, left);
+            source.push(' ');
+            source.push_str(op.symbol());
+            source.push(' ');
+            push_c_value(source, right);
             source.push(')');
         }
         LoweredExprKind::Logical { left, op, right } => {

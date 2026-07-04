@@ -401,14 +401,22 @@ impl Parser {
     }
 
     fn parse_unary_expression(&mut self) -> Expr {
-        if self.match_kind(&TokenKind::Bang) {
+        let op = if self.match_kind(&TokenKind::Bang) {
+            Some(UnaryOp::Not)
+        } else if self.match_kind(&TokenKind::Minus) {
+            Some(UnaryOp::Negate)
+        } else {
+            None
+        };
+
+        if let Some(op) = op {
             let start = self.previous_span();
             let operand = self.parse_unary_expression();
             let span = start.join(operand.span);
 
             return Expr {
                 kind: ExprKind::Unary {
-                    op: UnaryOp::Not,
+                    op,
                     operand: Box::new(operand),
                 },
                 span,
@@ -648,6 +656,10 @@ impl Parser {
     fn current_binary_op(&self) -> Option<(BinaryOp, u8)> {
         match self.current().kind {
             TokenKind::Plus => Some((BinaryOp::Add, 10)),
+            TokenKind::Minus => Some((BinaryOp::Subtract, 10)),
+            TokenKind::Star => Some((BinaryOp::Multiply, 11)),
+            TokenKind::Slash => Some((BinaryOp::Divide, 11)),
+            TokenKind::Percent => Some((BinaryOp::Remainder, 11)),
             TokenKind::AndAnd => Some((BinaryOp::LogicalAnd, 3)),
             TokenKind::OrOr => Some((BinaryOp::LogicalOr, 2)),
             TokenKind::EqualEqual => Some((BinaryOp::Equal, 4)),
@@ -811,6 +823,9 @@ fn simple_kind_eq(left: &TokenKind, right: &TokenKind) -> bool {
             | (TokenKind::Slash, TokenKind::Slash)
             | (TokenKind::Plus, TokenKind::Plus)
             | (TokenKind::PlusPlus, TokenKind::PlusPlus)
+            | (TokenKind::Minus, TokenKind::Minus)
+            | (TokenKind::Star, TokenKind::Star)
+            | (TokenKind::Percent, TokenKind::Percent)
             | (TokenKind::Equal, TokenKind::Equal)
             | (TokenKind::EqualEqual, TokenKind::EqualEqual)
             | (TokenKind::Bang, TokenKind::Bang)
