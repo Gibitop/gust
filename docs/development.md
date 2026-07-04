@@ -68,3 +68,13 @@ and `>>`, including their compound assignment forms, operate only on integer typ
 equality follows IEEE semantics, including `NaN != NaN`.
 
 The executable backend maps `i128` and `u128` to the C compiler's 128-bit integer extension.
+
+## Struct field mutation
+
+Struct fields can contain other known struct types. Generated C definitions are ordered so nested
+struct types are defined before structs that contain them.
+
+Fields can be assigned, compound-assigned, and incremented when the field access is rooted in a
+mutable local struct binding, including nested fields. Mutation through immutable bindings is
+rejected. Mutation through computed struct expressions, enum payload mutation, and mutable
+parameters are not implemented yet.

@@ -147,9 +147,11 @@ fn function_uses_type(function: &LoweredFunction, type_: BasicType) -> bool {
 fn statement_uses_type(statement: &LoweredStatement, type_: BasicType) -> bool {
     match statement {
         LoweredStatement::Local { value, .. }
-        | LoweredStatement::Assignment { value, .. }
         | LoweredStatement::Println(value)
         | LoweredStatement::Expr(value) => expr_uses_type(value, type_),
+        LoweredStatement::Assignment { target, value } => {
+            expr_uses_type(target, type_) || expr_uses_type(value, type_)
+        }
         LoweredStatement::Return(value) => value
             .as_ref()
             .is_some_and(|value| expr_uses_type(value, type_)),
@@ -249,9 +251,11 @@ fn program_uses_string_equality(program: &LoweredProgram) -> bool {
 fn statement_uses_string_equality(statement: &LoweredStatement) -> bool {
     match statement {
         LoweredStatement::Local { value, .. }
-        | LoweredStatement::Assignment { value, .. }
         | LoweredStatement::Println(value)
         | LoweredStatement::Expr(value) => expr_uses_string_equality(value),
+        LoweredStatement::Assignment { target, value } => {
+            expr_uses_string_equality(target) || expr_uses_string_equality(value)
+        }
         LoweredStatement::Return(value) => value.as_ref().is_some_and(expr_uses_string_equality),
         LoweredStatement::If {
             condition,
@@ -318,9 +322,11 @@ fn function_uses_string_concat(function: &LoweredFunction) -> bool {
 fn statement_uses_string_concat(statement: &LoweredStatement) -> bool {
     match statement {
         LoweredStatement::Local { value, .. }
-        | LoweredStatement::Assignment { value, .. }
         | LoweredStatement::Println(value)
         | LoweredStatement::Expr(value) => expr_uses_string_concat(value),
+        LoweredStatement::Assignment { target, value } => {
+            expr_uses_string_concat(target) || expr_uses_string_concat(value)
+        }
         LoweredStatement::Return(value) => value.as_ref().is_some_and(expr_uses_string_concat),
         LoweredStatement::If {
             condition,
@@ -437,9 +443,11 @@ fn function_calls_name(function: &LoweredFunction, name: &str) -> bool {
 fn statement_calls_name(statement: &LoweredStatement, name: &str) -> bool {
     match statement {
         LoweredStatement::Local { value, .. }
-        | LoweredStatement::Assignment { value, .. }
         | LoweredStatement::Println(value)
         | LoweredStatement::Expr(value) => expr_calls_name(value, name),
+        LoweredStatement::Assignment { target, value } => {
+            expr_calls_name(target, name) || expr_calls_name(value, name)
+        }
         LoweredStatement::Return(value) => value
             .as_ref()
             .is_some_and(|value| expr_calls_name(value, name)),
@@ -684,9 +692,9 @@ fn push_c_statement(source: &mut String, statement: &LoweredStatement, indent: u
             push_c_value(source, value);
             source.push_str(";\n");
         }
-        LoweredStatement::Assignment { name, value } => {
+        LoweredStatement::Assignment { target, value } => {
             push_c_indent(source, indent);
-            push_c_local_name(source, name);
+            push_c_value(source, target);
             source.push_str(" = ");
             push_c_value(source, value);
             source.push_str(";\n");
