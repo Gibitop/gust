@@ -1,14 +1,44 @@
-fn greet(name: String): String {
+fn normal(name: String): String {
+    io.println("Normal")
     return "Hello, " + name
 }
 
-fn answer(): u64 {
-    return 42
+fn inferredNormal(name: String) {
+    return "Hello, " + name
+}
+
+fn inferredArrow(name: String) => arrow("Test")
+
+fn arrow(name: String) => "Hello, " + name
+
+fn noop(): void {}
+
+fn inferredNoop() {}
+
+fn earlyReturn() {
+    return inferredNormal("Gust")
+    return "never reached"
+}
+
+fn innerFnCall() {
+    let a = normal("Gust")
+    io.println(a)
+    io.println(inferredNormal("Gust"))
+}
+
+fn recursion() {
+    io.println("Recursion")
+    recursion()
 }
 
 fn main() {
-    let message = greet("Gust")
-    let value = answer()
-
-    io.println(message + "!")
+    io.println(normal("Gust"))
+    io.println(inferredNormal("Gust"))
+    io.println(arrow("Gust"))
+    io.println(inferredArrow("Gust"))
+    noop()
+    inferredNoop()
+    io.println(earlyReturn())
+    innerFnCall()
+    recursion()
 }

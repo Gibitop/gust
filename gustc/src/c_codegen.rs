@@ -68,7 +68,12 @@ pub fn emit_c(program: &LoweredProgram) -> String {
         source.push_str("}\n\n");
     }
 
-    for function in &program.functions {
+    for function in ordered_functions(&program.functions) {
+        if function_calls_name(function, &function.name) {
+            push_c_function_signature(&mut source, function);
+            source.push_str(";\n\n");
+        }
+
         push_c_function(&mut source, function);
         source.push('\n');
     }
@@ -120,9 +125,12 @@ fn function_uses_type(function: &LoweredFunction, type_: BasicType) -> bool {
 
 fn statement_uses_type(statement: &LoweredStatement, type_: BasicType) -> bool {
     match statement {
-        LoweredStatement::Local { value, .. } | LoweredStatement::Println(value) => {
-            expr_uses_type(value, type_)
-        }
+        LoweredStatement::Local { value, .. }
+        | LoweredStatement::Println(value)
+        | LoweredStatement::Expr(value) => expr_uses_type(value, type_),
+        LoweredStatement::Return(value) => value
+            .as_ref()
+            .is_some_and(|value| expr_uses_type(value, type_)),
     }
 }
 
@@ -137,7 +145,8 @@ fn expr_uses_type(expr: &LoweredExpr, type_: BasicType) -> bool {
                 .any(|field| expr_uses_type(&field.value, type_)),
             LoweredExprKind::FieldAccess { object, .. } => expr_uses_type(object, type_),
             LoweredExprKind::Call { args, .. } => args.iter().any(|arg| expr_uses_type(arg, type_)),
-            LoweredExprKind::StringLiteral(_)
+            LoweredExprKind::Void
+            | LoweredExprKind::StringLiteral(_)
             | LoweredExprKind::BoolLiteral(_)
             | LoweredExprKind::NumberLiteral(_)
             | LoweredExprKind::Local(_) => false,
@@ -174,9 +183,10 @@ fn function_uses_string_concat(function: &LoweredFunction) -> bool {
 
 fn statement_uses_string_concat(statement: &LoweredStatement) -> bool {
     match statement {
-        LoweredStatement::Local { value, .. } | LoweredStatement::Println(value) => {
-            expr_uses_string_concat(value)
-        }
+        LoweredStatement::Local { value, .. }
+        | LoweredStatement::Println(value)
+        | LoweredStatement::Expr(value) => expr_uses_string_concat(value),
+        LoweredStatement::Return(value) => value.as_ref().is_some_and(expr_uses_string_concat),
     }
 }
 
@@ -188,7 +198,8 @@ fn expr_uses_string_concat(expr: &LoweredExpr) -> bool {
             .any(|field| expr_uses_string_concat(&field.value)),
         LoweredExprKind::FieldAccess { object, .. } => expr_uses_string_concat(object),
         LoweredExprKind::Call { args, .. } => args.iter().any(expr_uses_string_concat),
-        LoweredExprKind::StringLiteral(_)
+        LoweredExprKind::Void
+        | LoweredExprKind::StringLiteral(_)
         | LoweredExprKind::BoolLiteral(_)
         | LoweredExprKind::NumberLiteral(_)
         | LoweredExprKind::Local(_) => false,
@@ -197,6 +208,80 @@ fn expr_uses_string_concat(expr: &LoweredExpr) -> bool {
 
 fn statement_uses_println(statement: &LoweredStatement) -> bool {
     matches!(statement, LoweredStatement::Println(_))
+}
+
+fn ordered_functions(functions: &[LoweredFunction]) -> Vec<&LoweredFunction> {
+    fn visit<'a>(
+        index: usize,
+        functions: &'a [LoweredFunction],
+        states: &mut [u8],
+        ordered: &mut Vec<&'a LoweredFunction>,
+    ) {
+        if states[index] != 0 {
+            return;
+        }
+
+        states[index] = 1;
+
+        for (dependency_index, dependency) in functions.iter().enumerate() {
+            if dependency_index != index && function_calls_name(&functions[index], &dependency.name)
+            {
+                visit(dependency_index, functions, states, ordered);
+            }
+        }
+
+        states[index] = 2;
+        ordered.push(&functions[index]);
+    }
+
+    let mut states = vec![0; functions.len()];
+    let mut ordered = Vec::new();
+
+    for index in 0..functions.len() {
+        visit(index, functions, &mut states, &mut ordered);
+    }
+
+    ordered
+}
+
+fn function_calls_name(function: &LoweredFunction, name: &str) -> bool {
+    function
+        .statements
+        .iter()
+        .any(|statement| statement_calls_name(statement, name))
+        || expr_calls_name(&function.return_value, name)
+}
+
+fn statement_calls_name(statement: &LoweredStatement, name: &str) -> bool {
+    match statement {
+        LoweredStatement::Local { value, .. }
+        | LoweredStatement::Println(value)
+        | LoweredStatement::Expr(value) => expr_calls_name(value, name),
+        LoweredStatement::Return(value) => value
+            .as_ref()
+            .is_some_and(|value| expr_calls_name(value, name)),
+    }
+}
+
+fn expr_calls_name(expr: &LoweredExpr, name: &str) -> bool {
+    match &expr.kind {
+        LoweredExprKind::StringConcat(left, right) => {
+            expr_calls_name(left, name) || expr_calls_name(right, name)
+        }
+        LoweredExprKind::StructLiteral { fields, .. } => fields
+            .iter()
+            .any(|field| expr_calls_name(&field.value, name)),
+        LoweredExprKind::FieldAccess { object, .. } => expr_calls_name(object, name),
+        LoweredExprKind::Call {
+            name: called_name,
+            args,
+        } => called_name == name || args.iter().any(|arg| expr_calls_name(arg, name)),
+        LoweredExprKind::Void
+        | LoweredExprKind::StringLiteral(_)
+        | LoweredExprKind::BoolLiteral(_)
+        | LoweredExprKind::NumberLiteral(_)
+        | LoweredExprKind::Local(_) => false,
+    }
 }
 
 fn push_c_struct(source: &mut String, struct_: &LoweredStruct) {
@@ -224,6 +309,23 @@ fn push_c_function(source: &mut String, function: &LoweredFunction) {
     source.push_str("// Gust function: ");
     source.push_str(&function.name);
     source.push('\n');
+    push_c_function_signature(source, function);
+    source.push_str(" {\n");
+
+    for statement in &function.statements {
+        push_c_statement(source, statement);
+    }
+
+    if function.return_type != LoweredType::Void {
+        source.push_str("    return ");
+        push_c_value(source, &function.return_value);
+        source.push_str(";\n");
+    }
+
+    source.push_str("}\n");
+}
+
+fn push_c_function_signature(source: &mut String, function: &LoweredFunction) {
     source.push_str("static ");
     push_c_type(source, &function.return_type);
     source.push(' ');
@@ -240,16 +342,7 @@ fn push_c_function(source: &mut String, function: &LoweredFunction) {
         push_c_local_name(source, &param.name);
     }
 
-    source.push_str(") {\n");
-
-    for statement in &function.statements {
-        push_c_statement(source, statement);
-    }
-
-    source.push_str("    return ");
-    push_c_value(source, &function.return_value);
-    source.push_str(";\n");
-    source.push_str("}\n");
+    source.push(')');
 }
 
 fn push_c_statement(source: &mut String, statement: &LoweredStatement) {
@@ -281,12 +374,28 @@ fn push_c_statement(source: &mut String, statement: &LoweredStatement) {
                 push_c_value(source, value);
                 source.push_str(");\n");
             }
-            LoweredExprKind::BoolLiteral(_)
+            LoweredExprKind::Void
+            | LoweredExprKind::BoolLiteral(_)
             | LoweredExprKind::NumberLiteral(_)
             | LoweredExprKind::StructLiteral { .. } => {
                 unreachable!("println only lowers String values")
             }
         },
+        LoweredStatement::Expr(value) => {
+            source.push_str("    ");
+            push_c_value(source, value);
+            source.push_str(";\n");
+        }
+        LoweredStatement::Return(value) => {
+            source.push_str("    return");
+
+            if let Some(value) = value {
+                source.push(' ');
+                push_c_value(source, value);
+            }
+
+            source.push_str(";\n");
+        }
     }
 }
 
@@ -331,6 +440,7 @@ fn push_c_type(source: &mut String, type_: &LoweredType) {
     match type_ {
         LoweredType::Basic(type_) => source.push_str(c_basic_type(*type_)),
         LoweredType::Struct(name) => push_c_struct_name(source, name),
+        LoweredType::Void => source.push_str("void"),
     }
 }
 
@@ -352,6 +462,7 @@ fn c_basic_type(type_: BasicType) -> &'static str {
 
 fn push_c_value(source: &mut String, value: &LoweredExpr) {
     match &value.kind {
+        LoweredExprKind::Void => {}
         LoweredExprKind::StringLiteral(value) => {
             source.push('"');
             push_c_string_value(source, value);
