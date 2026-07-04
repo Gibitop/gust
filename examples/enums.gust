@@ -1,0 +1,26 @@
+fn main() {
+    let person = Being.Person(Person {
+        name: "Ada",
+    })
+    let unknown = Being.Unknown
+
+    io.println(greeting(person))
+    io.println(greeting(unknown))
+}
+
+fn greeting(being: Being) {
+    return match being {
+        Being.Person(person) => "Hello, " + person.name,
+        Being.Unknown => "Hello, stranger",
+    }
+}
+
+enum Being {
+    Person(Person)
+    Unknown
+}
+
+struct Person {
+    name: String
+}
+

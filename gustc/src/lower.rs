@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use crate::ast::{
     BasicType, BinaryOp, Block, ElseBranch, Expr, ExprKind, FunctionBody, FunctionDecl, Item,
-    Program, Stmt, StmtKind, StructDecl, StructInitField, StructMember, TypeRef, UnaryOp,
+    Pattern, Program, Stmt, StmtKind, StructDecl, StructInitField, StructMember, TypeRef, UnaryOp,
 };
 use crate::diagnostic::Diagnostic;
 use crate::span::Span;
@@ -10,6 +10,7 @@ use crate::span::Span;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LoweredProgram {
     pub structs: Vec<LoweredStruct>,
+    pub enums: Vec<LoweredEnum>,
     pub functions: Vec<LoweredFunction>,
     pub statements: Vec<LoweredStatement>,
 }
@@ -24,6 +25,18 @@ pub struct LoweredStruct {
 pub struct LoweredField {
     pub name: String,
     pub type_: LoweredType,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LoweredEnum {
+    pub name: String,
+    pub variants: Vec<LoweredVariant>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LoweredVariant {
+    pub name: String,
+    pub payload: Option<LoweredType>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -71,6 +84,7 @@ pub struct LoweredExpr {
 pub enum LoweredType {
     Basic(BasicType),
     Struct(String),
+    Enum(String),
     Void,
 }
 
@@ -79,6 +93,7 @@ impl LoweredType {
         match self {
             LoweredType::Basic(type_) => type_.name().to_string(),
             LoweredType::Struct(name) => name.clone(),
+            LoweredType::Enum(name) => name.clone(),
             LoweredType::Void => "void".to_string(),
         }
     }
@@ -114,6 +129,20 @@ pub enum LoweredExprKind {
         name: String,
         fields: Vec<LoweredStructFieldValue>,
     },
+    EnumLiteral {
+        enum_name: String,
+        variant: String,
+        payload: Option<Box<LoweredExpr>>,
+    },
+    EnumPayload {
+        object: Box<LoweredExpr>,
+        variant: String,
+    },
+    Match {
+        value: Box<LoweredExpr>,
+        enum_name: String,
+        branches: Vec<LoweredMatchBranch>,
+    },
     FieldAccess {
         object: Box<LoweredExpr>,
         field: String,
@@ -122,6 +151,12 @@ pub enum LoweredExprKind {
         name: String,
         args: Vec<LoweredExpr>,
     },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LoweredMatchBranch {
+    pub variant: String,
+    pub value: LoweredExpr,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -141,12 +176,14 @@ struct FunctionSignature {
 struct LoweringLocal {
     type_: LoweredType,
     mutable: bool,
+    replacement: Option<LoweredExpr>,
 }
 
 pub fn lower_program(program: &Program) -> Result<LoweredProgram, Vec<Diagnostic>> {
     let mut diagnostics = Vec::new();
     let mut main = None;
     let mut structs = HashMap::new();
+    let mut enums = HashMap::new();
     let mut signatures = HashMap::new();
 
     let mut has_return_type_conflict = false;
@@ -174,10 +211,15 @@ pub fn lower_program(program: &Program) -> Result<LoweredProgram, Vec<Diagnostic
                 item.span,
                 "imports are not supported in executable builds",
             )),
-            Item::Enum(item) => diagnostics.push(Diagnostic::error(
-                item.span,
-                "enums are not supported in executable builds",
-            )),
+            Item::Enum(_) => {}
+        }
+    }
+
+    for item in &program.items {
+        if let Item::Enum(item) = item
+            && let Some(enum_) = lower_enum_definition(item, &structs, &mut diagnostics)
+        {
+            enums.insert(item.name.clone(), enum_);
         }
     }
 
@@ -194,7 +236,9 @@ pub fn lower_program(program: &Program) -> Result<LoweredProgram, Vec<Diagnostic
             continue;
         }
 
-        if let Some(signature) = lower_function_signature(function, &structs, &mut diagnostics) {
+        if let Some(signature) =
+            lower_function_signature(function, &structs, &enums, &mut diagnostics)
+        {
             signatures.insert(name.clone(), signature);
         }
     }
@@ -214,7 +258,8 @@ pub fn lower_program(program: &Program) -> Result<LoweredProgram, Vec<Diagnostic
                 continue;
             }
 
-            let Ok(Some(return_type)) = infer_function_return_type(function, &signatures, &structs)
+            let Ok(Some(return_type)) =
+                infer_function_return_type(function, &signatures, &structs, &enums)
             else {
                 continue;
             };
@@ -255,7 +300,7 @@ pub fn lower_program(program: &Program) -> Result<LoweredProgram, Vec<Diagnostic
             continue;
         }
 
-        if let Err(conflict) = infer_function_return_type(function, &signatures, &structs) {
+        if let Err(conflict) = infer_function_return_type(function, &signatures, &structs, &enums) {
             has_return_type_conflict = true;
             diagnostics.push(Diagnostic::error(
                 conflict.span,
@@ -317,25 +362,88 @@ pub fn lower_program(program: &Program) -> Result<LoweredProgram, Vec<Diagnostic
             continue;
         }
 
-        if let Some(function) = lower_function(function, &signatures, &structs, &mut diagnostics) {
+        if let Some(function) =
+            lower_function(function, &signatures, &structs, &enums, &mut diagnostics)
+        {
             functions.push(function);
         }
     }
 
-    let statements = lower_main(main, &signatures, &structs, &mut diagnostics);
+    let statements = lower_main(main, &signatures, &structs, &enums, &mut diagnostics);
 
     if diagnostics.is_empty() {
         let mut structs = structs.into_values().collect::<Vec<_>>();
         structs.sort_by(|left, right| left.name.cmp(&right.name));
+        let mut enums = enums.into_values().collect::<Vec<_>>();
+        enums.sort_by(|left, right| left.name.cmp(&right.name));
 
         Ok(LoweredProgram {
             structs,
+            enums,
             functions,
             statements,
         })
     } else {
         Err(diagnostics)
     }
+}
+
+fn lower_enum_definition(
+    item: &crate::ast::EnumDecl,
+    structs: &HashMap<String, LoweredStruct>,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> Option<LoweredEnum> {
+    let mut variants = Vec::new();
+    let mut variant_names = HashMap::new();
+    let mut can_lower = true;
+
+    if item.variants.is_empty() {
+        diagnostics.push(Diagnostic::error(
+            item.span,
+            format!("enum `{}` must define at least one variant", item.name),
+        ));
+        can_lower = false;
+    }
+
+    for variant in &item.variants {
+        if variant_names
+            .insert(variant.name.clone(), variant.span)
+            .is_some()
+        {
+            diagnostics.push(Diagnostic::error(
+                variant.span,
+                format!(
+                    "duplicate variant `{}` in enum `{}`",
+                    variant.name, item.name
+                ),
+            ));
+            can_lower = false;
+        }
+
+        let payload = variant.payload.as_ref().and_then(|type_ref| {
+            lower_value_type_ref(
+                type_ref,
+                structs,
+                &HashMap::new(),
+                diagnostics,
+                "enum payloads only support basic and known struct types in executable builds",
+            )
+        });
+
+        if variant.payload.is_some() && payload.is_none() {
+            can_lower = false;
+        }
+
+        variants.push(LoweredVariant {
+            name: variant.name.clone(),
+            payload,
+        });
+    }
+
+    can_lower.then(|| LoweredEnum {
+        name: item.name.clone(),
+        variants,
+    })
 }
 
 fn lower_struct_definition(
@@ -394,6 +502,7 @@ fn lower_struct_definition(
 fn lower_function_signature(
     function: &FunctionDecl,
     structs: &HashMap<String, LoweredStruct>,
+    enums: &HashMap<String, LoweredEnum>,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> Option<FunctionSignature> {
     let mut params = Vec::new();
@@ -420,8 +529,9 @@ fn lower_function_signature(
         let Some(type_) = lower_value_type_ref(
             type_ref,
             structs,
+            enums,
             diagnostics,
-            "only basic and known struct parameter types are supported in executable builds",
+            "only basic, known struct, and known enum parameter types are supported in executable builds",
         ) else {
             can_lower = false;
             continue;
@@ -434,8 +544,9 @@ fn lower_function_signature(
         let Some(return_type) = lower_value_type_ref(
             return_type,
             structs,
+            enums,
             diagnostics,
-            "only basic and known struct return types are supported in executable builds",
+            "only basic, known struct, and known enum return types are supported in executable builds",
         ) else {
             return None;
         };
@@ -458,6 +569,7 @@ fn lower_function_signature(
 fn lower_value_type_ref(
     type_ref: &TypeRef,
     structs: &HashMap<String, LoweredStruct>,
+    enums: &HashMap<String, LoweredEnum>,
     diagnostics: &mut Vec<Diagnostic>,
     message: &str,
 ) -> Option<LoweredType> {
@@ -479,6 +591,10 @@ fn lower_value_type_ref(
 
     if structs.contains_key(&type_ref.name) {
         return Some(LoweredType::Struct(type_ref.name.clone()));
+    }
+
+    if enums.contains_key(&type_ref.name) {
+        return Some(LoweredType::Enum(type_ref.name.clone()));
     }
 
     diagnostics.push(Diagnostic::error(type_ref.span, message));
@@ -510,6 +626,7 @@ fn infer_function_return_type(
     function: &FunctionDecl,
     signatures: &HashMap<String, FunctionSignature>,
     structs: &HashMap<String, LoweredStruct>,
+    enums: &HashMap<String, LoweredEnum>,
 ) -> Result<Option<LoweredType>, ReturnTypeConflict> {
     let mut locals = HashMap::new();
 
@@ -521,6 +638,8 @@ fn infer_function_return_type(
             LoweredType::Basic(type_)
         } else if let Some(struct_) = structs.get(&type_ref.name) {
             LoweredType::Struct(struct_.name.clone())
+        } else if let Some(enum_) = enums.get(&type_ref.name) {
+            LoweredType::Enum(enum_.name.clone())
         } else {
             return Ok(None);
         };
@@ -528,7 +647,7 @@ fn infer_function_return_type(
     }
 
     match &function.body {
-        FunctionBody::Expr(expr) => Ok(infer_expr_type(expr, &locals, signatures, structs)),
+        FunctionBody::Expr(expr) => Ok(infer_expr_type(expr, &locals, signatures, structs, enums)),
         FunctionBody::Block(block) => {
             let mut return_type = None;
             let mut has_unresolved_value_return = false;
@@ -537,6 +656,7 @@ fn infer_function_return_type(
                 &mut locals,
                 signatures,
                 structs,
+                enums,
                 &mut return_type,
                 &mut has_unresolved_value_return,
             )?;
@@ -555,6 +675,7 @@ fn infer_block_return_types(
     locals: &mut HashMap<String, LoweredType>,
     signatures: &HashMap<String, FunctionSignature>,
     structs: &HashMap<String, LoweredStruct>,
+    enums: &HashMap<String, LoweredEnum>,
     return_type: &mut Option<LoweredType>,
     has_unresolved_value_return: &mut bool,
 ) -> Result<(), ReturnTypeConflict> {
@@ -562,13 +683,13 @@ fn infer_block_return_types(
         match &statement.kind {
             StmtKind::Let { name, value, .. } => {
                 if let Some(value) = value
-                    && let Some(type_) = infer_expr_type(value, locals, signatures, structs)
+                    && let Some(type_) = infer_expr_type(value, locals, signatures, structs, enums)
                 {
                     locals.insert(name.clone(), type_);
                 }
             }
             StmtKind::Return { value: Some(value) } => {
-                if let Some(type_) = infer_expr_type(value, locals, signatures, structs) {
+                if let Some(type_) = infer_expr_type(value, locals, signatures, structs, enums) {
                     merge_inferred_return_type(return_type, type_, value.span)?;
                 } else {
                     *has_unresolved_value_return = true;
@@ -588,6 +709,7 @@ fn infer_block_return_types(
                     &mut branch_locals,
                     signatures,
                     structs,
+                    enums,
                     return_type,
                     has_unresolved_value_return,
                 )?;
@@ -601,6 +723,7 @@ fn infer_block_return_types(
                             &mut branch_locals,
                             signatures,
                             structs,
+                            enums,
                             return_type,
                             has_unresolved_value_return,
                         )?,
@@ -614,6 +737,7 @@ fn infer_block_return_types(
                                 &mut branch_locals,
                                 signatures,
                                 structs,
+                                enums,
                                 return_type,
                                 has_unresolved_value_return,
                             )?;
@@ -660,6 +784,7 @@ fn infer_expr_type(
     locals: &HashMap<String, LoweredType>,
     signatures: &HashMap<String, FunctionSignature>,
     structs: &HashMap<String, LoweredStruct>,
+    enums: &HashMap<String, LoweredEnum>,
 ) -> Option<LoweredType> {
     match &expr.kind {
         ExprKind::String(_) => Some(LoweredType::Basic(BasicType::String)),
@@ -682,7 +807,7 @@ fn infer_expr_type(
         ExprKind::Unary {
             op: UnaryOp::Negate,
             operand,
-        } => infer_expr_type(operand, locals, signatures, structs),
+        } => infer_expr_type(operand, locals, signatures, structs, enums),
         ExprKind::Binary {
             left,
             op:
@@ -696,9 +821,9 @@ fn infer_expr_type(
             if matches!(left.kind, ExprKind::Number(_))
                 && !matches!(right.kind, ExprKind::Number(_))
             {
-                infer_expr_type(right, locals, signatures, structs)
+                infer_expr_type(right, locals, signatures, structs, enums)
             } else {
-                infer_expr_type(left, locals, signatures, structs)
+                infer_expr_type(left, locals, signatures, structs, enums)
             }
         }
         ExprKind::Number(_) => Some(LoweredType::Basic(BasicType::I32)),
@@ -707,8 +832,15 @@ fn infer_expr_type(
             Some(LoweredType::Struct(name.clone()))
         }
         ExprKind::Member { object, name } => {
+            if let ExprKind::Identifier(enum_name) = &object.kind
+                && let Some(variant) = find_qualified_variant(enums, enum_name, name)
+                && variant.payload.is_none()
+            {
+                return Some(LoweredType::Enum(enum_name.clone()));
+            }
+
             let LoweredType::Struct(struct_name) =
-                infer_expr_type(object, locals, signatures, structs)?
+                infer_expr_type(object, locals, signatures, structs, enums)?
             else {
                 return None;
             };
@@ -720,9 +852,17 @@ fn infer_expr_type(
                 .map(|field| field.type_.clone())
         }
         ExprKind::Call { callee, .. } => {
+            if let ExprKind::Member { object, name } = &callee.kind
+                && let ExprKind::Identifier(enum_name) = &object.kind
+                && find_qualified_variant(enums, enum_name, name).is_some()
+            {
+                return Some(LoweredType::Enum(enum_name.clone()));
+            }
+
             let ExprKind::Identifier(name) = &callee.kind else {
                 return None;
             };
+
             signatures
                 .get(name)
                 .filter(|signature| signature.return_type_known)
@@ -731,9 +871,13 @@ fn infer_expr_type(
         ExprKind::Array(_)
         | ExprKind::StructInit { .. }
         | ExprKind::Lambda(_)
-        | ExprKind::Match { .. }
         | ExprKind::Missing => None,
-        ExprKind::PostfixIncrement(target) => infer_expr_type(target, locals, signatures, structs),
+        ExprKind::Match { branches, .. } => branches
+            .first()
+            .and_then(|branch| infer_expr_type(&branch.value, locals, signatures, structs, enums)),
+        ExprKind::PostfixIncrement(target) => {
+            infer_expr_type(target, locals, signatures, structs, enums)
+        }
     }
 }
 
@@ -741,6 +885,7 @@ fn lower_function(
     function: &FunctionDecl,
     signatures: &HashMap<String, FunctionSignature>,
     structs: &HashMap<String, LoweredStruct>,
+    enums: &HashMap<String, LoweredEnum>,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> Option<LoweredFunction> {
     let name = function.name.as_ref()?;
@@ -758,6 +903,7 @@ fn lower_function(
                 LoweringLocal {
                     type_: type_.clone(),
                     mutable: param.mutable,
+                    replacement: None,
                 },
             )
             .is_some()
@@ -781,6 +927,7 @@ fn lower_function(
                 &locals,
                 signatures,
                 structs,
+                enums,
                 diagnostics,
                 Some(signature.return_type.clone()),
                 "expected supported arrow function value in executable builds",
@@ -797,6 +944,7 @@ fn lower_function(
                             &mut locals,
                             signatures,
                             structs,
+                            enums,
                             diagnostics,
                         ) {
                             statements.push(statement);
@@ -808,6 +956,7 @@ fn lower_function(
                             &locals,
                             signatures,
                             structs,
+                            enums,
                             diagnostics,
                         ) {
                             statements.push(statement);
@@ -820,6 +969,7 @@ fn lower_function(
                                 &locals,
                                 signatures,
                                 structs,
+                                enums,
                                 diagnostics,
                                 Some(signature.return_type.clone()),
                                 "expected supported return value in executable builds",
@@ -838,6 +988,7 @@ fn lower_function(
                             &locals,
                             signatures,
                             structs,
+                            enums,
                             diagnostics,
                         ) {
                             statements.push(statement);
@@ -849,6 +1000,7 @@ fn lower_function(
                             &locals,
                             signatures,
                             structs,
+                            enums,
                             diagnostics,
                             Some(&signature.return_type),
                         ) {
@@ -891,6 +1043,7 @@ fn lower_main(
     main: &FunctionDecl,
     signatures: &HashMap<String, FunctionSignature>,
     structs: &HashMap<String, LoweredStruct>,
+    enums: &HashMap<String, LoweredEnum>,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> Vec<LoweredStatement> {
     let mut statements = Vec::new();
@@ -920,6 +1073,7 @@ fn lower_main(
                             &locals,
                             signatures,
                             structs,
+                            enums,
                             diagnostics,
                         ) {
                             statements.push(statement);
@@ -931,6 +1085,7 @@ fn lower_main(
                             &mut locals,
                             signatures,
                             structs,
+                            enums,
                             diagnostics,
                         ) {
                             statements.push(statement);
@@ -942,6 +1097,7 @@ fn lower_main(
                             &locals,
                             signatures,
                             structs,
+                            enums,
                             diagnostics,
                         ) {
                             statements.push(statement);
@@ -959,6 +1115,7 @@ fn lower_main(
                             &locals,
                             signatures,
                             structs,
+                            enums,
                             diagnostics,
                             None,
                         ) {
@@ -988,6 +1145,7 @@ fn lower_if_statement(
     locals: &HashMap<String, LoweringLocal>,
     signatures: &HashMap<String, FunctionSignature>,
     structs: &HashMap<String, LoweredStruct>,
+    enums: &HashMap<String, LoweredEnum>,
     diagnostics: &mut Vec<Diagnostic>,
     return_type: Option<&LoweredType>,
 ) -> Option<LoweredStatement> {
@@ -1005,6 +1163,7 @@ fn lower_if_statement(
         locals,
         signatures,
         structs,
+        enums,
         diagnostics,
         Some(LoweredType::Basic(BasicType::Bool)),
         "expected supported `if` condition in executable builds",
@@ -1014,6 +1173,7 @@ fn lower_if_statement(
         &mut locals.clone(),
         signatures,
         structs,
+        enums,
         diagnostics,
         return_type,
     );
@@ -1026,6 +1186,7 @@ fn lower_if_statement(
                 &mut branch_locals,
                 signatures,
                 structs,
+                enums,
                 diagnostics,
                 return_type,
             ),
@@ -1034,6 +1195,7 @@ fn lower_if_statement(
                 &branch_locals,
                 signatures,
                 structs,
+                enums,
                 diagnostics,
                 return_type,
             )
@@ -1054,6 +1216,7 @@ fn lower_conditional_block(
     locals: &mut HashMap<String, LoweringLocal>,
     signatures: &HashMap<String, FunctionSignature>,
     structs: &HashMap<String, LoweredStruct>,
+    enums: &HashMap<String, LoweredEnum>,
     diagnostics: &mut Vec<Diagnostic>,
     return_type: Option<&LoweredType>,
 ) -> Vec<LoweredStatement> {
@@ -1062,16 +1225,26 @@ fn lower_conditional_block(
     for statement in &block.statements {
         match &statement.kind {
             StmtKind::Let { .. } => {
-                if let Some(statement) =
-                    lower_local_statement(statement, locals, signatures, structs, diagnostics)
-                {
+                if let Some(statement) = lower_local_statement(
+                    statement,
+                    locals,
+                    signatures,
+                    structs,
+                    enums,
+                    diagnostics,
+                ) {
                     statements.push(statement);
                 }
             }
             StmtKind::Assign { .. } => {
-                if let Some(statement) =
-                    lower_assignment_statement(statement, locals, signatures, structs, diagnostics)
-                {
+                if let Some(statement) = lower_assignment_statement(
+                    statement,
+                    locals,
+                    signatures,
+                    structs,
+                    enums,
+                    diagnostics,
+                ) {
                     statements.push(statement);
                 }
             }
@@ -1089,6 +1262,7 @@ fn lower_conditional_block(
                         locals,
                         signatures,
                         structs,
+                        enums,
                         diagnostics,
                         Some(return_type.clone()),
                         "expected supported return value in executable builds",
@@ -1102,6 +1276,7 @@ fn lower_conditional_block(
                     locals,
                     signatures,
                     structs,
+                    enums,
                     diagnostics,
                     return_type,
                 ) {
@@ -1113,9 +1288,14 @@ fn lower_conditional_block(
                 "for loops are not supported in executable builds",
             )),
             StmtKind::Expr(expr) => {
-                if let Some(statement) =
-                    lower_expression_statement(expr, locals, signatures, structs, diagnostics)
-                {
+                if let Some(statement) = lower_expression_statement(
+                    expr,
+                    locals,
+                    signatures,
+                    structs,
+                    enums,
+                    diagnostics,
+                ) {
                     statements.push(statement);
                 }
             }
@@ -1156,6 +1336,7 @@ fn lower_expression_statement(
     locals: &HashMap<String, LoweringLocal>,
     signatures: &HashMap<String, FunctionSignature>,
     structs: &HashMap<String, LoweredStruct>,
+    enums: &HashMap<String, LoweredEnum>,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> Option<LoweredStatement> {
     if matches!(expr.kind, ExprKind::PostfixIncrement(_)) {
@@ -1164,6 +1345,7 @@ fn lower_expression_statement(
             locals,
             signatures,
             structs,
+            enums,
             diagnostics,
             None,
             "expected supported increment expression in executable builds",
@@ -1200,6 +1382,7 @@ fn lower_expression_statement(
             locals,
             signatures,
             structs,
+            enums,
             diagnostics,
             None,
             "`io.println` only accepts `String` values in executable builds",
@@ -1224,6 +1407,7 @@ fn lower_expression_statement(
         locals,
         signatures,
         structs,
+        enums,
         diagnostics,
         None,
         "expected supported function call in executable builds",
@@ -1243,6 +1427,7 @@ fn lower_local_statement(
     locals: &mut HashMap<String, LoweringLocal>,
     signatures: &HashMap<String, FunctionSignature>,
     structs: &HashMap<String, LoweredStruct>,
+    enums: &HashMap<String, LoweredEnum>,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> Option<LoweredStatement> {
     let StmtKind::Let {
@@ -1269,10 +1454,12 @@ fn lower_local_statement(
             Some(LoweredType::Basic(type_))
         } else if structs.contains_key(&type_annotation.name) {
             Some(LoweredType::Struct(type_annotation.name.clone()))
+        } else if enums.contains_key(&type_annotation.name) {
+            Some(LoweredType::Enum(type_annotation.name.clone()))
         } else {
             diagnostics.push(Diagnostic::error(
                 type_annotation.span,
-                "only basic and struct local types are supported in executable builds",
+                "only basic, struct, and enum local types are supported in executable builds",
             ));
             can_lower = false;
             None
@@ -1287,6 +1474,7 @@ fn lower_local_statement(
             locals,
             signatures,
             structs,
+            enums,
             diagnostics,
             annotated_type.clone(),
             "only literal, string concat, struct literal, field access, and function call local values are supported in executable builds",
@@ -1298,10 +1486,10 @@ fn lower_local_statement(
             LoweredType::Basic(type_) if type_.is_numeric() => {
                 LoweredExprKind::NumberLiteral("0".to_string())
             }
-            LoweredType::Struct(_) => {
+            LoweredType::Struct(_) | LoweredType::Enum(_) => {
                 diagnostics.push(Diagnostic::error(
                     statement.span,
-                    "struct locals must include an initializer in executable builds",
+                    "struct and enum locals must include an initializer in executable builds",
                 ));
                 return None;
             }
@@ -1338,6 +1526,7 @@ fn lower_local_statement(
             LoweringLocal {
                 type_: value.type_.clone(),
                 mutable: *mutable,
+                replacement: None,
             },
         )
         .is_some()
@@ -1360,6 +1549,7 @@ fn lower_assignment_statement(
     locals: &HashMap<String, LoweringLocal>,
     signatures: &HashMap<String, FunctionSignature>,
     structs: &HashMap<String, LoweredStruct>,
+    enums: &HashMap<String, LoweredEnum>,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> Option<LoweredStatement> {
     let StmtKind::Assign { target, value } = &statement.kind else {
@@ -1393,6 +1583,7 @@ fn lower_assignment_statement(
         locals,
         signatures,
         structs,
+        enums,
         diagnostics,
         Some(local.type_.clone()),
         "expected supported assignment value in executable builds",
@@ -1411,6 +1602,7 @@ fn lower_struct_init(
     locals: &HashMap<String, LoweringLocal>,
     signatures: &HashMap<String, FunctionSignature>,
     structs: &HashMap<String, LoweredStruct>,
+    enums: &HashMap<String, LoweredEnum>,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> Option<LoweredExpr> {
     let Some(struct_) = structs.get(name) else {
@@ -1452,6 +1644,7 @@ fn lower_struct_init(
             locals,
             signatures,
             structs,
+            enums,
             diagnostics,
             Some(expected_field.type_.clone()),
             "expected supported struct field value in executable builds",
@@ -1491,6 +1684,7 @@ fn lower_expr(
     locals: &HashMap<String, LoweringLocal>,
     signatures: &HashMap<String, FunctionSignature>,
     structs: &HashMap<String, LoweredStruct>,
+    enums: &HashMap<String, LoweredEnum>,
     diagnostics: &mut Vec<Diagnostic>,
     expected_type: Option<LoweredType>,
     message: &str,
@@ -1520,10 +1714,13 @@ fn lower_expr(
                 kind: LoweredExprKind::NumberLiteral(value.clone()),
             }
         }
-        ExprKind::Identifier(name) if locals.contains_key(name) => LoweredExpr {
-            type_: locals[name].type_.clone(),
-            kind: LoweredExprKind::Local(name.clone()),
-        },
+        ExprKind::Identifier(name) if locals.contains_key(name) => locals[name]
+            .replacement
+            .clone()
+            .unwrap_or_else(|| LoweredExpr {
+                type_: locals[name].type_.clone(),
+                kind: LoweredExprKind::Local(name.clone()),
+            }),
         ExprKind::Identifier(name) => {
             diagnostics.push(Diagnostic::error(
                 expr.span,
@@ -1583,6 +1780,7 @@ fn lower_expr(
                 locals,
                 signatures,
                 structs,
+                enums,
                 diagnostics,
                 Some(LoweredType::Basic(BasicType::Bool)),
                 "expected supported boolean operand in executable builds",
@@ -1602,6 +1800,7 @@ fn lower_expr(
                 locals,
                 signatures,
                 structs,
+                enums,
                 diagnostics,
                 expected_type.clone(),
                 "expected supported signed numeric operand in executable builds",
@@ -1634,6 +1833,7 @@ fn lower_expr(
                 locals,
                 signatures,
                 structs,
+                enums,
                 diagnostics,
                 Some(bool_type.clone()),
                 "expected supported boolean operand in executable builds",
@@ -1643,6 +1843,7 @@ fn lower_expr(
                 locals,
                 signatures,
                 structs,
+                enums,
                 diagnostics,
                 Some(bool_type.clone()),
                 "expected supported boolean operand in executable builds",
@@ -1677,6 +1878,7 @@ fn lower_expr(
                     locals,
                     signatures,
                     structs,
+                    enums,
                     diagnostics,
                     Some(type_.clone()),
                     "expected supported arithmetic operand in executable builds",
@@ -1686,6 +1888,7 @@ fn lower_expr(
                     locals,
                     signatures,
                     structs,
+                    enums,
                     diagnostics,
                     Some(type_.clone()),
                     "expected supported arithmetic operand in executable builds",
@@ -1699,6 +1902,7 @@ fn lower_expr(
                     locals,
                     signatures,
                     structs,
+                    enums,
                     diagnostics,
                     None,
                     "expected supported arithmetic operand in executable builds",
@@ -1708,6 +1912,7 @@ fn lower_expr(
                     locals,
                     signatures,
                     structs,
+                    enums,
                     diagnostics,
                     Some(right.type_.clone()),
                     "expected supported arithmetic operand in executable builds",
@@ -1719,6 +1924,7 @@ fn lower_expr(
                     locals,
                     signatures,
                     structs,
+                    enums,
                     diagnostics,
                     None,
                     "expected supported arithmetic operand in executable builds",
@@ -1728,6 +1934,7 @@ fn lower_expr(
                     locals,
                     signatures,
                     structs,
+                    enums,
                     diagnostics,
                     Some(left.type_.clone()),
                     "expected supported arithmetic operand in executable builds",
@@ -1773,6 +1980,7 @@ fn lower_expr(
                     locals,
                     signatures,
                     structs,
+                    enums,
                     diagnostics,
                     None,
                     "expected supported comparison operand in executable builds",
@@ -1782,6 +1990,7 @@ fn lower_expr(
                     locals,
                     signatures,
                     structs,
+                    enums,
                     diagnostics,
                     Some(right.type_.clone()),
                     "expected supported comparison operand in executable builds",
@@ -1793,6 +2002,7 @@ fn lower_expr(
                     locals,
                     signatures,
                     structs,
+                    enums,
                     diagnostics,
                     None,
                     "expected supported comparison operand in executable builds",
@@ -1802,6 +2012,7 @@ fn lower_expr(
                     locals,
                     signatures,
                     structs,
+                    enums,
                     diagnostics,
                     Some(left.type_.clone()),
                     "expected supported comparison operand in executable builds",
@@ -1854,15 +2065,44 @@ fn lower_expr(
                 },
             }
         }
-        ExprKind::StructInit { name, fields } => {
-            lower_struct_init(expr, name, fields, locals, signatures, structs, diagnostics)?
-        }
+        ExprKind::StructInit { name, fields } => lower_struct_init(
+            expr,
+            name,
+            fields,
+            locals,
+            signatures,
+            structs,
+            enums,
+            diagnostics,
+        )?,
         ExprKind::Member { object, name } => {
+            if let ExprKind::Identifier(enum_name) = &object.kind
+                && let Some(variant) = find_qualified_variant(enums, enum_name, name)
+            {
+                if variant.payload.is_some() {
+                    diagnostics.push(Diagnostic::error(
+                        expr.span,
+                        format!("enum variant `{enum_name}.{name}` requires a payload"),
+                    ));
+                    return None;
+                }
+
+                return Some(LoweredExpr {
+                    type_: LoweredType::Enum(enum_name.clone()),
+                    kind: LoweredExprKind::EnumLiteral {
+                        enum_name: enum_name.clone(),
+                        variant: name.clone(),
+                        payload: None,
+                    },
+                });
+            }
+
             let object = lower_expr(
                 object,
                 locals,
                 signatures,
                 structs,
+                enums,
                 diagnostics,
                 None,
                 "expected supported field access object in executable builds",
@@ -1901,59 +2141,210 @@ fn lower_expr(
             }
         }
         ExprKind::Call { callee, args } => {
-            let ExprKind::Identifier(name) = &callee.kind else {
-                diagnostics.push(Diagnostic::error(
-                    callee.span,
-                    "only direct helper function calls are supported in executable builds",
-                ));
-                return None;
-            };
+            if let ExprKind::Member { object, name } = &callee.kind
+                && let ExprKind::Identifier(enum_name) = &object.kind
+                && let Some(variant) = find_qualified_variant(enums, enum_name, name)
+            {
+                let expected_count = usize::from(variant.payload.is_some());
 
-            let Some(signature) = signatures.get(name) else {
-                diagnostics.push(Diagnostic::error(
-                    expr.span,
-                    format!("unknown helper function `{name}` in executable build"),
-                ));
-                return None;
-            };
+                if args.len() != expected_count {
+                    diagnostics.push(Diagnostic::error(
+                        expr.span,
+                        format!(
+                            "enum variant `{enum_name}.{name}` expects {expected_count} arguments, got {}",
+                            args.len()
+                        ),
+                    ));
+                    return None;
+                }
 
-            if args.len() != signature.params.len() {
-                diagnostics.push(Diagnostic::error(
-                    expr.span,
-                    format!(
-                        "function `{name}` expects {} arguments, got {}",
-                        signature.params.len(),
-                        args.len()
-                    ),
-                ));
-                return None;
-            }
+                let payload = if let Some(type_) = &variant.payload {
+                    Some(Box::new(lower_expr(
+                        &args[0],
+                        locals,
+                        signatures,
+                        structs,
+                        enums,
+                        diagnostics,
+                        Some(type_.clone()),
+                        "expected supported enum payload in executable builds",
+                    )?))
+                } else {
+                    None
+                };
 
-            let mut lowered_args = Vec::new();
+                LoweredExpr {
+                    type_: LoweredType::Enum(enum_name.clone()),
+                    kind: LoweredExprKind::EnumLiteral {
+                        enum_name: enum_name.clone(),
+                        variant: name.clone(),
+                        payload,
+                    },
+                }
+            } else {
+                let ExprKind::Identifier(name) = &callee.kind else {
+                    diagnostics.push(Diagnostic::error(
+                        callee.span,
+                        "only direct helper function and enum variant calls are supported in executable builds",
+                    ));
+                    return None;
+                };
 
-            for (arg, type_) in args.iter().zip(&signature.params) {
-                if let Some(arg) = lower_expr(
-                    arg,
-                    locals,
-                    signatures,
-                    structs,
-                    diagnostics,
-                    Some(type_.clone()),
-                    "expected supported function argument in executable builds",
-                ) {
-                    lowered_args.push(arg);
+                let Some(signature) = signatures.get(name) else {
+                    diagnostics.push(Diagnostic::error(
+                        expr.span,
+                        format!("unknown helper function `{name}` in executable build"),
+                    ));
+                    return None;
+                };
+
+                if args.len() != signature.params.len() {
+                    diagnostics.push(Diagnostic::error(
+                        expr.span,
+                        format!(
+                            "function `{name}` expects {} arguments, got {}",
+                            signature.params.len(),
+                            args.len()
+                        ),
+                    ));
+                    return None;
+                }
+
+                let mut lowered_args = Vec::new();
+
+                for (arg, type_) in args.iter().zip(&signature.params) {
+                    if let Some(arg) = lower_expr(
+                        arg,
+                        locals,
+                        signatures,
+                        structs,
+                        enums,
+                        diagnostics,
+                        Some(type_.clone()),
+                        "expected supported function argument in executable builds",
+                    ) {
+                        lowered_args.push(arg);
+                    }
+                }
+
+                if lowered_args.len() != args.len() {
+                    return None;
+                }
+
+                LoweredExpr {
+                    type_: signature.return_type.clone(),
+                    kind: LoweredExprKind::Call {
+                        name: name.clone(),
+                        args: lowered_args,
+                    },
                 }
             }
-
-            if lowered_args.len() != args.len() {
+        }
+        ExprKind::Match { value, branches } => {
+            if !matches!(value.kind, ExprKind::Identifier(_)) {
+                diagnostics.push(Diagnostic::error(
+                    value.span,
+                    "executable matches currently require a local or parameter value",
+                ));
                 return None;
             }
 
+            let value = lower_expr(
+                value,
+                locals,
+                signatures,
+                structs,
+                enums,
+                diagnostics,
+                None,
+                "expected supported match value in executable builds",
+            )?;
+            let LoweredType::Enum(enum_name) = &value.type_ else {
+                diagnostics.push(Diagnostic::error(
+                    expr.span,
+                    "match expressions require an enum value in executable builds",
+                ));
+                return None;
+            };
+            let enum_name = enum_name.clone();
+            let enum_ = enums.get(&enum_name)?;
+            let mut lowered_branches = Vec::new();
+            let mut result_type = None;
+
+            for branch in branches {
+                let Pattern::Variant {
+                    enum_name: pattern_enum_name,
+                    variant: name,
+                    binding,
+                    span,
+                } = &branch.pattern;
+                if pattern_enum_name != &enum_name {
+                    diagnostics.push(Diagnostic::error(
+                        *span,
+                        format!(
+                            "pattern `{pattern_enum_name}.{name}` does not belong to enum `{enum_name}`"
+                        ),
+                    ));
+                    return None;
+                }
+                let Some(variant) = enum_.variants.iter().find(|variant| variant.name == *name)
+                else {
+                    diagnostics.push(Diagnostic::error(
+                        *span,
+                        format!("unknown variant `{name}` for enum `{enum_name}`"),
+                    ));
+                    return None;
+                };
+                let mut branch_locals = locals.clone();
+
+                if let (Some(binding), Some(payload_type)) = (binding, &variant.payload) {
+                    branch_locals.insert(
+                        binding.clone(),
+                        LoweringLocal {
+                            type_: payload_type.clone(),
+                            mutable: false,
+                            replacement: Some(LoweredExpr {
+                                type_: payload_type.clone(),
+                                kind: LoweredExprKind::EnumPayload {
+                                    object: Box::new(value.clone()),
+                                    variant: name.clone(),
+                                },
+                            }),
+                        },
+                    );
+                }
+
+                let branch_value = lower_expr(
+                    &branch.value,
+                    &branch_locals,
+                    signatures,
+                    structs,
+                    enums,
+                    diagnostics,
+                    expected_type.clone().or_else(|| result_type.clone()),
+                    "expected supported match branch value in executable builds",
+                )?;
+                result_type.get_or_insert_with(|| branch_value.type_.clone());
+                lowered_branches.push(LoweredMatchBranch {
+                    variant: name.clone(),
+                    value: branch_value,
+                });
+            }
+
+            let Some(result_type) = result_type else {
+                diagnostics.push(Diagnostic::error(
+                    expr.span,
+                    "match expressions require at least one branch",
+                ));
+                return None;
+            };
+
             LoweredExpr {
-                type_: signature.return_type.clone(),
-                kind: LoweredExprKind::Call {
-                    name: name.clone(),
-                    args: lowered_args,
+                type_: result_type,
+                kind: LoweredExprKind::Match {
+                    value: Box::new(value),
+                    enum_name,
+                    branches: lowered_branches,
                 },
             }
         }
@@ -1978,4 +2369,16 @@ fn lower_expr(
     }
 
     Some(lowered)
+}
+
+fn find_qualified_variant<'a>(
+    enums: &'a HashMap<String, LoweredEnum>,
+    enum_name: &str,
+    variant_name: &str,
+) -> Option<&'a LoweredVariant> {
+    enums
+        .get(enum_name)?
+        .variants
+        .iter()
+        .find(|variant| variant.name == variant_name)
 }

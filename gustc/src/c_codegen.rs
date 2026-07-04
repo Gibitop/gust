@@ -1,7 +1,7 @@
 use crate::ast::{BasicType, BinaryOp};
 use crate::lower::{
-    LoweredExpr, LoweredExprKind, LoweredFunction, LoweredProgram, LoweredStatement, LoweredStruct,
-    LoweredType,
+    LoweredEnum, LoweredExpr, LoweredExprKind, LoweredFunction, LoweredProgram, LoweredStatement,
+    LoweredStruct, LoweredType,
 };
 
 pub fn emit_c(program: &LoweredProgram) -> String {
@@ -46,6 +46,11 @@ pub fn emit_c(program: &LoweredProgram) -> String {
 
     for struct_ in &program.structs {
         push_c_struct(&mut source, struct_);
+        source.push('\n');
+    }
+
+    for enum_ in &program.enums {
+        push_c_enum(&mut source, enum_);
         source.push('\n');
     }
 
@@ -103,6 +108,12 @@ fn program_uses_type(program: &LoweredProgram, type_: BasicType) -> bool {
         .structs
         .iter()
         .any(|struct_| struct_uses_type(struct_, type_))
+        || program.enums.iter().any(|enum_| {
+            enum_
+                .variants
+                .iter()
+                .any(|variant| variant.payload == Some(LoweredType::Basic(type_)))
+        })
         || program
             .functions
             .iter()
@@ -177,6 +188,18 @@ fn expr_uses_type(expr: &LoweredExpr, type_: BasicType) -> bool {
             LoweredExprKind::StructLiteral { fields, .. } => fields
                 .iter()
                 .any(|field| expr_uses_type(&field.value, type_)),
+            LoweredExprKind::EnumLiteral { payload, .. } => payload
+                .as_ref()
+                .is_some_and(|payload| expr_uses_type(payload, type_)),
+            LoweredExprKind::EnumPayload { object, .. } => expr_uses_type(object, type_),
+            LoweredExprKind::Match {
+                value, branches, ..
+            } => {
+                expr_uses_type(value, type_)
+                    || branches
+                        .iter()
+                        .any(|branch| expr_uses_type(&branch.value, type_))
+            }
             LoweredExprKind::FieldAccess { object, .. } => expr_uses_type(object, type_),
             LoweredExprKind::Call { args, .. } => args.iter().any(|arg| expr_uses_type(arg, type_)),
             LoweredExprKind::Void
@@ -265,6 +288,18 @@ fn expr_uses_string_equality(expr: &LoweredExpr) -> bool {
         LoweredExprKind::StructLiteral { fields, .. } => fields
             .iter()
             .any(|field| expr_uses_string_equality(&field.value)),
+        LoweredExprKind::EnumLiteral { payload, .. } => payload
+            .as_ref()
+            .is_some_and(|payload| expr_uses_string_equality(payload)),
+        LoweredExprKind::EnumPayload { object, .. } => expr_uses_string_equality(object),
+        LoweredExprKind::Match {
+            value, branches, ..
+        } => {
+            expr_uses_string_equality(value)
+                || branches
+                    .iter()
+                    .any(|branch| expr_uses_string_equality(&branch.value))
+        }
         LoweredExprKind::FieldAccess { object, .. } => expr_uses_string_equality(object),
         LoweredExprKind::Call { args, .. } => args.iter().any(expr_uses_string_equality),
         LoweredExprKind::Void
@@ -315,6 +350,18 @@ fn expr_uses_string_concat(expr: &LoweredExpr) -> bool {
         LoweredExprKind::StructLiteral { fields, .. } => fields
             .iter()
             .any(|field| expr_uses_string_concat(&field.value)),
+        LoweredExprKind::EnumLiteral { payload, .. } => payload
+            .as_ref()
+            .is_some_and(|payload| expr_uses_string_concat(payload)),
+        LoweredExprKind::EnumPayload { object, .. } => expr_uses_string_concat(object),
+        LoweredExprKind::Match {
+            value, branches, ..
+        } => {
+            expr_uses_string_concat(value)
+                || branches
+                    .iter()
+                    .any(|branch| expr_uses_string_concat(&branch.value))
+        }
         LoweredExprKind::FieldAccess { object, .. } => expr_uses_string_concat(object),
         LoweredExprKind::Call { args, .. } => args.iter().any(expr_uses_string_concat),
         LoweredExprKind::Void
@@ -430,6 +477,18 @@ fn expr_calls_name(expr: &LoweredExpr, name: &str) -> bool {
         LoweredExprKind::StructLiteral { fields, .. } => fields
             .iter()
             .any(|field| expr_calls_name(&field.value, name)),
+        LoweredExprKind::EnumLiteral { payload, .. } => payload
+            .as_ref()
+            .is_some_and(|payload| expr_calls_name(payload, name)),
+        LoweredExprKind::EnumPayload { object, .. } => expr_calls_name(object, name),
+        LoweredExprKind::Match {
+            value, branches, ..
+        } => {
+            expr_calls_name(value, name)
+                || branches
+                    .iter()
+                    .any(|branch| expr_calls_name(&branch.value, name))
+        }
         LoweredExprKind::FieldAccess { object, .. } => expr_calls_name(object, name),
         LoweredExprKind::Call {
             name: called_name,
@@ -461,6 +520,56 @@ fn push_c_struct(source: &mut String, struct_: &LoweredStruct) {
 
     source.push_str("} ");
     push_c_struct_name(source, &struct_.name);
+    source.push_str(";\n");
+}
+
+fn push_c_enum(source: &mut String, enum_: &LoweredEnum) {
+    source.push_str("// Gust enum: ");
+    source.push_str(&enum_.name);
+    source.push('\n');
+    source.push_str("typedef enum ");
+    push_c_enum_tag_name(source, &enum_.name);
+    source.push_str(" {\n");
+
+    for variant in &enum_.variants {
+        source.push_str("    ");
+        push_c_enum_variant_tag(source, &enum_.name, &variant.name);
+        source.push_str(",\n");
+    }
+
+    source.push_str("} ");
+    push_c_enum_tag_name(source, &enum_.name);
+    source.push_str(";\n");
+    source.push_str("typedef struct ");
+    push_c_enum_name(source, &enum_.name);
+    source.push_str(" {\n    ");
+    push_c_enum_tag_name(source, &enum_.name);
+    source.push_str(" gust_tag;\n");
+
+    if enum_
+        .variants
+        .iter()
+        .any(|variant| variant.payload.is_some())
+    {
+        source.push_str("    union {\n");
+
+        for variant in &enum_.variants {
+            let Some(payload) = &variant.payload else {
+                continue;
+            };
+
+            source.push_str("        ");
+            push_c_type(source, payload);
+            source.push(' ');
+            push_c_local_name(source, &variant.name);
+            source.push_str(";\n");
+        }
+
+        source.push_str("    } gust_payload;\n");
+    }
+
+    source.push_str("} ");
+    push_c_enum_name(source, &enum_.name);
     source.push_str(";\n");
 }
 
@@ -541,6 +650,8 @@ fn push_c_statement(source: &mut String, statement: &LoweredStatement, indent: u
             | LoweredExprKind::Logical { .. }
             | LoweredExprKind::Comparison { .. }
             | LoweredExprKind::FieldAccess { .. }
+            | LoweredExprKind::EnumPayload { .. }
+            | LoweredExprKind::Match { .. }
             | LoweredExprKind::Call { .. } => {
                 push_c_indent(source, indent);
                 source.push_str("gust_rt_io_println(");
@@ -553,7 +664,8 @@ fn push_c_statement(source: &mut String, statement: &LoweredStatement, indent: u
             | LoweredExprKind::PostfixIncrement(_)
             | LoweredExprKind::Negate(_)
             | LoweredExprKind::Arithmetic { .. }
-            | LoweredExprKind::StructLiteral { .. } => {
+            | LoweredExprKind::StructLiteral { .. }
+            | LoweredExprKind::EnumLiteral { .. } => {
                 unreachable!("println only lowers String values")
             }
         },
@@ -629,6 +741,23 @@ fn push_c_struct_name(source: &mut String, name: &str) {
     push_c_identifier_suffix(source, name);
 }
 
+fn push_c_enum_name(source: &mut String, name: &str) {
+    source.push_str("gust_enum_");
+    source.push_str(&format!("{:08x}_", stable_name_hash(name)));
+    push_c_identifier_suffix(source, name);
+}
+
+fn push_c_enum_tag_name(source: &mut String, name: &str) {
+    push_c_enum_name(source, name);
+    source.push_str("_tag");
+}
+
+fn push_c_enum_variant_tag(source: &mut String, enum_name: &str, variant: &str) {
+    push_c_enum_tag_name(source, enum_name);
+    source.push('_');
+    push_c_identifier_suffix(source, variant);
+}
+
 fn stable_name_hash(name: &str) -> u32 {
     let mut hash = 0x811c9dc5_u32;
 
@@ -653,6 +782,7 @@ fn push_c_type(source: &mut String, type_: &LoweredType) {
     match type_ {
         LoweredType::Basic(type_) => source.push_str(c_basic_type(*type_)),
         LoweredType::Struct(name) => push_c_struct_name(source, name),
+        LoweredType::Enum(name) => push_c_enum_name(source, name),
         LoweredType::Void => source.push_str("void"),
     }
 }
@@ -774,6 +904,54 @@ fn push_c_value(source: &mut String, value: &LoweredExpr) {
             }
 
             source.push('}');
+        }
+        LoweredExprKind::EnumLiteral {
+            enum_name,
+            variant,
+            payload,
+        } => {
+            source.push('(');
+            push_c_enum_name(source, enum_name);
+            source.push_str("){ .gust_tag = ");
+            push_c_enum_variant_tag(source, enum_name, variant);
+
+            if let Some(payload) = payload {
+                source.push_str(", .gust_payload.");
+                push_c_local_name(source, variant);
+                source.push_str(" = ");
+                push_c_value(source, payload);
+            }
+
+            source.push_str(" }");
+        }
+        LoweredExprKind::EnumPayload { object, variant } => {
+            push_c_value(source, object);
+            source.push_str(".gust_payload.");
+            push_c_local_name(source, variant);
+        }
+        LoweredExprKind::Match {
+            value,
+            enum_name,
+            branches,
+        } => {
+            source.push('(');
+
+            for (index, branch) in branches.iter().enumerate() {
+                if index + 1 < branches.len() {
+                    push_c_value(source, value);
+                    source.push_str(".gust_tag == ");
+                    push_c_enum_variant_tag(source, enum_name, &branch.variant);
+                    source.push_str(" ? ");
+                }
+
+                push_c_value(source, &branch.value);
+
+                if index + 1 < branches.len() {
+                    source.push_str(" : ");
+                }
+            }
+
+            source.push(')');
         }
         LoweredExprKind::FieldAccess { object, field } => {
             push_c_value(source, object);

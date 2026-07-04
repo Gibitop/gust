@@ -19,6 +19,7 @@ struct Analyzer {
     values: HashSet<String>,
     types: HashSet<String>,
     structs: HashMap<String, StructDefinition>,
+    enums: HashMap<String, EnumDefinition>,
     functions: HashMap<String, FunctionSignature>,
     unsupported_features: HashSet<&'static str>,
     scopes: Vec<HashMap<String, Binding>>,
@@ -37,6 +38,11 @@ struct StructDefinition {
 }
 
 #[derive(Debug, Clone)]
+struct EnumDefinition {
+    variants: HashMap<String, Option<Type>>,
+}
+
+#[derive(Debug, Clone)]
 struct Binding {
     mutable: bool,
     type_: Type,
@@ -46,6 +52,7 @@ struct Binding {
 enum Type {
     Basic(BasicType),
     Struct(String),
+    Enum(String),
     Unknown,
 }
 
@@ -54,6 +61,7 @@ impl Type {
         match self {
             Type::Basic(type_) => type_.name().to_string(),
             Type::Struct(name) => name.clone(),
+            Type::Enum(name) => name.clone(),
             Type::Unknown => "unknown".to_string(),
         }
     }
@@ -69,6 +77,7 @@ impl Analyzer {
             values,
             types,
             structs: HashMap::new(),
+            enums: HashMap::new(),
             functions: HashMap::new(),
             unsupported_features: HashSet::new(),
             scopes: Vec::new(),
@@ -91,11 +100,13 @@ impl Analyzer {
                 }
                 Item::Enum(item) => {
                     self.types.insert(item.name.clone());
+                    self.enums.insert(
+                        item.name.clone(),
+                        EnumDefinition {
+                            variants: HashMap::new(),
+                        },
+                    );
                     self.insert_top_level(&mut names, &item.name, item.span);
-
-                    for variant in &item.variants {
-                        self.values.insert(variant.name.clone());
-                    }
                 }
                 Item::Struct(item) => {
                     self.values.insert(item.name.clone());
@@ -124,6 +135,7 @@ impl Analyzer {
         for item in &program.items {
             match item {
                 Item::Struct(item) => self.collect_struct_definition(item),
+                Item::Enum(item) => self.collect_enum_definition(item),
                 Item::Function(item) => {
                     if let Some(name) = &item.name {
                         self.functions.insert(
@@ -142,7 +154,7 @@ impl Analyzer {
                         );
                     }
                 }
-                Item::Import(_) | Item::Enum(_) => {}
+                Item::Import(_) => {}
             }
         }
 
@@ -187,6 +199,33 @@ impl Analyzer {
             .insert(item.name.clone(), StructDefinition { fields });
     }
 
+    fn collect_enum_definition(&mut self, item: &crate::ast::EnumDecl) {
+        let mut variants = HashMap::new();
+
+        for variant in &item.variants {
+            let payload = variant
+                .payload
+                .as_ref()
+                .map(|type_ref| self.type_ref_without_diagnostics(Some(type_ref)));
+
+            if variants
+                .insert(variant.name.clone(), payload.clone())
+                .is_some()
+            {
+                self.diagnostics.push(Diagnostic::error(
+                    variant.span,
+                    format!(
+                        "duplicate variant `{}` in enum `{}`",
+                        variant.name, item.name
+                    ),
+                ));
+            }
+        }
+
+        self.enums
+            .insert(item.name.clone(), EnumDefinition { variants });
+    }
+
     fn insert_top_level(&mut self, names: &mut HashMap<String, Span>, name: &str, span: Span) {
         if let Some(previous_span) = names.insert(name.to_string(), span) {
             self.diagnostics.push(Diagnostic::error(
@@ -208,10 +247,12 @@ impl Analyzer {
                     "imports are parsed but module resolution is not implemented yet",
                 ),
                 Item::Enum(item) => {
-                    self.unsupported(
-                        item.span,
-                        "enums are parsed but enum layout and matching are not implemented yet",
-                    );
+                    if item.variants.is_empty() {
+                        self.diagnostics.push(Diagnostic::error(
+                            item.span,
+                            format!("enum `{}` must define at least one variant", item.name),
+                        ));
+                    }
 
                     for variant in &item.variants {
                         if let Some(type_ref) = &variant.payload {
@@ -461,7 +502,9 @@ impl Analyzer {
             ExprKind::Number(_) => match expected_type {
                 Some(Type::Basic(type_)) if type_.is_numeric() => Type::Basic(type_),
                 Some(Type::Unknown) => Type::Unknown,
-                Some(Type::Basic(_)) | Some(Type::Struct(_)) | None => Type::Basic(BasicType::I32),
+                Some(Type::Basic(_)) | Some(Type::Struct(_)) | Some(Type::Enum(_)) | None => {
+                    Type::Basic(BasicType::I32)
+                }
             },
             ExprKind::String(_) => Type::Basic(BasicType::String),
             ExprKind::Bool(_) => Type::Basic(BasicType::Bool),
@@ -482,6 +525,12 @@ impl Analyzer {
                 if let ExprKind::Identifier(name) = &callee.kind {
                     return self.validate_call(expr, name, args);
                 }
+                if let ExprKind::Member { object, name } = &callee.kind
+                    && let ExprKind::Identifier(enum_name) = &object.kind
+                    && self.enums.contains_key(enum_name)
+                {
+                    return self.validate_variant_call(expr, enum_name, name, args);
+                }
 
                 self.validate_expr(callee);
 
@@ -491,7 +540,15 @@ impl Analyzer {
 
                 Type::Unknown
             }
-            ExprKind::Member { object, name } => self.validate_member(expr.span, object, name),
+            ExprKind::Member { object, name } => {
+                if let ExprKind::Identifier(enum_name) = &object.kind
+                    && self.enums.contains_key(enum_name)
+                {
+                    self.validate_unit_variant(expr.span, enum_name, name)
+                } else {
+                    self.validate_member(expr.span, object, name)
+                }
+            }
             ExprKind::StructInit { name, fields } => {
                 self.validate_struct_init(expr.span, name, fields)
             }
@@ -569,20 +626,84 @@ impl Analyzer {
                 self.validate_comparison(expr.span, left, *op, right)
             }
             ExprKind::Match { value, branches } => {
-                self.unsupported(
-                    expr.span,
-                    "match expressions are parsed but pattern lowering is not implemented yet",
-                );
-                self.validate_expr(value);
+                if !matches!(value.kind, ExprKind::Identifier(_)) {
+                    self.unsupported(
+                        value.span,
+                        "matching non-binding expressions is not implemented in executable builds yet",
+                    );
+                }
+
+                let value_type = self.validate_expr(value);
+                let Type::Enum(enum_name) = value_type else {
+                    if !matches!(value_type, Type::Unknown) {
+                        self.diagnostics.push(Diagnostic::error(
+                            value.span,
+                            "match expressions require an enum value",
+                        ));
+                    }
+
+                    for branch in branches {
+                        self.push_scope();
+                        self.validate_pattern(&branch.pattern, None);
+                        self.validate_expr_with_context(&branch.value, expected_type.clone());
+                        self.pop_scope();
+                    }
+
+                    return Type::Unknown;
+                };
+                let mut seen = HashSet::new();
+                let mut branch_type = None;
 
                 for branch in branches {
                     self.push_scope();
-                    self.validate_pattern(&branch.pattern);
-                    self.validate_expr(&branch.value);
+                    let variant_name =
+                        self.validate_pattern(&branch.pattern, Some(enum_name.as_str()));
+                    if let Some(variant_name) = variant_name {
+                        if !seen.insert(variant_name.clone()) {
+                            self.diagnostics.push(Diagnostic::error(
+                                branch.pattern.span(),
+                                format!("duplicate match branch for variant `{variant_name}`"),
+                            ));
+                        }
+                    }
+                    let value_type =
+                        self.validate_expr_with_context(&branch.value, expected_type.clone());
                     self.pop_scope();
+
+                    if !matches!(value_type, Type::Unknown) {
+                        if let Some(first_type) = branch_type.clone() {
+                            self.report_type_mismatch(branch.value.span, first_type, value_type);
+                        } else {
+                            branch_type = Some(value_type);
+                        }
+                    }
                 }
 
-                Type::Unknown
+                if let Some(definition) = self.enums.get(&enum_name) {
+                    let mut missing = definition
+                        .variants
+                        .keys()
+                        .filter(|name| !seen.contains(*name))
+                        .cloned()
+                        .collect::<Vec<_>>();
+                    missing.sort();
+
+                    if !missing.is_empty() {
+                        self.diagnostics.push(Diagnostic::error(
+                            expr.span,
+                            format!(
+                                "non-exhaustive match for enum `{enum_name}`; missing {}",
+                                missing
+                                    .iter()
+                                    .map(|name| format!("`{name}`"))
+                                    .collect::<Vec<_>>()
+                                    .join(", ")
+                            ),
+                        ));
+                    }
+                }
+
+                branch_type.unwrap_or(Type::Unknown)
             }
             ExprKind::Lambda(function) => {
                 self.unsupported(
@@ -828,6 +949,80 @@ impl Analyzer {
         signature.return_type
     }
 
+    fn validate_variant_call(
+        &mut self,
+        expr: &Expr,
+        enum_name: &str,
+        variant_name: &str,
+        args: &[Expr],
+    ) -> Type {
+        let Some(variant) = self
+            .enums
+            .get(enum_name)
+            .and_then(|enum_| enum_.variants.get(variant_name))
+            .cloned()
+        else {
+            self.diagnostics.push(Diagnostic::error(
+                expr.span,
+                format!("unknown variant `{enum_name}.{variant_name}`"),
+            ));
+
+            for arg in args {
+                self.validate_expr(arg);
+            }
+
+            return Type::Unknown;
+        };
+        let expected_count = usize::from(variant.is_some());
+
+        if args.len() != expected_count {
+            self.diagnostics.push(Diagnostic::error(
+                expr.span,
+                format!(
+                    "enum variant `{enum_name}.{variant_name}` expects {expected_count} arguments, got {}",
+                    args.len()
+                ),
+            ));
+
+            for arg in args {
+                self.validate_expr(arg);
+            }
+
+            return Type::Enum(enum_name.to_string());
+        }
+
+        if let Some(expected_type) = variant {
+            let arg_type = self.validate_expr_with_context(&args[0], Some(expected_type.clone()));
+            self.report_type_mismatch(args[0].span, expected_type, arg_type);
+        }
+
+        Type::Enum(enum_name.to_string())
+    }
+
+    fn validate_unit_variant(&mut self, span: Span, enum_name: &str, variant_name: &str) -> Type {
+        let Some(variant) = self
+            .enums
+            .get(enum_name)
+            .and_then(|enum_| enum_.variants.get(variant_name))
+        else {
+            self.diagnostics.push(Diagnostic::error(
+                span,
+                format!("unknown variant `{enum_name}.{variant_name}`"),
+            ));
+            return Type::Unknown;
+        };
+
+        if variant.is_some() {
+            self.diagnostics.push(Diagnostic::error(
+                span,
+                format!("enum variant `{enum_name}.{variant_name}` requires a payload"),
+            ));
+            return Type::Unknown;
+        }
+
+        Type::Enum(enum_name.to_string())
+    }
+
     fn validate_struct_init(&mut self, span: Span, name: &str, fields: &[StructInitField]) -> Type {
         let Some(definition) = self.structs.get(name).cloned() else {
             if BasicType::from_name(name).is_none() && !self.types.contains(name) {
@@ -889,6 +1084,13 @@ impl Analyzer {
         let struct_name = match object_type {
             Type::Struct(struct_name) => struct_name,
             Type::Unknown => return Type::Unknown,
+            Type::Enum(_) => {
+                self.unsupported(
+                    span,
+                    "direct enum payload member access is not implemented yet",
+                );
+                return Type::Unknown;
+            }
             Type::Basic(_) => {
                 self.diagnostics.push(Diagnostic::error(
                     span,
@@ -914,7 +1116,7 @@ impl Analyzer {
     }
 
     fn validate_missing_return(&mut self, function: &FunctionDecl, return_type: Type) {
-        if !matches!(return_type, Type::Basic(_)) {
+        if matches!(return_type, Type::Unknown) {
             return;
         }
 
@@ -949,23 +1151,56 @@ impl Analyzer {
         }
     }
 
-    fn validate_pattern(&mut self, pattern: &Pattern) {
+    fn validate_pattern(&mut self, pattern: &Pattern, enum_name: Option<&str>) -> Option<String> {
         match pattern {
-            Pattern::Identifier {
-                name,
+            Pattern::Variant {
+                enum_name: pattern_enum_name,
+                variant,
                 binding,
                 span,
             } => {
-                if !self.values.contains(name) {
+                if enum_name.is_some_and(|enum_name| enum_name != pattern_enum_name) {
                     self.diagnostics.push(Diagnostic::error(
                         *span,
-                        format!("unknown pattern `{name}`"),
+                        format!(
+                            "pattern `{pattern_enum_name}.{variant}` does not belong to enum `{}`",
+                            enum_name.unwrap_or_default()
+                        ),
                     ));
+                    return None;
                 }
 
-                if let Some(binding) = binding {
-                    self.define(binding, false, Type::Unknown);
+                let Some(payload) = self
+                    .enums
+                    .get(pattern_enum_name)
+                    .and_then(|enum_| enum_.variants.get(variant))
+                    .cloned()
+                else {
+                    self.diagnostics.push(Diagnostic::error(
+                        *span,
+                        format!("unknown pattern `{pattern_enum_name}.{variant}`"),
+                    ));
+                    return None;
+                };
+
+                match (binding, payload) {
+                    (Some(binding), Some(payload)) => self.define(binding, false, payload),
+                    (Some(_), None) => self.diagnostics.push(Diagnostic::error(
+                        *span,
+                        format!(
+                            "unit variant `{pattern_enum_name}.{variant}` does not bind a payload"
+                        ),
+                    )),
+                    (None, Some(_)) => self.diagnostics.push(Diagnostic::error(
+                        *span,
+                        format!(
+                            "payload variant `{pattern_enum_name}.{variant}` requires a binding in match patterns"
+                        ),
+                    )),
+                    (None, None) => {}
                 }
+
+                Some(variant.clone())
             }
         }
     }
@@ -997,6 +1232,8 @@ impl Analyzer {
             Type::Basic(basic_type)
         } else if self.structs.contains_key(&type_ref.name) {
             Type::Struct(type_ref.name.clone())
+        } else if self.enums.contains_key(&type_ref.name) {
+            Type::Enum(type_ref.name.clone())
         } else {
             Type::Unknown
         }
@@ -1023,6 +1260,8 @@ impl Analyzer {
             Type::Basic(basic_type)
         } else if self.structs.contains_key(&type_ref.name) {
             Type::Struct(type_ref.name.clone())
+        } else if self.enums.contains_key(&type_ref.name) {
+            Type::Enum(type_ref.name.clone())
         } else {
             Type::Unknown
         }

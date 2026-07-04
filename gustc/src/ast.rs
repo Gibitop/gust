@@ -245,8 +245,9 @@ pub struct MatchBranch {
 
 #[derive(Debug, Clone)]
 pub enum Pattern {
-    Identifier {
-        name: String,
+    Variant {
+        enum_name: String,
+        variant: String,
         binding: Option<String>,
         span: Span,
     },
@@ -255,7 +256,7 @@ pub enum Pattern {
 impl Pattern {
     pub fn span(&self) -> Span {
         match self {
-            Pattern::Identifier { span, .. } => *span,
+            Pattern::Variant { span, .. } => *span,
         }
     }
 }
