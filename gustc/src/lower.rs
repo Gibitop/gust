@@ -45,6 +45,8 @@ pub struct LoweredParam {
 pub enum LoweredStatement {
     Local { name: String, value: LoweredExpr },
     Println(LoweredExpr),
+    Expr(LoweredExpr),
+    Return(Option<LoweredExpr>),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -57,6 +59,7 @@ pub struct LoweredExpr {
 pub enum LoweredType {
     Basic(BasicType),
     Struct(String),
+    Void,
 }
 
 impl LoweredType {
@@ -64,12 +67,14 @@ impl LoweredType {
         match self {
             LoweredType::Basic(type_) => type_.name().to_string(),
             LoweredType::Struct(name) => name.clone(),
+            LoweredType::Void => "void".to_string(),
         }
     }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LoweredExprKind {
+    Void,
     StringLiteral(String),
     BoolLiteral(bool),
     NumberLiteral(String),
@@ -106,6 +111,8 @@ pub fn lower_program(program: &Program) -> Result<LoweredProgram, Vec<Diagnostic
     let mut main = None;
     let mut structs = HashMap::new();
     let mut signatures = HashMap::new();
+
+    let mut has_return_type_conflict = false;
 
     for item in &program.items {
         match item {
@@ -154,6 +161,40 @@ pub fn lower_program(program: &Program) -> Result<LoweredProgram, Vec<Diagnostic
         }
     }
 
+    for _ in 0..signatures.len() {
+        let mut changed = false;
+
+        for item in &program.items {
+            let Item::Function(function) = item else {
+                continue;
+            };
+            let Some(name) = &function.name else {
+                continue;
+            };
+
+            if name == "main" || function.return_type.is_some() {
+                continue;
+            }
+
+            let Ok(Some(return_type)) = infer_function_return_type(function, &signatures, &structs)
+            else {
+                continue;
+            };
+            let Some(signature) = signatures.get_mut(name) else {
+                continue;
+            };
+
+            if signature.return_type != return_type {
+                signature.return_type = return_type;
+                changed = true;
+            }
+        }
+
+        if !changed {
+            break;
+        }
+    }
+
     let Some(main) = main else {
         let span = program.items.first().map_or(Span::new(0, 0), Item::span);
         diagnostics.push(Diagnostic::error(
@@ -162,6 +203,35 @@ pub fn lower_program(program: &Program) -> Result<LoweredProgram, Vec<Diagnostic
         ));
         return Err(diagnostics);
     };
+
+    for item in &program.items {
+        let Item::Function(function) = item else {
+            continue;
+        };
+        let Some(name) = &function.name else {
+            continue;
+        };
+
+        if name == "main" || function.return_type.is_some() {
+            continue;
+        }
+
+        if let Err(conflict) = infer_function_return_type(function, &signatures, &structs) {
+            has_return_type_conflict = true;
+            diagnostics.push(Diagnostic::error(
+                conflict.span,
+                format!(
+                    "function `{name}` has multiple return types (`{}` and `{}`); inferred return types must be consistent",
+                    conflict.first.name(),
+                    conflict.second.name()
+                ),
+            ));
+        }
+    }
+
+    if has_return_type_conflict {
+        return Err(diagnostics);
+    }
 
     let mut functions = Vec::new();
 
@@ -291,21 +361,18 @@ fn lower_function_signature(
         params.push(type_);
     }
 
-    let Some(return_type) = &function.return_type else {
-        diagnostics.push(Diagnostic::error(
-            function.span,
-            "helper functions must declare a return type in executable builds",
-        ));
-        return None;
-    };
-
-    let Some(return_type) = lower_value_type_ref(
-        return_type,
-        structs,
-        diagnostics,
-        "only basic and known struct return types are supported in executable builds",
-    ) else {
-        return None;
+    let return_type = if let Some(return_type) = &function.return_type {
+        let Some(return_type) = lower_value_type_ref(
+            return_type,
+            structs,
+            diagnostics,
+            "only basic and known struct return types are supported in executable builds",
+        ) else {
+            return None;
+        };
+        return_type
+    } else {
+        LoweredType::Void
     };
 
     if can_lower {
@@ -334,6 +401,10 @@ fn lower_value_type_ref(
 
     if let Some(type_) = BasicType::from_name(&type_ref.name) {
         return Some(LoweredType::Basic(type_));
+    }
+
+    if type_ref.name == "void" {
+        return Some(LoweredType::Void);
     }
 
     if structs.contains_key(&type_ref.name) {
@@ -365,6 +436,141 @@ fn lower_basic_type_ref(
     Some(type_)
 }
 
+fn infer_function_return_type(
+    function: &FunctionDecl,
+    signatures: &HashMap<String, FunctionSignature>,
+    structs: &HashMap<String, LoweredStruct>,
+) -> Result<Option<LoweredType>, ReturnTypeConflict> {
+    let mut locals = HashMap::new();
+
+    for param in &function.params {
+        let Some(type_ref) = param.type_ref.as_ref() else {
+            return Ok(None);
+        };
+        let type_ = if let Some(type_) = BasicType::from_name(&type_ref.name) {
+            LoweredType::Basic(type_)
+        } else if let Some(struct_) = structs.get(&type_ref.name) {
+            LoweredType::Struct(struct_.name.clone())
+        } else {
+            return Ok(None);
+        };
+        locals.insert(param.name.clone(), type_);
+    }
+
+    match &function.body {
+        FunctionBody::Expr(expr) => Ok(infer_expr_type(expr, &locals, signatures, structs)),
+        FunctionBody::Block(block) => {
+            let mut return_type = None;
+
+            for statement in &block.statements {
+                match &statement.kind {
+                    StmtKind::Let { name, value, .. } => {
+                        if let Some(value) = value
+                            && let Some(type_) =
+                                infer_expr_type(value, &locals, signatures, structs)
+                        {
+                            locals.insert(name.clone(), type_);
+                        }
+                    }
+                    StmtKind::Return { value: Some(value) } => {
+                        if let Some(type_) = infer_expr_type(value, &locals, signatures, structs) {
+                            merge_inferred_return_type(&mut return_type, type_, value.span)?;
+                        }
+                    }
+                    StmtKind::Return { value: None } => {
+                        merge_inferred_return_type(
+                            &mut return_type,
+                            LoweredType::Void,
+                            statement.span,
+                        )?;
+                    }
+                    StmtKind::For { .. } | StmtKind::Expr(_) => {}
+                }
+            }
+
+            Ok(Some(return_type.unwrap_or(LoweredType::Void)))
+        }
+    }
+}
+
+struct ReturnTypeConflict {
+    span: Span,
+    first: LoweredType,
+    second: LoweredType,
+}
+
+fn merge_inferred_return_type(
+    return_type: &mut Option<LoweredType>,
+    next_type: LoweredType,
+    span: Span,
+) -> Result<(), ReturnTypeConflict> {
+    let Some(current_type) = return_type else {
+        *return_type = Some(next_type);
+        return Ok(());
+    };
+
+    if *current_type == next_type {
+        return Ok(());
+    }
+
+    Err(ReturnTypeConflict {
+        span,
+        first: current_type.clone(),
+        second: next_type,
+    })
+}
+
+fn infer_expr_type(
+    expr: &Expr,
+    locals: &HashMap<String, LoweredType>,
+    signatures: &HashMap<String, FunctionSignature>,
+    structs: &HashMap<String, LoweredStruct>,
+) -> Option<LoweredType> {
+    match &expr.kind {
+        ExprKind::String(_)
+        | ExprKind::Binary {
+            op: BinaryOp::Add, ..
+        } => Some(LoweredType::Basic(BasicType::String)),
+        ExprKind::Bool(_) => Some(LoweredType::Basic(BasicType::Bool)),
+        ExprKind::Number(_) => Some(LoweredType::Basic(BasicType::I32)),
+        ExprKind::Identifier(name) => locals.get(name).cloned(),
+        ExprKind::StructInit { name, .. } if structs.contains_key(name) => {
+            Some(LoweredType::Struct(name.clone()))
+        }
+        ExprKind::Member { object, name } => {
+            let LoweredType::Struct(struct_name) =
+                infer_expr_type(object, locals, signatures, structs)?
+            else {
+                return None;
+            };
+            structs
+                .get(&struct_name)?
+                .fields
+                .iter()
+                .find(|field| field.name == *name)
+                .map(|field| field.type_.clone())
+        }
+        ExprKind::Call { callee, .. } => {
+            let ExprKind::Identifier(name) = &callee.kind else {
+                return None;
+            };
+            signatures
+                .get(name)
+                .map(|signature| signature.return_type.clone())
+        }
+        ExprKind::Array(_)
+        | ExprKind::StructInit { .. }
+        | ExprKind::Binary {
+            op: BinaryOp::GreaterEqual,
+            ..
+        }
+        | ExprKind::Lambda(_)
+        | ExprKind::Match { .. }
+        | ExprKind::Missing
+        | ExprKind::PostfixIncrement(_) => None,
+    }
+}
+
 fn lower_function(
     function: &FunctionDecl,
     signatures: &HashMap<String, FunctionSignature>,
@@ -373,13 +579,6 @@ fn lower_function(
 ) -> Option<LoweredFunction> {
     let name = function.name.as_ref()?;
     let signature = signatures.get(name)?;
-    let FunctionBody::Block(block) = &function.body else {
-        diagnostics.push(Diagnostic::error(
-            function.span,
-            "arrow function bodies are not supported in executable builds",
-        ));
-        return None;
-    };
 
     let mut locals = HashMap::new();
     let mut params = Vec::new();
@@ -400,59 +599,86 @@ fn lower_function(
         });
     }
 
-    for (index, statement) in block.statements.iter().enumerate() {
-        let is_last = index + 1 == block.statements.len();
-
-        if is_last {
-            match &statement.kind {
-                StmtKind::Return { value: Some(value) } => {
-                    return_value = lower_expr(
-                        value,
-                        &locals,
-                        signatures,
-                        structs,
-                        diagnostics,
-                        Some(signature.return_type.clone()),
-                        "expected supported return value in executable builds",
-                    );
-                }
-                StmtKind::Return { value: None } => {
-                    diagnostics.push(Diagnostic::error(
-                        statement.span,
-                        "helper functions must return a value in executable builds",
-                    ));
-                }
-                _ => diagnostics.push(Diagnostic::error(
-                    statement.span,
-                    "helper functions must end with `return <expr>` in executable builds",
-                )),
-            }
-
-            continue;
+    match &function.body {
+        FunctionBody::Expr(expr) => {
+            return_value = lower_expr(
+                expr,
+                &locals,
+                signatures,
+                structs,
+                diagnostics,
+                Some(signature.return_type.clone()),
+                "expected supported arrow function value in executable builds",
+            );
         }
+        FunctionBody::Block(block) => {
+            for (index, statement) in block.statements.iter().enumerate() {
+                let is_last = index + 1 == block.statements.len();
 
-        match &statement.kind {
-            StmtKind::Let { .. } => {
-                if let Some(statement) =
-                    lower_local_statement(statement, &mut locals, signatures, structs, diagnostics)
-                {
-                    statements.push(statement);
+                match &statement.kind {
+                    StmtKind::Let { .. } => {
+                        if let Some(statement) = lower_local_statement(
+                            statement,
+                            &mut locals,
+                            signatures,
+                            structs,
+                            diagnostics,
+                        ) {
+                            statements.push(statement);
+                        }
+                    }
+                    StmtKind::Return { value } => {
+                        let value = value.as_ref().and_then(|value| {
+                            lower_expr(
+                                value,
+                                &locals,
+                                signatures,
+                                structs,
+                                diagnostics,
+                                Some(signature.return_type.clone()),
+                                "expected supported return value in executable builds",
+                            )
+                        });
+
+                        if is_last && value.is_some() {
+                            return_value = value;
+                        } else {
+                            statements.push(LoweredStatement::Return(value));
+                        }
+                    }
+                    StmtKind::Expr(expr) => {
+                        if let Some(statement) = lower_expression_statement(
+                            expr,
+                            &locals,
+                            signatures,
+                            structs,
+                            diagnostics,
+                        ) {
+                            statements.push(statement);
+                        }
+                    }
+                    StmtKind::For { .. } => diagnostics.push(Diagnostic::error(
+                        statement.span,
+                        "for loops are not supported in executable builds",
+                    )),
                 }
             }
-            StmtKind::Return { .. } => diagnostics.push(Diagnostic::error(
-                statement.span,
-                "early returns are not supported in executable builds",
-            )),
-            _ => diagnostics.push(Diagnostic::error(
-                statement.span,
-                "only local declarations are supported before helper returns in executable builds",
-            )),
         }
     }
 
-    let Some(return_value) = return_value else {
-        return None;
-    };
+    let return_value = return_value.unwrap_or_else(void_expr);
+
+    if signature.return_type != LoweredType::Void
+        && return_value.type_ == LoweredType::Void
+        && !statements
+            .iter()
+            .any(|statement| matches!(statement, LoweredStatement::Return(Some(_))))
+    {
+        diagnostics.push(Diagnostic::error(
+            function.span,
+            "function must return a value in executable builds",
+        ));
+    }
 
     Some(LoweredFunction {
         name: name.clone(),
@@ -491,58 +717,14 @@ fn lower_main(
             for statement in &block.statements {
                 match &statement.kind {
                     StmtKind::Expr(expr) => {
-                        let ExprKind::Call { callee, args } = &expr.kind else {
-                            diagnostics.push(Diagnostic::error(
-                                expr.span,
-                                "only `io.println(...)` expression statements are supported in executable builds",
-                            ));
-                            continue;
-                        };
-
-                        let is_io_println = match &callee.kind {
-                            ExprKind::Member { object, name } if name == "println" => {
-                                matches!(&object.kind, ExprKind::Identifier(name) if name == "io")
-                            }
-                            _ => false,
-                        };
-
-                        if !is_io_println {
-                            diagnostics.push(Diagnostic::error(
-                                callee.span,
-                                "only `io.println` calls are supported in executable builds",
-                            ));
-                            continue;
-                        }
-
-                        if args.len() != 1 {
-                            diagnostics.push(Diagnostic::error(
-                                expr.span,
-                                "`io.println` expects exactly one `String` value in executable builds",
-                            ));
-                            continue;
-                        }
-
-                        if let Some(value) = lower_expr(
-                            &args[0],
+                        if let Some(statement) = lower_expression_statement(
+                            expr,
                             &locals,
                             signatures,
                             structs,
                             diagnostics,
-                            None,
-                            "`io.println` only accepts `String` values in executable builds",
                         ) {
-                            if value.type_ != LoweredType::Basic(BasicType::String) {
-                                diagnostics.push(Diagnostic::error(
-                                    args[0].span,
-                                    format!(
-                                        "`io.println` only accepts `String` values in executable builds, got `{}`",
-                                        value.type_.name()
-                                    ),
-                                ));
-                                continue;
-                            }
-
-                            statements.push(LoweredStatement::Println(value));
+                            statements.push(statement);
                         }
                     }
                     StmtKind::Let { .. } => {
@@ -578,6 +760,80 @@ fn lower_main(
     }
 
     statements
+}
+
+fn lower_expression_statement(
+    expr: &Expr,
+    locals: &HashMap<String, LoweredType>,
+    signatures: &HashMap<String, FunctionSignature>,
+    structs: &HashMap<String, LoweredStruct>,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> Option<LoweredStatement> {
+    let ExprKind::Call { callee, args } = &expr.kind else {
+        diagnostics.push(Diagnostic::error(
+            expr.span,
+            "only function calls are supported as expression statements in executable builds",
+        ));
+        return None;
+    };
+
+    let is_io_println = match &callee.kind {
+        ExprKind::Member { object, name } if name == "println" => {
+            matches!(&object.kind, ExprKind::Identifier(name) if name == "io")
+        }
+        _ => false,
+    };
+
+    if is_io_println {
+        if args.len() != 1 {
+            diagnostics.push(Diagnostic::error(
+                expr.span,
+                "`io.println` expects exactly one `String` value in executable builds",
+            ));
+            return None;
+        }
+
+        let value = lower_expr(
+            &args[0],
+            locals,
+            signatures,
+            structs,
+            diagnostics,
+            None,
+            "`io.println` only accepts `String` values in executable builds",
+        )?;
+
+        if value.type_ != LoweredType::Basic(BasicType::String) {
+            diagnostics.push(Diagnostic::error(
+                args[0].span,
+                format!(
+                    "`io.println` only accepts `String` values in executable builds, got `{}`",
+                    value.type_.name()
+                ),
+            ));
+            return None;
+        }
+
+        return Some(LoweredStatement::Println(value));
+    }
+
+    lower_expr(
+        expr,
+        locals,
+        signatures,
+        structs,
+        diagnostics,
+        None,
+        "expected supported function call in executable builds",
+    )
+    .map(LoweredStatement::Expr)
+}
+
+fn void_expr() -> LoweredExpr {
+    LoweredExpr {
+        type_: LoweredType::Void,
+        kind: LoweredExprKind::Void,
+    }
 }
 
 fn lower_local_statement(
@@ -652,6 +908,13 @@ fn lower_local_statement(
                 diagnostics.push(Diagnostic::error(
                     statement.span,
                     "struct locals must include an initializer in executable builds",
+                ));
+                return None;
+            }
+            LoweredType::Void => {
+                diagnostics.push(Diagnostic::error(
+                    statement.span,
+                    "`void` locals are not supported in executable builds",
                 ));
                 return None;
             }

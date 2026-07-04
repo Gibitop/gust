@@ -243,6 +243,76 @@ fn main() {
 }
 
 #[test]
+fn inferred_arrow_void_and_early_return_helpers_emit_c() {
+    let result = check_source(
+        r#"fn inferred(name: String) {
+    return "Hello, " + name
+}
+
+fn arrow(name: String) => inferred(name)
+
+fn noop(): void {}
+
+fn early(): String {
+    return arrow("Gust")
+    return "unreachable"
+}
+
+fn nested() {
+    io.println(early())
+    noop()
+}
+
+fn main() {
+    nested()
+}"#,
+    );
+
+    assert!(
+        !result.has_errors(),
+        "expected no frontend errors, got {:?}",
+        result.diagnostics
+    );
+
+    let lowered = lower_program(&result.program).expect("function features should lower");
+    let source = emit_c(&lowered);
+
+    assert!(source.contains("static const char* gust_fn_"));
+    assert!(source.contains("static void gust_fn_"));
+    assert!(source.contains("    return gust_fn_"));
+    assert!(source.contains("    gust_rt_io_println(gust_fn_"));
+}
+
+#[test]
+fn conflicting_inferred_return_types_have_a_dedicated_error() {
+    let result = check_source(
+        r#"fn inconsistent() {
+    return "Gust"
+    return true
+}
+
+fn main() {
+    inconsistent()
+}"#,
+    );
+
+    assert!(
+        !result.has_errors(),
+        "expected no frontend errors, got {:?}",
+        result.diagnostics
+    );
+
+    let diagnostics =
+        lower_program(&result.program).expect_err("inconsistent returns should not lower");
+
+    assert_eq!(diagnostics.len(), 1);
+    assert_eq!(
+        diagnostics[0].message,
+        "function `inconsistent` has multiple return types (`String` and `bool`); inferred return types must be consistent"
+    );
+}
+
+#[test]
 fn basic_struct_local_lowers_successfully() {
     let result = check_source(
         r#"struct Person {
