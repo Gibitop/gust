@@ -1,7 +1,7 @@
 use crate::ast::{
-    BinaryOp, Block, EnumDecl, EnumVariant, Expr, ExprKind, FieldDecl, FunctionBody, FunctionDecl,
-    ImportDecl, Item, MatchBranch, Param, Pattern, Program, Stmt, StmtKind, StructDecl,
-    StructInitField, StructMember, TypeRef,
+    BinaryOp, Block, ElseBranch, EnumDecl, EnumVariant, Expr, ExprKind, FieldDecl, FunctionBody,
+    FunctionDecl, ImportDecl, Item, MatchBranch, Param, Pattern, Program, Stmt, StmtKind,
+    StructDecl, StructInitField, StructMember, TypeRef,
 };
 use crate::diagnostic::Diagnostic;
 use crate::lexer::{Keyword, Token, TokenKind};
@@ -254,6 +254,7 @@ impl Parser {
         match self.current_keyword() {
             Some(Keyword::Let) => self.parse_let_statement(),
             Some(Keyword::Return) => self.parse_return_statement(),
+            Some(Keyword::If) => self.parse_if_statement(),
             Some(Keyword::For) => self.parse_for_statement(),
             _ => {
                 let expr = self.parse_expression();
@@ -331,6 +332,35 @@ impl Parser {
                 body,
             },
             span,
+        }
+    }
+
+    fn parse_if_statement(&mut self) -> Stmt {
+        let start = self.expect_keyword(Keyword::If, "`if`").span;
+        let condition = self.parse_expression_without_struct_init();
+        let then_branch = self.parse_block();
+        let else_branch = if self.match_keyword(Keyword::Else) {
+            if self.current_keyword() == Some(Keyword::If) {
+                Some(ElseBranch::If(Box::new(self.parse_if_statement())))
+            } else {
+                Some(ElseBranch::Block(self.parse_block()))
+            }
+        } else {
+            None
+        };
+        let end = match &else_branch {
+            Some(ElseBranch::Block(block)) => block.span,
+            Some(ElseBranch::If(statement)) => statement.span,
+            None => then_branch.span,
+        };
+
+        Stmt {
+            kind: StmtKind::If {
+                condition,
+                then_branch,
+                else_branch,
+            },
+            span: start.join(end),
         }
     }
 

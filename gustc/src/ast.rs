@@ -120,12 +120,23 @@ pub enum StmtKind {
     Return {
         value: Option<Expr>,
     },
+    If {
+        condition: Expr,
+        then_branch: Block,
+        else_branch: Option<ElseBranch>,
+    },
     For {
         name: String,
         iterable: Expr,
         body: Block,
     },
     Expr(Expr),
+}
+
+#[derive(Debug, Clone)]
+pub enum ElseBranch {
+    Block(Block),
+    If(Box<Stmt>),
 }
 
 #[derive(Debug, Clone)]

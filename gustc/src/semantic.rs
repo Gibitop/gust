@@ -1,8 +1,8 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::ast::{
-    BasicType, BinaryOp, Block, Expr, ExprKind, FunctionBody, FunctionDecl, Item, Pattern, Program,
-    Stmt, StmtKind, StructDecl, StructInitField, StructMember, TypeRef,
+    BasicType, BinaryOp, Block, ElseBranch, Expr, ExprKind, FunctionBody, FunctionDecl, Item,
+    Pattern, Program, Stmt, StmtKind, StructDecl, StructInitField, StructMember, TypeRef,
 };
 use crate::diagnostic::Diagnostic;
 use crate::span::Span;
@@ -362,6 +362,27 @@ impl Analyzer {
                     ));
                 }
             }
+            StmtKind::If {
+                condition,
+                then_branch,
+                else_branch,
+            } => {
+                let condition_type =
+                    self.validate_expr_with_context(condition, Some(Type::Basic(BasicType::Bool)));
+                self.report_type_mismatch(
+                    condition.span,
+                    Type::Basic(BasicType::Bool),
+                    condition_type,
+                );
+                self.validate_block(then_branch);
+
+                if let Some(else_branch) = else_branch {
+                    match else_branch {
+                        ElseBranch::Block(block) => self.validate_block(block),
+                        ElseBranch::If(statement) => self.validate_statement(statement),
+                    }
+                }
+            }
             StmtKind::For {
                 name,
                 iterable,
@@ -662,10 +683,7 @@ impl Analyzer {
             return;
         };
 
-        if matches!(
-            block.statements.last().map(|statement| &statement.kind),
-            Some(StmtKind::Return { value: Some(_) })
-        ) {
+        if block_always_returns_value(block) {
             return;
         }
 
@@ -803,6 +821,34 @@ impl Analyzer {
 
     fn current_return_type(&self) -> Type {
         self.return_types.last().cloned().unwrap_or(Type::Unknown)
+    }
+}
+
+fn block_always_returns_value(block: &Block) -> bool {
+    block.statements.iter().any(statement_always_returns_value)
+}
+
+fn statement_always_returns_value(statement: &Stmt) -> bool {
+    match &statement.kind {
+        StmtKind::Return { value: Some(_) } => true,
+        StmtKind::If {
+            then_branch,
+            else_branch: Some(else_branch),
+            ..
+        } => {
+            block_always_returns_value(then_branch)
+                && match else_branch {
+                    ElseBranch::Block(block) => block_always_returns_value(block),
+                    ElseBranch::If(statement) => statement_always_returns_value(statement),
+                }
+        }
+        StmtKind::Let { .. }
+        | StmtKind::Return { value: None }
+        | StmtKind::If {
+            else_branch: None, ..
+        }
+        | StmtKind::For { .. }
+        | StmtKind::Expr(_) => false,
     }
 }
 

@@ -36,11 +36,13 @@ pub enum TokenKind {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Keyword {
+    Else,
     Enum,
     False,
     Fn,
     For,
     From,
+    If,
     Import,
     In,
     Let,
@@ -210,11 +212,13 @@ impl<'source> Lexer<'source> {
 
         let lexeme = self.source[start..self.position].to_string();
         let kind = match lexeme.as_str() {
+            "else" => TokenKind::Keyword(Keyword::Else),
             "enum" => TokenKind::Keyword(Keyword::Enum),
             "false" => TokenKind::Keyword(Keyword::False),
             "fn" => TokenKind::Keyword(Keyword::Fn),
             "for" => TokenKind::Keyword(Keyword::For),
             "from" => TokenKind::Keyword(Keyword::From),
+            "if" => TokenKind::Keyword(Keyword::If),
             "import" => TokenKind::Keyword(Keyword::Import),
             "in" => TokenKind::Keyword(Keyword::In),
             "let" => TokenKind::Keyword(Keyword::Let),

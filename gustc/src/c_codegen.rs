@@ -81,7 +81,7 @@ pub fn emit_c(program: &LoweredProgram) -> String {
     source.push_str("int main(void) {\n");
 
     for statement in &program.statements {
-        push_c_statement(&mut source, statement);
+        push_c_statement(&mut source, statement, 1);
     }
 
     source.push_str("    return 0;\n}\n");
@@ -131,6 +131,21 @@ fn statement_uses_type(statement: &LoweredStatement, type_: BasicType) -> bool {
         LoweredStatement::Return(value) => value
             .as_ref()
             .is_some_and(|value| expr_uses_type(value, type_)),
+        LoweredStatement::If {
+            condition,
+            then_branch,
+            else_branch,
+        } => {
+            expr_uses_type(condition, type_)
+                || then_branch
+                    .iter()
+                    .any(|statement| statement_uses_type(statement, type_))
+                || else_branch.as_ref().is_some_and(|statements| {
+                    statements
+                        .iter()
+                        .any(|statement| statement_uses_type(statement, type_))
+                })
+        }
     }
 }
 
@@ -187,6 +202,17 @@ fn statement_uses_string_concat(statement: &LoweredStatement) -> bool {
         | LoweredStatement::Println(value)
         | LoweredStatement::Expr(value) => expr_uses_string_concat(value),
         LoweredStatement::Return(value) => value.as_ref().is_some_and(expr_uses_string_concat),
+        LoweredStatement::If {
+            condition,
+            then_branch,
+            else_branch,
+        } => {
+            expr_uses_string_concat(condition)
+                || then_branch.iter().any(statement_uses_string_concat)
+                || else_branch
+                    .as_ref()
+                    .is_some_and(|statements| statements.iter().any(statement_uses_string_concat))
+        }
     }
 }
 
@@ -207,7 +233,22 @@ fn expr_uses_string_concat(expr: &LoweredExpr) -> bool {
 }
 
 fn statement_uses_println(statement: &LoweredStatement) -> bool {
-    matches!(statement, LoweredStatement::Println(_))
+    match statement {
+        LoweredStatement::Println(_) => true,
+        LoweredStatement::If {
+            then_branch,
+            else_branch,
+            ..
+        } => {
+            then_branch.iter().any(statement_uses_println)
+                || else_branch
+                    .as_ref()
+                    .is_some_and(|statements| statements.iter().any(statement_uses_println))
+        }
+        LoweredStatement::Local { .. }
+        | LoweredStatement::Expr(_)
+        | LoweredStatement::Return(_) => false,
+    }
 }
 
 fn ordered_functions(functions: &[LoweredFunction]) -> Vec<&LoweredFunction> {
@@ -260,6 +301,21 @@ fn statement_calls_name(statement: &LoweredStatement, name: &str) -> bool {
         LoweredStatement::Return(value) => value
             .as_ref()
             .is_some_and(|value| expr_calls_name(value, name)),
+        LoweredStatement::If {
+            condition,
+            then_branch,
+            else_branch,
+        } => {
+            expr_calls_name(condition, name)
+                || then_branch
+                    .iter()
+                    .any(|statement| statement_calls_name(statement, name))
+                || else_branch.as_ref().is_some_and(|statements| {
+                    statements
+                        .iter()
+                        .any(|statement| statement_calls_name(statement, name))
+                })
+        }
     }
 }
 
@@ -313,10 +369,11 @@ fn push_c_function(source: &mut String, function: &LoweredFunction) {
     source.push_str(" {\n");
 
     for statement in &function.statements {
-        push_c_statement(source, statement);
+        push_c_statement(source, statement, 1);
     }
 
-    if function.return_type != LoweredType::Void {
+    if function.return_type != LoweredType::Void && function.return_value.type_ != LoweredType::Void
+    {
         source.push_str("    return ");
         push_c_value(source, &function.return_value);
         source.push_str(";\n");
@@ -345,10 +402,10 @@ fn push_c_function_signature(source: &mut String, function: &LoweredFunction) {
     source.push(')');
 }
 
-fn push_c_statement(source: &mut String, statement: &LoweredStatement) {
+fn push_c_statement(source: &mut String, statement: &LoweredStatement, indent: usize) {
     match statement {
         LoweredStatement::Local { name, value } => {
-            source.push_str("    ");
+            push_c_indent(source, indent);
             push_c_type(source, &value.type_);
             source.push(' ');
             push_c_local_name(source, name);
@@ -358,19 +415,22 @@ fn push_c_statement(source: &mut String, statement: &LoweredStatement) {
         }
         LoweredStatement::Println(value) => match &value.kind {
             LoweredExprKind::StringLiteral(value) => {
-                source.push_str("    gust_rt_io_println(\"");
+                push_c_indent(source, indent);
+                source.push_str("gust_rt_io_println(\"");
                 push_c_string_value(source, value);
                 source.push_str("\");\n");
             }
             LoweredExprKind::Local(name) => {
-                source.push_str("    gust_rt_io_println(");
+                push_c_indent(source, indent);
+                source.push_str("gust_rt_io_println(");
                 push_c_local_name(source, name);
                 source.push_str(");\n");
             }
             LoweredExprKind::StringConcat(_, _)
             | LoweredExprKind::FieldAccess { .. }
             | LoweredExprKind::Call { .. } => {
-                source.push_str("    gust_rt_io_println(");
+                push_c_indent(source, indent);
+                source.push_str("gust_rt_io_println(");
                 push_c_value(source, value);
                 source.push_str(");\n");
             }
@@ -382,12 +442,13 @@ fn push_c_statement(source: &mut String, statement: &LoweredStatement) {
             }
         },
         LoweredStatement::Expr(value) => {
-            source.push_str("    ");
+            push_c_indent(source, indent);
             push_c_value(source, value);
             source.push_str(";\n");
         }
         LoweredStatement::Return(value) => {
-            source.push_str("    return");
+            push_c_indent(source, indent);
+            source.push_str("return");
 
             if let Some(value) = value {
                 source.push(' ');
@@ -396,6 +457,42 @@ fn push_c_statement(source: &mut String, statement: &LoweredStatement) {
 
             source.push_str(";\n");
         }
+        LoweredStatement::If {
+            condition,
+            then_branch,
+            else_branch,
+        } => {
+            push_c_indent(source, indent);
+            source.push_str("if (");
+            push_c_value(source, condition);
+            source.push_str(") {\n");
+
+            for statement in then_branch {
+                push_c_statement(source, statement, indent + 1);
+            }
+
+            push_c_indent(source, indent);
+            source.push('}');
+
+            if let Some(else_branch) = else_branch {
+                source.push_str(" else {\n");
+
+                for statement in else_branch {
+                    push_c_statement(source, statement, indent + 1);
+                }
+
+                push_c_indent(source, indent);
+                source.push('}');
+            }
+
+            source.push('\n');
+        }
+    }
+}
+
+fn push_c_indent(source: &mut String, indent: usize) {
+    for _ in 0..indent {
+        source.push_str("    ");
     }
 }
 
