@@ -134,6 +134,7 @@ pub struct LoweredStructFieldValue {
 struct FunctionSignature {
     params: Vec<LoweredType>,
     return_type: LoweredType,
+    return_type_known: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -149,6 +150,7 @@ pub fn lower_program(program: &Program) -> Result<LoweredProgram, Vec<Diagnostic
     let mut signatures = HashMap::new();
 
     let mut has_return_type_conflict = false;
+    let mut has_unresolved_return_type = false;
 
     for item in &program.items {
         match item {
@@ -220,8 +222,9 @@ pub fn lower_program(program: &Program) -> Result<LoweredProgram, Vec<Diagnostic
                 continue;
             };
 
-            if signature.return_type != return_type {
+            if !signature.return_type_known || signature.return_type != return_type {
                 signature.return_type = return_type;
+                signature.return_type_known = true;
                 changed = true;
             }
         }
@@ -266,6 +269,36 @@ pub fn lower_program(program: &Program) -> Result<LoweredProgram, Vec<Diagnostic
     }
 
     if has_return_type_conflict {
+        return Err(diagnostics);
+    }
+
+    for item in &program.items {
+        let Item::Function(function) = item else {
+            continue;
+        };
+        let Some(name) = &function.name else {
+            continue;
+        };
+
+        if name == "main" || function.return_type.is_some() {
+            continue;
+        }
+
+        if signatures
+            .get(name)
+            .is_some_and(|signature| !signature.return_type_known)
+        {
+            has_unresolved_return_type = true;
+            diagnostics.push(Diagnostic::error(
+                function.span,
+                format!(
+                    "could not infer return type of function `{name}`; add an explicit return type"
+                ),
+            ));
+        }
+    }
+
+    if has_unresolved_return_type {
         return Err(diagnostics);
     }
 
@@ -397,7 +430,7 @@ fn lower_function_signature(
         params.push(type_);
     }
 
-    let return_type = if let Some(return_type) = &function.return_type {
+    let (return_type, return_type_known) = if let Some(return_type) = &function.return_type {
         let Some(return_type) = lower_value_type_ref(
             return_type,
             structs,
@@ -406,15 +439,16 @@ fn lower_function_signature(
         ) else {
             return None;
         };
-        return_type
+        (return_type, true)
     } else {
-        LoweredType::Void
+        (LoweredType::Void, false)
     };
 
     if can_lower {
         Some(FunctionSignature {
             params,
             return_type,
+            return_type_known,
         })
     } else {
         None
@@ -497,9 +531,21 @@ fn infer_function_return_type(
         FunctionBody::Expr(expr) => Ok(infer_expr_type(expr, &locals, signatures, structs)),
         FunctionBody::Block(block) => {
             let mut return_type = None;
-            infer_block_return_types(block, &mut locals, signatures, structs, &mut return_type)?;
+            let mut has_unresolved_value_return = false;
+            infer_block_return_types(
+                block,
+                &mut locals,
+                signatures,
+                structs,
+                &mut return_type,
+                &mut has_unresolved_value_return,
+            )?;
 
-            Ok(Some(return_type.unwrap_or(LoweredType::Void)))
+            if return_type.is_none() && has_unresolved_value_return {
+                Ok(None)
+            } else {
+                Ok(Some(return_type.unwrap_or(LoweredType::Void)))
+            }
         }
     }
 }
@@ -510,6 +556,7 @@ fn infer_block_return_types(
     signatures: &HashMap<String, FunctionSignature>,
     structs: &HashMap<String, LoweredStruct>,
     return_type: &mut Option<LoweredType>,
+    has_unresolved_value_return: &mut bool,
 ) -> Result<(), ReturnTypeConflict> {
     for statement in &block.statements {
         match &statement.kind {
@@ -523,6 +570,8 @@ fn infer_block_return_types(
             StmtKind::Return { value: Some(value) } => {
                 if let Some(type_) = infer_expr_type(value, locals, signatures, structs) {
                     merge_inferred_return_type(return_type, type_, value.span)?;
+                } else {
+                    *has_unresolved_value_return = true;
                 }
             }
             StmtKind::Return { value: None } => {
@@ -540,6 +589,7 @@ fn infer_block_return_types(
                     signatures,
                     structs,
                     return_type,
+                    has_unresolved_value_return,
                 )?;
 
                 if let Some(else_branch) = else_branch {
@@ -552,6 +602,7 @@ fn infer_block_return_types(
                             signatures,
                             structs,
                             return_type,
+                            has_unresolved_value_return,
                         )?,
                         ElseBranch::If(statement) => {
                             let block = Block {
@@ -564,6 +615,7 @@ fn infer_block_return_types(
                                 signatures,
                                 structs,
                                 return_type,
+                                has_unresolved_value_return,
                             )?;
                         }
                     }
@@ -673,6 +725,7 @@ fn infer_expr_type(
             };
             signatures
                 .get(name)
+                .filter(|signature| signature.return_type_known)
                 .map(|signature| signature.return_type.clone())
         }
         ExprKind::Array(_)
