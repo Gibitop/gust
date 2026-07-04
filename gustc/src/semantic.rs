@@ -1578,6 +1578,26 @@ impl Analyzer {
         }
 
         let source_name = source_callable_name(name);
+        if matches!(&object_type, Type::Basic(type_) if type_.is_numeric())
+            && source_name == "toString"
+        {
+            if !args.is_empty() {
+                self.diagnostics.push(Diagnostic::error(
+                    expr.span,
+                    format!(
+                        "method `{}.toString` expects 0 arguments, got {}",
+                        object_type.name(),
+                        args.len()
+                    ),
+                ));
+                for arg in args {
+                    self.validate_expr(arg);
+                }
+            }
+
+            return Type::Basic(BasicType::String);
+        }
+
         let intrinsic = if let Type::Struct(struct_name) = &object_type {
             self.structs
                 .get(struct_name)

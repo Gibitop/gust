@@ -88,6 +88,17 @@ equality follows IEEE semantics, including `NaN != NaN`.
 
 The executable backend maps `i128` and `u128` to the C compiler's 128-bit integer extension.
 
+## Numeric string conversion
+
+Every numeric primitive has a built-in `toString(): String` method. It is an intrinsic member,
+not an extension function supplied by a prelude, so it is available without imports and takes
+precedence over extension functions with the same name.
+
+Integer values use base-10 formatting. Floating-point values use round-trippable formatting with
+9 significant digits for `f32` and 17 significant digits for `f64`. The executable backend lowers
+numeric conversion to type-specific `gust_rt_*_to_string` runtime helpers. Returned strings are
+allocated through `gust_rt_alloc` so allocation remains isolated for the future garbage collector.
+
 ## Struct field mutation
 
 Structs are managed reference values.

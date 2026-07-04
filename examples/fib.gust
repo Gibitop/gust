@@ -6,7 +6,5 @@ fn fib(n: i32) {
 }
 
 fn main() {
-    if fib(10) == 55 {
-        io.println("fib works")
-    }
+    io.println(fib(10).toString())
 }
