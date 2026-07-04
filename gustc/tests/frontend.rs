@@ -1000,3 +1000,100 @@ fn main() {
         result.diagnostics
     );
 }
+
+#[test]
+fn logical_operators_validate_as_bool() {
+    let result = check_source(
+        r#"
+fn main() {
+    let age: u32 = 30
+    let enabled = true
+    let disabled = false
+    let allowed: bool = age >= 18 && enabled && !disabled
+    let fallback: bool = disabled || allowed
+}
+"#,
+    );
+
+    assert!(
+        !result.has_errors(),
+        "expected logical operators to validate, got {:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
+fn logical_operators_require_bool_operands() {
+    let result = check_source(
+        r#"
+fn main() {
+    let invalidAnd = "Gust" && true
+    let invalidNot = !1
+}
+"#,
+    );
+
+    assert!(
+        result
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.severity == Severity::Error
+                && diagnostic
+                    .message
+                    .contains("expected value of type `bool`, got `String`")),
+        "expected logical operand error, got {:?}",
+        result.diagnostics
+    );
+    assert!(
+        result
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.severity == Severity::Error
+                && diagnostic
+                    .message
+                    .contains("expected value of type `bool`, got `i32`")),
+        "expected unary-not operand error, got {:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
+fn logical_and_binds_more_tightly_than_logical_or() {
+    use gustc::ast::{BinaryOp, ExprKind, FunctionBody, Item, StmtKind};
+
+    let (tokens, lexer_diagnostics) =
+        Lexer::new("fn main() { let value = true || false && false }").tokenize();
+    let (program, parser_diagnostics) = Parser::new(tokens).parse();
+
+    assert!(lexer_diagnostics.is_empty());
+    assert!(parser_diagnostics.is_empty());
+
+    let Item::Function(function) = &program.items[0] else {
+        panic!("expected function");
+    };
+    let FunctionBody::Block(block) = &function.body else {
+        panic!("expected block body");
+    };
+    let StmtKind::Let {
+        value: Some(value), ..
+    } = &block.statements[0].kind
+    else {
+        panic!("expected initialized local");
+    };
+    let ExprKind::Binary {
+        op: BinaryOp::LogicalOr,
+        right,
+        ..
+    } = &value.kind
+    else {
+        panic!("expected logical or at the expression root");
+    };
+
+    assert!(matches!(
+        right.kind,
+        ExprKind::Binary {
+            op: BinaryOp::LogicalAnd,
+            ..
+        }
+    ));
+}

@@ -28,7 +28,10 @@ pub enum TokenKind {
     PlusPlus,
     Equal,
     EqualEqual,
+    Bang,
     BangEqual,
+    AndAnd,
+    OrOr,
     FatArrow,
     LessEqual,
     GreaterEqual,
@@ -142,9 +145,26 @@ impl<'source> Lexer<'source> {
                 if self.match_character('=') {
                     self.token(TokenKind::BangEqual, start, self.position)
                 } else {
+                    self.single(TokenKind::Bang, start)
+                }
+            }
+            '&' => {
+                if self.match_character('&') {
+                    self.token(TokenKind::AndAnd, start, self.position)
+                } else {
                     let span = Span::new(start, self.position);
                     self.diagnostics
-                        .push(Diagnostic::error(span, "unexpected character `!`"));
+                        .push(Diagnostic::error(span, "unexpected character `&`"));
+                    self.token(TokenKind::Identifier(String::new()), start, self.position)
+                }
+            }
+            '|' => {
+                if self.match_character('|') {
+                    self.token(TokenKind::OrOr, start, self.position)
+                } else {
+                    let span = Span::new(start, self.position);
+                    self.diagnostics
+                        .push(Diagnostic::error(span, "unexpected character `|`"));
                     self.token(TokenKind::Identifier(String::new()), start, self.position)
                 }
             }

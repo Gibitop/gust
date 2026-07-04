@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use crate::ast::{
     BasicType, BinaryOp, Block, ElseBranch, Expr, ExprKind, FunctionBody, FunctionDecl, Item,
-    Program, Stmt, StmtKind, StructDecl, StructInitField, StructMember, TypeRef,
+    Program, Stmt, StmtKind, StructDecl, StructInitField, StructMember, TypeRef, UnaryOp,
 };
 use crate::diagnostic::Diagnostic;
 use crate::span::Span;
@@ -88,6 +88,12 @@ pub enum LoweredExprKind {
     NumberLiteral(String),
     Local(String),
     StringConcat(Box<LoweredExpr>, Box<LoweredExpr>),
+    Not(Box<LoweredExpr>),
+    Logical {
+        left: Box<LoweredExpr>,
+        op: BinaryOp,
+        right: Box<LoweredExpr>,
+    },
     Comparison {
         left: Box<LoweredExpr>,
         op: BinaryOp,
@@ -592,9 +598,14 @@ fn infer_expr_type(
             op: BinaryOp::Add, ..
         } => Some(LoweredType::Basic(BasicType::String)),
         ExprKind::Bool(_)
+        | ExprKind::Unary {
+            op: UnaryOp::Not, ..
+        }
         | ExprKind::Binary {
             op:
-                BinaryOp::Equal
+                BinaryOp::LogicalAnd
+                | BinaryOp::LogicalOr
+                | BinaryOp::Equal
                 | BinaryOp::NotEqual
                 | BinaryOp::Less
                 | BinaryOp::LessEqual
@@ -1329,6 +1340,59 @@ fn lower_expr(
             ));
             return None;
         }
+        ExprKind::Unary {
+            op: UnaryOp::Not,
+            operand,
+        } => {
+            let operand = lower_expr(
+                operand,
+                locals,
+                signatures,
+                structs,
+                diagnostics,
+                Some(LoweredType::Basic(BasicType::Bool)),
+                "expected supported boolean operand in executable builds",
+            )?;
+
+            LoweredExpr {
+                type_: LoweredType::Basic(BasicType::Bool),
+                kind: LoweredExprKind::Not(Box::new(operand)),
+            }
+        }
+        ExprKind::Binary {
+            left,
+            op: op @ (BinaryOp::LogicalAnd | BinaryOp::LogicalOr),
+            right,
+        } => {
+            let bool_type = LoweredType::Basic(BasicType::Bool);
+            let left = lower_expr(
+                left,
+                locals,
+                signatures,
+                structs,
+                diagnostics,
+                Some(bool_type.clone()),
+                "expected supported boolean operand in executable builds",
+            )?;
+            let right = lower_expr(
+                right,
+                locals,
+                signatures,
+                structs,
+                diagnostics,
+                Some(bool_type.clone()),
+                "expected supported boolean operand in executable builds",
+            )?;
+
+            LoweredExpr {
+                type_: bool_type,
+                kind: LoweredExprKind::Logical {
+                    left: Box::new(left),
+                    op: *op,
+                    right: Box::new(right),
+                },
+            }
+        }
         ExprKind::Binary {
             left,
             op: BinaryOp::Add,
@@ -1420,7 +1484,9 @@ fn lower_expr(
                 | BinaryOp::GreaterEqual => {
                     matches!(&left.type_, LoweredType::Basic(type_) if type_.is_numeric())
                 }
-                BinaryOp::Add => unreachable!("addition is lowered separately"),
+                BinaryOp::Add | BinaryOp::LogicalAnd | BinaryOp::LogicalOr => {
+                    unreachable!("non-comparison operator is lowered separately")
+                }
             };
 
             if !supported {
