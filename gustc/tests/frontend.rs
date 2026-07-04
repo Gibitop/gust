@@ -1034,6 +1034,149 @@ fn main() {
 }
 
 #[test]
+fn bitwise_and_shift_operators_validate_for_integer_types() {
+    let result = check_source(
+        r#"
+fn main() {
+    let unsigned: u32 = 12
+    let signed: i16 = 3
+    let combined: u32 = unsigned & 10 | 1 ^ 4
+    let shifted: i16 = signed << 2 >> 1
+
+    let mut flags: u8 = 1
+    flags &= 7
+    flags |= 2
+    flags ^= 1
+    flags <<= 2
+    flags >>= 1
+}
+"#,
+    );
+
+    assert!(
+        !result.has_errors(),
+        "expected integer bitwise operations to validate, got {:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
+fn bitwise_and_shift_operators_reject_non_integer_types() {
+    let result = check_source(
+        r#"
+fn main() {
+    let floatValue = 1.5 & 1.5
+    let boolValue = true << false
+}
+"#,
+    );
+
+    assert_eq!(
+        result
+            .diagnostics
+            .iter()
+            .filter(|diagnostic| diagnostic
+                .message
+                .contains("only supports integer operands"))
+            .count(),
+        2,
+        "expected integer-only operator errors, got {:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
+fn bitwise_operator_precedence_matches_rust() {
+    use gustc::ast::{BinaryOp, ExprKind, FunctionBody, Item, StmtKind};
+
+    let result = check_source(
+        r#"
+fn main() {
+    let value = 1 | 2 ^ 3 & 4 << 1 + 1
+}
+"#,
+    );
+
+    assert!(
+        !result.has_errors(),
+        "expected bitwise expression to validate, got {:?}",
+        result.diagnostics
+    );
+
+    let Item::Function(function) = &result.program.items[0] else {
+        panic!("expected function");
+    };
+    let FunctionBody::Block(body) = &function.body else {
+        panic!("expected block body");
+    };
+    let StmtKind::Let {
+        value: Some(value), ..
+    } = &body.statements[0].kind
+    else {
+        panic!("expected initialized local");
+    };
+    let ExprKind::Binary {
+        op: BinaryOp::BitwiseOr,
+        right,
+        ..
+    } = &value.kind
+    else {
+        panic!("expected bitwise or at the expression root");
+    };
+    let ExprKind::Binary {
+        op: BinaryOp::BitwiseXor,
+        right,
+        ..
+    } = &right.kind
+    else {
+        panic!("expected bitwise xor below bitwise or");
+    };
+    let ExprKind::Binary {
+        op: BinaryOp::BitwiseAnd,
+        right,
+        ..
+    } = &right.kind
+    else {
+        panic!("expected bitwise and below bitwise xor");
+    };
+    let ExprKind::Binary {
+        op: BinaryOp::ShiftLeft,
+        right,
+        ..
+    } = &right.kind
+    else {
+        panic!("expected shift below bitwise and");
+    };
+    assert!(matches!(
+        right.kind,
+        ExprKind::Binary {
+            op: BinaryOp::Add,
+            ..
+        }
+    ));
+}
+
+#[test]
+fn shift_tokens_do_not_break_nested_generic_types() {
+    let source = r#"
+fn main() {
+    let values: ArrayList<ArrayList<i32>>=[]
+}
+"#;
+    let (tokens, lexer_diagnostics) = Lexer::new(source).tokenize();
+    let (_, parser_diagnostics) = Parser::new(tokens).parse();
+
+    assert!(
+        lexer_diagnostics.is_empty(),
+        "expected no lexer diagnostics, got {lexer_diagnostics:?}"
+    );
+    assert!(
+        parser_diagnostics.is_empty(),
+        "expected no parser diagnostics, got {parser_diagnostics:?}"
+    );
+}
+
+#[test]
 fn compound_assignment_requires_a_mutable_binding() {
     let result = check_source(
         r#"

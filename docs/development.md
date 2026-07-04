@@ -63,8 +63,8 @@ Contextual typing allows integer literals to initialize any numeric type and flo
 literals to initialize `f32` or `f64`.
 
 Floating-point types support the same implemented numeric operators as integer types: arithmetic,
-remainder, comparisons, unary negation, and increment on mutable bindings. Bitwise and shift
-operators are not implemented for any numeric type yet. Floating-point equality follows IEEE
-semantics, including `NaN != NaN`.
+remainder, comparisons, unary negation, and increment on mutable bindings. `&`, `|`, `^`, `<<`,
+and `>>`, including their compound assignment forms, operate only on integer types. Floating-point
+equality follows IEEE semantics, including `NaN != NaN`.
 
 The executable backend maps `i128` and `u128` to the C compiler's 128-bit integer extension.
