@@ -8,12 +8,16 @@ use crate::lower::{
 
 pub fn emit_c(program: &LoweredProgram) -> String {
     let uses_string_equality = program_uses_string_equality(program);
-    let uses_bool = program_uses_type(program, BasicType::Bool) || uses_string_equality;
+    let number_to_string_types = number_to_string_types(program);
+    let uses_bool = program_uses_type(program, BasicType::Bool)
+        || uses_string_equality
+        || number_to_string_types.contains(&BasicType::I128);
     let uses_usize = program_uses_type(program, BasicType::Usize);
     let uses_float =
         program_uses_type(program, BasicType::F32) || program_uses_type(program, BasicType::F64);
     let uses_fixed_width_int = program_uses_fixed_width_int(program);
     let uses_string_concat = program_uses_string_concat(program);
+    let uses_number_to_string = !number_to_string_types.is_empty();
     let uses_println = program.statements.iter().any(statement_uses_println)
         || program
             .functions
@@ -34,7 +38,7 @@ pub fn emit_c(program: &LoweredProgram) -> String {
         source.push_str("#include <stdint.h>\n");
     }
 
-    if uses_println {
+    if uses_println || uses_number_to_string {
         source.push_str("#include <stdio.h>\n");
     }
 
@@ -42,7 +46,7 @@ pub fn emit_c(program: &LoweredProgram) -> String {
         source.push_str("#include <math.h>\n");
     }
 
-    let uses_alloc = uses_string_concat || !program.structs.is_empty();
+    let uses_alloc = uses_string_concat || uses_number_to_string || !program.structs.is_empty();
 
     if uses_alloc {
         source.push_str("#include <stdlib.h>\n#include <string.h>\n");
@@ -73,6 +77,10 @@ pub fn emit_c(program: &LoweredProgram) -> String {
         source.push_str("    memcpy(result + left_len, right, right_len + 1);\n");
         source.push_str("    return result;\n");
         source.push_str("}\n\n");
+    }
+
+    for type_ in number_to_string_types {
+        push_c_number_to_string_helper(&mut source, type_);
     }
 
     if uses_string_equality {
@@ -220,9 +228,9 @@ fn expr_uses_type(expr: &LoweredExpr, type_: BasicType) -> bool {
                         .iter()
                         .any(|branch| expr_uses_type(&branch.value, type_))
             }
-            LoweredExprKind::FieldAccess { object, .. } | LoweredExprKind::Clone(object) => {
-                expr_uses_type(object, type_)
-            }
+            LoweredExprKind::FieldAccess { object, .. }
+            | LoweredExprKind::Clone(object)
+            | LoweredExprKind::NumberToString(object) => expr_uses_type(object, type_),
             LoweredExprKind::Call { args, .. } => args.iter().any(|arg| expr_uses_type(arg, type_)),
             LoweredExprKind::Void
             | LoweredExprKind::StringLiteral(_)
@@ -246,6 +254,127 @@ fn program_uses_fixed_width_int(program: &LoweredProgram) -> bool {
     ]
     .into_iter()
     .any(|type_| program_uses_type(program, type_))
+}
+
+fn number_to_string_types(program: &LoweredProgram) -> Vec<BasicType> {
+    [
+        BasicType::U8,
+        BasicType::U16,
+        BasicType::U32,
+        BasicType::U64,
+        BasicType::U128,
+        BasicType::Usize,
+        BasicType::I8,
+        BasicType::I16,
+        BasicType::I32,
+        BasicType::I64,
+        BasicType::I128,
+        BasicType::F32,
+        BasicType::F64,
+    ]
+    .into_iter()
+    .filter(|type_| program_uses_number_to_string(program, *type_))
+    .collect()
+}
+
+fn program_uses_number_to_string(program: &LoweredProgram, type_: BasicType) -> bool {
+    program.functions.iter().any(|function| {
+        function
+            .statements
+            .iter()
+            .any(|statement| statement_uses_number_to_string(statement, type_))
+            || expr_uses_number_to_string(&function.return_value, type_)
+    }) || program
+        .statements
+        .iter()
+        .any(|statement| statement_uses_number_to_string(statement, type_))
+}
+
+fn statement_uses_number_to_string(statement: &LoweredStatement, type_: BasicType) -> bool {
+    match statement {
+        LoweredStatement::Local { value, .. }
+        | LoweredStatement::Println(value)
+        | LoweredStatement::Expr(value) => expr_uses_number_to_string(value, type_),
+        LoweredStatement::Assignment { target, value } => {
+            expr_uses_number_to_string(target, type_) || expr_uses_number_to_string(value, type_)
+        }
+        LoweredStatement::Return(value) => value
+            .as_ref()
+            .is_some_and(|value| expr_uses_number_to_string(value, type_)),
+        LoweredStatement::If {
+            condition,
+            then_branch,
+            else_branch,
+        } => {
+            expr_uses_number_to_string(condition, type_)
+                || then_branch
+                    .iter()
+                    .any(|statement| statement_uses_number_to_string(statement, type_))
+                || else_branch.as_ref().is_some_and(|statements| {
+                    statements
+                        .iter()
+                        .any(|statement| statement_uses_number_to_string(statement, type_))
+                })
+        }
+        LoweredStatement::Match {
+            value, branches, ..
+        } => {
+            expr_uses_number_to_string(value, type_)
+                || branches.iter().any(|branch| {
+                    branch
+                        .statements
+                        .iter()
+                        .any(|statement| statement_uses_number_to_string(statement, type_))
+                })
+        }
+    }
+}
+
+fn expr_uses_number_to_string(expr: &LoweredExpr, type_: BasicType) -> bool {
+    match &expr.kind {
+        LoweredExprKind::NumberToString(object) => {
+            object.type_ == LoweredType::Basic(type_) || expr_uses_number_to_string(object, type_)
+        }
+        LoweredExprKind::StringConcat(left, right)
+        | LoweredExprKind::Logical { left, right, .. }
+        | LoweredExprKind::Arithmetic { left, right, .. }
+        | LoweredExprKind::Comparison { left, right, .. } => {
+            expr_uses_number_to_string(left, type_) || expr_uses_number_to_string(right, type_)
+        }
+        LoweredExprKind::PostfixIncrement(operand)
+        | LoweredExprKind::Not(operand)
+        | LoweredExprKind::Negate(operand)
+        | LoweredExprKind::EnumPayload {
+            object: operand, ..
+        }
+        | LoweredExprKind::FieldAccess {
+            object: operand, ..
+        }
+        | LoweredExprKind::Clone(operand) => expr_uses_number_to_string(operand, type_),
+        LoweredExprKind::StructLiteral { fields, .. } => fields
+            .iter()
+            .any(|field| expr_uses_number_to_string(&field.value, type_)),
+        LoweredExprKind::EnumLiteral { payload, .. } => payload
+            .as_ref()
+            .is_some_and(|payload| expr_uses_number_to_string(payload, type_)),
+        LoweredExprKind::Match {
+            value, branches, ..
+        } => {
+            expr_uses_number_to_string(value, type_)
+                || branches
+                    .iter()
+                    .any(|branch| expr_uses_number_to_string(&branch.value, type_))
+        }
+        LoweredExprKind::Call { args, .. } => args
+            .iter()
+            .any(|arg| expr_uses_number_to_string(arg, type_)),
+        LoweredExprKind::Void
+        | LoweredExprKind::StringLiteral(_)
+        | LoweredExprKind::BoolLiteral(_)
+        | LoweredExprKind::NumberLiteral(_)
+        | LoweredExprKind::Local(_)
+        | LoweredExprKind::MatchValue(_) => false,
+    }
 }
 
 fn program_uses_string_concat(program: &LoweredProgram) -> bool {
@@ -335,9 +464,9 @@ fn expr_uses_string_equality(expr: &LoweredExpr) -> bool {
                         || expr_uses_string_equality(&branch.value)
                 })
         }
-        LoweredExprKind::FieldAccess { object, .. } | LoweredExprKind::Clone(object) => {
-            expr_uses_string_equality(object)
-        }
+        LoweredExprKind::FieldAccess { object, .. }
+        | LoweredExprKind::Clone(object)
+        | LoweredExprKind::NumberToString(object) => expr_uses_string_equality(object),
         LoweredExprKind::Call { args, .. } => args.iter().any(expr_uses_string_equality),
         LoweredExprKind::Void
         | LoweredExprKind::StringLiteral(_)
@@ -410,9 +539,9 @@ fn expr_uses_string_concat(expr: &LoweredExpr) -> bool {
                     .iter()
                     .any(|branch| expr_uses_string_concat(&branch.value))
         }
-        LoweredExprKind::FieldAccess { object, .. } | LoweredExprKind::Clone(object) => {
-            expr_uses_string_concat(object)
-        }
+        LoweredExprKind::FieldAccess { object, .. }
+        | LoweredExprKind::Clone(object)
+        | LoweredExprKind::NumberToString(object) => expr_uses_string_concat(object),
         LoweredExprKind::Call { args, .. } => args.iter().any(expr_uses_string_concat),
         LoweredExprKind::Void
         | LoweredExprKind::StringLiteral(_)
@@ -556,9 +685,9 @@ fn expr_calls_name(expr: &LoweredExpr, name: &str) -> bool {
                     .iter()
                     .any(|branch| expr_calls_name(&branch.value, name))
         }
-        LoweredExprKind::FieldAccess { object, .. } | LoweredExprKind::Clone(object) => {
-            expr_calls_name(object, name)
-        }
+        LoweredExprKind::FieldAccess { object, .. }
+        | LoweredExprKind::Clone(object)
+        | LoweredExprKind::NumberToString(object) => expr_calls_name(object, name),
         LoweredExprKind::Call {
             name: called_name,
             args,
@@ -959,6 +1088,7 @@ fn push_c_statement(source: &mut String, statement: &LoweredStatement, indent: u
             | LoweredExprKind::EnumPayload { .. }
             | LoweredExprKind::MatchValue(_)
             | LoweredExprKind::Match { .. }
+            | LoweredExprKind::NumberToString(_)
             | LoweredExprKind::Call { .. } => {
                 push_c_indent(source, indent);
                 source.push_str("gust_rt_io_println(");
@@ -1197,6 +1327,81 @@ fn c_basic_type(type_: BasicType) -> &'static str {
         BasicType::F32 => "float",
         BasicType::F64 => "double",
     }
+}
+
+fn push_c_number_to_string_helper(source: &mut String, type_: BasicType) {
+    if type_ == BasicType::U128 {
+        source.push_str("static const char* gust_rt_u128_to_string(unsigned __int128 value) {\n");
+        source.push_str("    char buffer[40];\n");
+        source.push_str("    char* cursor = buffer + sizeof(buffer);\n");
+        source.push_str("    *--cursor = '\\0';\n");
+        source.push_str("    do {\n");
+        source.push_str("        *--cursor = (char)('0' + value % 10);\n");
+        source.push_str("        value /= 10;\n");
+        source.push_str("    } while (value != 0);\n");
+        source.push_str("    size_t length = (buffer + sizeof(buffer) - 1) - cursor;\n");
+        source.push_str("    char* result = gust_rt_alloc(length + 1);\n");
+        source.push_str("    memcpy(result, cursor, length + 1);\n");
+        source.push_str("    return result;\n");
+        source.push_str("}\n\n");
+        return;
+    }
+
+    if type_ == BasicType::I128 {
+        source.push_str("static const char* gust_rt_i128_to_string(__int128 value) {\n");
+        source.push_str("    bool negative = value < 0;\n");
+        source.push_str("    unsigned __int128 magnitude = negative\n");
+        source.push_str("        ? (unsigned __int128)(-(value + 1)) + 1\n");
+        source.push_str("        : (unsigned __int128)value;\n");
+        source.push_str("    char buffer[41];\n");
+        source.push_str("    char* cursor = buffer + sizeof(buffer);\n");
+        source.push_str("    *--cursor = '\\0';\n");
+        source.push_str("    do {\n");
+        source.push_str("        *--cursor = (char)('0' + magnitude % 10);\n");
+        source.push_str("        magnitude /= 10;\n");
+        source.push_str("    } while (magnitude != 0);\n");
+        source.push_str("    if (negative) {\n");
+        source.push_str("        *--cursor = '-';\n");
+        source.push_str("    }\n");
+        source.push_str("    size_t length = (buffer + sizeof(buffer) - 1) - cursor;\n");
+        source.push_str("    char* result = gust_rt_alloc(length + 1);\n");
+        source.push_str("    memcpy(result, cursor, length + 1);\n");
+        source.push_str("    return result;\n");
+        source.push_str("}\n\n");
+        return;
+    }
+
+    let (format, cast) = match type_ {
+        BasicType::U8 | BasicType::U16 | BasicType::U32 => ("%u", "(unsigned int)value"),
+        BasicType::U64 => ("%llu", "(unsigned long long)value"),
+        BasicType::Usize => ("%zu", "value"),
+        BasicType::I8 | BasicType::I16 | BasicType::I32 => ("%d", "(int)value"),
+        BasicType::I64 => ("%lld", "(long long)value"),
+        BasicType::F32 => ("%.9g", "(double)value"),
+        BasicType::F64 => ("%.17g", "value"),
+        BasicType::String | BasicType::Bool | BasicType::U128 | BasicType::I128 => {
+            unreachable!("only directly formatted numeric types reach this path")
+        }
+    };
+
+    source.push_str("static const char* gust_rt_");
+    source.push_str(type_.name());
+    source.push_str("_to_string(");
+    source.push_str(c_basic_type(type_));
+    source.push_str(" value) {\n");
+    source.push_str("    int length = snprintf(NULL, 0, \"");
+    source.push_str(format);
+    source.push_str("\", ");
+    source.push_str(cast);
+    source.push_str(");\n");
+    source.push_str("    char* result = gust_rt_alloc((size_t)length + 1);\n");
+    source.push_str("    snprintf(result, (size_t)length + 1, \"");
+    source.push_str(format);
+    source.push_str("\", ");
+    source.push_str(cast);
+    source.push_str(");\n");
+    source.push_str("    return result;\n");
+    source.push_str("}\n\n");
 }
 
 fn push_c_number_literal(source: &mut String, value: &str, type_: &LoweredType) {
@@ -1447,6 +1652,16 @@ fn push_c_value(source: &mut String, value: &LoweredExpr) {
             };
             push_c_struct_clone_name(source, name);
             source.push('(');
+            push_c_value(source, object);
+            source.push(')');
+        }
+        LoweredExprKind::NumberToString(object) => {
+            let LoweredType::Basic(type_) = &object.type_ else {
+                unreachable!("only basic numeric values use number-to-string expressions")
+            };
+            source.push_str("gust_rt_");
+            source.push_str(type_.name());
+            source.push_str("_to_string(");
             push_c_value(source, object);
             source.push(')');
         }

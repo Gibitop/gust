@@ -948,6 +948,90 @@ fn float_and_128_bit_numeric_types_lower_and_emit_c() {
 }
 
 #[test]
+fn numeric_to_string_lowers_and_emits_type_specific_runtime_helpers() {
+    let result = check_source(
+        r#"fn main() {
+    let u8Number: u8 = 1
+    let u16Number: u16 = 2
+    let u32Number: u32 = 3
+    let u64Number: u64 = 4
+    let u128Number: u128 = 5
+    let usizeNumber: usize = 6
+    let i8Number: i8 = -7
+    let i16Number: i16 = -8
+    let i32Number: i32 = -9
+    let i64Number: i64 = -10
+    let i128Number: i128 = -11
+    let f32Number: f32 = 1.25
+    let f64Number: f64 = 2.5
+
+    io.println(u8Number.toString())
+    io.println(u16Number.toString())
+    io.println(u32Number.toString())
+    io.println(u64Number.toString())
+    io.println(u128Number.toString())
+    io.println(usizeNumber.toString())
+    io.println(i8Number.toString())
+    io.println(i16Number.toString())
+    io.println(i32Number.toString())
+    io.println(i64Number.toString())
+    io.println(i128Number.toString())
+    io.println(f32Number.toString())
+    io.println(f64Number.toString())
+}"#,
+    );
+    assert!(
+        !result.has_errors(),
+        "expected no frontend errors, got {:?}",
+        result.diagnostics
+    );
+
+    let lowered = lower_program(&result.program).expect("numeric toString calls should lower");
+    let source = emit_c(&lowered);
+
+    for type_name in [
+        "u8", "u16", "u32", "u64", "u128", "usize", "i8", "i16", "i32", "i64", "i128", "f32", "f64",
+    ] {
+        assert!(
+            source.contains(&format!("gust_rt_{type_name}_to_string")),
+            "expected runtime helper for {type_name} in:\n{source}"
+        );
+    }
+
+    assert!(source.contains("snprintf(NULL, 0, \"%.9g\", (double)value)"));
+    assert!(source.contains("snprintf(NULL, 0, \"%.17g\", value)"));
+    assert!(source.contains("(unsigned __int128)(-(value + 1)) + 1"));
+    assert!(source.contains("gust_rt_io_println(gust_rt_i32_to_string(gust_i32Number));"));
+}
+
+#[test]
+fn numeric_to_string_is_lowered_as_an_intrinsic_expression() {
+    let result = check_source(
+        r#"fn i32.toString(): String => "extension"
+
+fn main() {
+    let number: i32 = 42
+    let text = number.toString()
+}"#,
+    );
+    let lowered = lower_program(&result.program).expect("numeric toString should lower");
+
+    assert_eq!(
+        lowered.statements[1],
+        LoweredStatement::Local {
+            name: "text".to_string(),
+            value: LoweredExpr {
+                type_: basic(BasicType::String),
+                kind: LoweredExprKind::NumberToString(Box::new(LoweredExpr {
+                    type_: basic(BasicType::I32),
+                    kind: LoweredExprKind::Local("number".to_string()),
+                })),
+            },
+        }
+    );
+}
+
+#[test]
 fn c_output_mangles_local_names_that_are_c_keywords() {
     let result = check_source(
         r#"fn main() {

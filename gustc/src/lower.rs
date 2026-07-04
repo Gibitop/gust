@@ -155,6 +155,7 @@ pub enum LoweredExprKind {
         field: String,
     },
     Clone(Box<LoweredExpr>),
+    NumberToString(Box<LoweredExpr>),
     Call {
         name: String,
         args: Vec<LoweredExpr>,
@@ -2934,6 +2935,27 @@ fn lower_expr(
                     None,
                     "expected supported method receiver in executable builds",
                 )?;
+                if name == "toString"
+                    && matches!(&object.type_, LoweredType::Basic(type_) if type_.is_numeric())
+                {
+                    if !args.is_empty() {
+                        diagnostics.push(Diagnostic::error(
+                            expr.span,
+                            format!(
+                                "method `{}.toString` expects 0 arguments, got {}",
+                                object.type_.name(),
+                                args.len()
+                            ),
+                        ));
+                        return None;
+                    }
+
+                    return Some(LoweredExpr {
+                        type_: LoweredType::Basic(BasicType::String),
+                        kind: LoweredExprKind::NumberToString(Box::new(object)),
+                    });
+                }
+
                 let Some(lowered_name) = callable_method_name(&object.type_, name, signatures)
                 else {
                     diagnostics.push(Diagnostic::error(

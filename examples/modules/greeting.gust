@@ -1,3 +1,4 @@
+from ../fib import { fib }
 struct Greeter {
     name: String
 }
@@ -5,5 +6,5 @@ struct Greeter {
 fn punctuation(): String => "!"
 
 fn greeting(greeter: Greeter): String {
-    return "Hello, " + greeter.name + punctuation()
+    return "Hello, " + greeter.name + punctuation() + fib(10).toString()
 }

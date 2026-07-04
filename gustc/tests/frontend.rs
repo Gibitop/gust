@@ -487,6 +487,72 @@ fn main() {
 }
 
 #[test]
+fn numeric_to_string_validates_for_every_numeric_type() {
+    let result = check_source(
+        r#"
+fn main() {
+    let u8Number: u8 = 1
+    let u16Number: u16 = 2
+    let u32Number: u32 = 3
+    let u64Number: u64 = 4
+    let u128Number: u128 = 5
+    let usizeNumber: usize = 6
+    let i8Number: i8 = 7
+    let i16Number: i16 = 8
+    let i32Number: i32 = 9
+    let i64Number: i64 = 10
+    let i128Number: i128 = 11
+    let f32Number: f32 = 1.25
+    let f64Number: f64 = 2.5
+
+    let u8Value: String = u8Number.toString()
+    let u16Value: String = u16Number.toString()
+    let u32Value: String = u32Number.toString()
+    let u64Value: String = u64Number.toString()
+    let u128Value: String = u128Number.toString()
+    let usizeValue: String = usizeNumber.toString()
+    let i8Value: String = i8Number.toString()
+    let i16Value: String = i16Number.toString()
+    let i32Value: String = i32Number.toString()
+    let i64Value: String = i64Number.toString()
+    let i128Value: String = i128Number.toString()
+    let f32Value: String = f32Number.toString()
+    let f64Value: String = f64Number.toString()
+}
+"#,
+    );
+
+    assert!(
+        result.diagnostics.is_empty(),
+        "expected numeric toString calls to validate, got {:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
+fn numeric_to_string_rejects_arguments() {
+    let result = check_source(
+        r#"
+fn main() {
+    1.toString(2)
+}
+"#,
+    );
+
+    assert!(
+        result
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.severity == Severity::Error
+                && diagnostic
+                    .message
+                    .contains("method `i32.toString` expects 0 arguments, got 1")),
+        "expected toString argument count error, got {:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
 fn struct_method_calls_report_unknown_methods_and_argument_mismatches() {
     let result = check_source(
         r#"

@@ -1,0 +1,31 @@
+fn main() {
+    let byte: u8 = 8
+    let short: u16 = 16
+    let unsigned: u32 = 32
+    let wideUnsigned: u64 = 64
+    let maximum: u128 = 340282366920938463463374607431768211455
+    let pointerSized: usize = 128
+
+    let tinySigned: i8 = -8
+    let smallSigned: i16 = -16
+    let signed: i32 = -32
+    let wideSigned: i64 = -64
+    let minimum: i128 = -170141183460469231731687303715884105728
+
+    let ratio: f32 = 1.25
+    let precise: f64 = 2.5
+
+    io.println(byte.toString())
+    io.println(short.toString())
+    io.println(unsigned.toString())
+    io.println(wideUnsigned.toString())
+    io.println(maximum.toString())
+    io.println(pointerSized.toString())
+    io.println(tinySigned.toString())
+    io.println(smallSigned.toString())
+    io.println(signed.toString())
+    io.println(wideSigned.toString())
+    io.println(minimum.toString())
+    io.println(ratio.toString())
+    io.println(precise.toString())
+}
