@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 
 use crate::ast::{
-    BasicType, BinaryOp, Expr, ExprKind, FunctionBody, FunctionDecl, Item, Program, Stmt, StmtKind,
-    StructDecl, StructInitField, StructMember, TypeRef,
+    BasicType, BinaryOp, Block, ElseBranch, Expr, ExprKind, FunctionBody, FunctionDecl, Item,
+    Program, Stmt, StmtKind, StructDecl, StructInitField, StructMember, TypeRef,
 };
 use crate::diagnostic::Diagnostic;
 use crate::span::Span;
@@ -43,10 +43,18 @@ pub struct LoweredParam {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LoweredStatement {
-    Local { name: String, value: LoweredExpr },
+    Local {
+        name: String,
+        value: LoweredExpr,
+    },
     Println(LoweredExpr),
     Expr(LoweredExpr),
     Return(Option<LoweredExpr>),
+    If {
+        condition: LoweredExpr,
+        then_branch: Vec<LoweredStatement>,
+        else_branch: Option<Vec<LoweredStatement>>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -461,36 +469,83 @@ fn infer_function_return_type(
         FunctionBody::Expr(expr) => Ok(infer_expr_type(expr, &locals, signatures, structs)),
         FunctionBody::Block(block) => {
             let mut return_type = None;
-
-            for statement in &block.statements {
-                match &statement.kind {
-                    StmtKind::Let { name, value, .. } => {
-                        if let Some(value) = value
-                            && let Some(type_) =
-                                infer_expr_type(value, &locals, signatures, structs)
-                        {
-                            locals.insert(name.clone(), type_);
-                        }
-                    }
-                    StmtKind::Return { value: Some(value) } => {
-                        if let Some(type_) = infer_expr_type(value, &locals, signatures, structs) {
-                            merge_inferred_return_type(&mut return_type, type_, value.span)?;
-                        }
-                    }
-                    StmtKind::Return { value: None } => {
-                        merge_inferred_return_type(
-                            &mut return_type,
-                            LoweredType::Void,
-                            statement.span,
-                        )?;
-                    }
-                    StmtKind::For { .. } | StmtKind::Expr(_) => {}
-                }
-            }
+            infer_block_return_types(block, &mut locals, signatures, structs, &mut return_type)?;
 
             Ok(Some(return_type.unwrap_or(LoweredType::Void)))
         }
     }
+}
+
+fn infer_block_return_types(
+    block: &Block,
+    locals: &mut HashMap<String, LoweredType>,
+    signatures: &HashMap<String, FunctionSignature>,
+    structs: &HashMap<String, LoweredStruct>,
+    return_type: &mut Option<LoweredType>,
+) -> Result<(), ReturnTypeConflict> {
+    for statement in &block.statements {
+        match &statement.kind {
+            StmtKind::Let { name, value, .. } => {
+                if let Some(value) = value
+                    && let Some(type_) = infer_expr_type(value, locals, signatures, structs)
+                {
+                    locals.insert(name.clone(), type_);
+                }
+            }
+            StmtKind::Return { value: Some(value) } => {
+                if let Some(type_) = infer_expr_type(value, locals, signatures, structs) {
+                    merge_inferred_return_type(return_type, type_, value.span)?;
+                }
+            }
+            StmtKind::Return { value: None } => {
+                merge_inferred_return_type(return_type, LoweredType::Void, statement.span)?;
+            }
+            StmtKind::If {
+                then_branch,
+                else_branch,
+                ..
+            } => {
+                let mut branch_locals = locals.clone();
+                infer_block_return_types(
+                    then_branch,
+                    &mut branch_locals,
+                    signatures,
+                    structs,
+                    return_type,
+                )?;
+
+                if let Some(else_branch) = else_branch {
+                    let mut branch_locals = locals.clone();
+
+                    match else_branch {
+                        ElseBranch::Block(block) => infer_block_return_types(
+                            block,
+                            &mut branch_locals,
+                            signatures,
+                            structs,
+                            return_type,
+                        )?,
+                        ElseBranch::If(statement) => {
+                            let block = Block {
+                                statements: vec![(**statement).clone()],
+                                span: statement.span,
+                            };
+                            infer_block_return_types(
+                                &block,
+                                &mut branch_locals,
+                                signatures,
+                                structs,
+                                return_type,
+                            )?;
+                        }
+                    }
+                }
+            }
+            StmtKind::For { .. } | StmtKind::Expr(_) => {}
+        }
+    }
+
+    Ok(())
 }
 
 struct ReturnTypeConflict {
@@ -657,6 +712,18 @@ fn lower_function(
                             statements.push(statement);
                         }
                     }
+                    StmtKind::If { .. } => {
+                        if let Some(statement) = lower_if_statement(
+                            statement,
+                            &locals,
+                            signatures,
+                            structs,
+                            diagnostics,
+                            Some(&signature.return_type),
+                        ) {
+                            statements.push(statement);
+                        }
+                    }
                     StmtKind::For { .. } => diagnostics.push(Diagnostic::error(
                         statement.span,
                         "for loops are not supported in executable builds",
@@ -672,7 +739,7 @@ fn lower_function(
         && return_value.type_ == LoweredType::Void
         && !statements
             .iter()
-            .any(|statement| matches!(statement, LoweredStatement::Return(Some(_))))
+            .any(lowered_statement_always_returns_value)
     {
         diagnostics.push(Diagnostic::error(
             function.span,
@@ -744,6 +811,18 @@ fn lower_main(
                             "return statements are not supported in executable builds",
                         ));
                     }
+                    StmtKind::If { .. } => {
+                        if let Some(statement) = lower_if_statement(
+                            statement,
+                            &locals,
+                            signatures,
+                            structs,
+                            diagnostics,
+                            None,
+                        ) {
+                            statements.push(statement);
+                        }
+                    }
                     StmtKind::For { .. } => {
                         diagnostics.push(Diagnostic::error(
                             statement.span,
@@ -760,6 +839,166 @@ fn lower_main(
     }
 
     statements
+}
+
+fn lower_if_statement(
+    statement: &Stmt,
+    locals: &HashMap<String, LoweredType>,
+    signatures: &HashMap<String, FunctionSignature>,
+    structs: &HashMap<String, LoweredStruct>,
+    diagnostics: &mut Vec<Diagnostic>,
+    return_type: Option<&LoweredType>,
+) -> Option<LoweredStatement> {
+    let StmtKind::If {
+        condition,
+        then_branch,
+        else_branch,
+    } = &statement.kind
+    else {
+        return None;
+    };
+
+    let condition = lower_expr(
+        condition,
+        locals,
+        signatures,
+        structs,
+        diagnostics,
+        Some(LoweredType::Basic(BasicType::Bool)),
+        "expected supported `if` condition in executable builds",
+    )?;
+    let then_branch = lower_conditional_block(
+        then_branch,
+        &mut locals.clone(),
+        signatures,
+        structs,
+        diagnostics,
+        return_type,
+    );
+    let else_branch = else_branch.as_ref().map(|else_branch| {
+        let mut branch_locals = locals.clone();
+
+        match else_branch {
+            ElseBranch::Block(block) => lower_conditional_block(
+                block,
+                &mut branch_locals,
+                signatures,
+                structs,
+                diagnostics,
+                return_type,
+            ),
+            ElseBranch::If(statement) => lower_if_statement(
+                statement,
+                &branch_locals,
+                signatures,
+                structs,
+                diagnostics,
+                return_type,
+            )
+            .into_iter()
+            .collect(),
+        }
+    });
+
+    Some(LoweredStatement::If {
+        condition,
+        then_branch,
+        else_branch,
+    })
+}
+
+fn lower_conditional_block(
+    block: &Block,
+    locals: &mut HashMap<String, LoweredType>,
+    signatures: &HashMap<String, FunctionSignature>,
+    structs: &HashMap<String, LoweredStruct>,
+    diagnostics: &mut Vec<Diagnostic>,
+    return_type: Option<&LoweredType>,
+) -> Vec<LoweredStatement> {
+    let mut statements = Vec::new();
+
+    for statement in &block.statements {
+        match &statement.kind {
+            StmtKind::Let { .. } => {
+                if let Some(statement) =
+                    lower_local_statement(statement, locals, signatures, structs, diagnostics)
+                {
+                    statements.push(statement);
+                }
+            }
+            StmtKind::Return { value } => {
+                let Some(return_type) = return_type else {
+                    diagnostics.push(Diagnostic::error(
+                        statement.span,
+                        "return statements are not supported in executable builds",
+                    ));
+                    continue;
+                };
+                let value = value.as_ref().and_then(|value| {
+                    lower_expr(
+                        value,
+                        locals,
+                        signatures,
+                        structs,
+                        diagnostics,
+                        Some(return_type.clone()),
+                        "expected supported return value in executable builds",
+                    )
+                });
+                statements.push(LoweredStatement::Return(value));
+            }
+            StmtKind::If { .. } => {
+                if let Some(statement) = lower_if_statement(
+                    statement,
+                    locals,
+                    signatures,
+                    structs,
+                    diagnostics,
+                    return_type,
+                ) {
+                    statements.push(statement);
+                }
+            }
+            StmtKind::For { .. } => diagnostics.push(Diagnostic::error(
+                statement.span,
+                "for loops are not supported in executable builds",
+            )),
+            StmtKind::Expr(expr) => {
+                if let Some(statement) =
+                    lower_expression_statement(expr, locals, signatures, structs, diagnostics)
+                {
+                    statements.push(statement);
+                }
+            }
+        }
+    }
+
+    statements
+}
+
+fn lowered_statement_always_returns_value(statement: &LoweredStatement) -> bool {
+    match statement {
+        LoweredStatement::Return(Some(_)) => true,
+        LoweredStatement::If {
+            then_branch,
+            else_branch: Some(else_branch),
+            ..
+        } => {
+            then_branch
+                .iter()
+                .any(lowered_statement_always_returns_value)
+                && else_branch
+                    .iter()
+                    .any(lowered_statement_always_returns_value)
+        }
+        LoweredStatement::Local { .. }
+        | LoweredStatement::Println(_)
+        | LoweredStatement::Expr(_)
+        | LoweredStatement::Return(None)
+        | LoweredStatement::If {
+            else_branch: None, ..
+        } => false,
+    }
 }
 
 fn lower_expression_statement(

@@ -93,6 +93,102 @@ fn main() {
 }
 
 #[test]
+fn if_else_statements_validate() {
+    let result = check_source(
+        r#"
+fn main() {
+    let enabled = true
+
+    if enabled {
+        io.println("enabled")
+    } else if false {
+        io.println("unreachable")
+    } else {
+        io.println("disabled")
+    }
+}
+"#,
+    );
+
+    assert!(
+        !result.has_errors(),
+        "expected if/else statements to validate, got {:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
+fn if_condition_must_be_bool() {
+    let result = check_source(
+        r#"
+fn main() {
+    if "not a bool" {}
+}
+"#,
+    );
+
+    assert!(
+        result
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.severity == Severity::Error
+                && diagnostic
+                    .message
+                    .contains("expected value of type `bool`, got `String`")),
+        "expected bool condition error, got {:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
+fn if_branch_bindings_do_not_escape() {
+    let result = check_source(
+        r#"
+fn main() {
+    if true {
+        let message = "scoped"
+    }
+
+    io.println(message)
+}
+"#,
+    );
+
+    assert!(
+        result
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.severity == Severity::Error
+                && diagnostic.message.contains("unknown name `message`")),
+        "expected branch binding scope error, got {:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
+fn returning_if_else_satisfies_explicit_return_type() {
+    let result = check_source(
+        r#"
+fn choose(enabled: bool): String {
+    if enabled {
+        return "enabled"
+    } else {
+        return "disabled"
+    }
+}
+
+fn main() {}
+"#,
+    );
+
+    assert!(
+        !result.has_errors(),
+        "expected returning if/else to satisfy return type, got {:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
 fn basic_struct_literal_validates() {
     let result = check_source(
         r#"

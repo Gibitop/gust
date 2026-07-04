@@ -1,0 +1,13 @@
+fn status(enabled: bool): String {
+    if enabled {
+        return "Enabled"
+    } else if false {
+        return "Unreachable"
+    } else {
+        return "Disabled"
+    }
+}
+
+fn main() {
+    io.println(status(true))
+}

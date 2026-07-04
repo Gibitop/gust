@@ -37,6 +37,78 @@ fn hello_world_lowers_successfully() {
 }
 
 #[test]
+fn if_else_lowers_successfully() {
+    let result = check_source(
+        r#"fn main() {
+    let enabled = true
+
+    if enabled {
+        io.println("enabled")
+    } else {
+        io.println("disabled")
+    }
+}"#,
+    );
+
+    assert!(
+        !result.has_errors(),
+        "expected no frontend errors, got {:?}",
+        result.diagnostics
+    );
+
+    let lowered = lower_program(&result.program).expect("if/else should lower");
+
+    assert_eq!(
+        lowered.statements[1],
+        LoweredStatement::If {
+            condition: LoweredExpr {
+                type_: basic(BasicType::Bool),
+                kind: LoweredExprKind::Local("enabled".to_string()),
+            },
+            then_branch: vec![LoweredStatement::Println(LoweredExpr {
+                type_: basic(BasicType::String),
+                kind: LoweredExprKind::StringLiteral("enabled".to_string()),
+            })],
+            else_branch: Some(vec![LoweredStatement::Println(LoweredExpr {
+                type_: basic(BasicType::String),
+                kind: LoweredExprKind::StringLiteral("disabled".to_string()),
+            })]),
+        }
+    );
+}
+
+#[test]
+fn inferred_returning_if_else_emits_c() {
+    let result = check_source(
+        r#"fn choose(enabled: bool) {
+    if enabled {
+        return "enabled"
+    } else {
+        return "disabled"
+    }
+}
+
+fn main() {
+    io.println(choose(true))
+}"#,
+    );
+
+    assert!(
+        !result.has_errors(),
+        "expected no frontend errors, got {:?}",
+        result.diagnostics
+    );
+
+    let lowered = lower_program(&result.program).expect("returning if/else should lower");
+    let source = emit_c(&lowered);
+
+    assert!(source.contains("if (gust_enabled) {\n        return \"enabled\";"));
+    assert!(source.contains("} else {\n        return \"disabled\";"));
+    assert!(source.contains("gust_rt_io_println(gust_fn_"));
+    assert!(!source.contains("return ;"));
+}
+
+#[test]
 fn string_local_lowers_successfully() {
     let result = check_source(
         r#"fn main() {
