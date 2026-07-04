@@ -1,7 +1,7 @@
 use crate::ast::{
     BinaryOp, Block, ElseBranch, EnumDecl, EnumVariant, Expr, ExprKind, FieldDecl, FunctionBody,
-    FunctionDecl, ImportDecl, Item, MatchBranch, Param, Pattern, Program, Stmt, StmtKind,
-    StructDecl, StructInitField, StructMember, TypeRef, UnaryOp,
+    FunctionDecl, ImportDecl, Item, MatchBranch, MatchBranchBody, Param, Pattern, Program, Stmt,
+    StmtKind, StructDecl, StructInitField, StructMember, TypeRef, UnaryOp,
 };
 use crate::diagnostic::Diagnostic;
 use crate::lexer::{Keyword, Token, TokenKind};
@@ -596,11 +596,15 @@ impl Parser {
         while !self.at_eof() && !self.check_kind(&TokenKind::RightBrace) {
             let pattern = self.parse_pattern();
             self.expect_kind(&TokenKind::FatArrow, "`=>`");
-            let value = self.parse_expression();
-            let span = pattern.span().join(value.span);
+            let body = if self.check_kind(&TokenKind::LeftBrace) {
+                MatchBranchBody::Block(self.parse_block())
+            } else {
+                MatchBranchBody::Expr(self.parse_expression())
+            };
+            let span = pattern.span().join(body.span());
             branches.push(MatchBranch {
                 pattern,
-                value,
+                body,
                 span,
             });
             self.match_kind(&TokenKind::Comma);
@@ -620,6 +624,16 @@ impl Parser {
 
     fn parse_pattern(&mut self) -> Pattern {
         let start = self.current().span;
+        if let TokenKind::StringLiteral(value) = self.current().kind.clone() {
+            self.advance();
+            return Pattern::String { value, span: start };
+        }
+
+        if matches!(&self.current().kind, TokenKind::Identifier(name) if name == "_") {
+            self.advance();
+            return Pattern::Wildcard { span: start };
+        }
+
         let enum_name = self.expect_identifier("expected enum name in match pattern");
         self.expect_kind(&TokenKind::Dot, "`.`");
         let variant = self.expect_identifier("expected enum variant in match pattern");

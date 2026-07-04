@@ -1609,3 +1609,54 @@ fn main() {
 
     assert!(enum_position < struct_position);
 }
+
+#[test]
+fn computed_block_matches_and_string_patterns_emit_c() {
+    let result = check_source(
+        r#"enum Being {
+    Person(String)
+    Unknown
+}
+
+fn constructBeing(kind: String): Being {
+    return match kind {
+        "person" => Being.Person("Ada"),
+        _ => Being.Unknown,
+    }
+}
+
+fn main() {
+    let mut name = ""
+    match constructBeing("person") {
+        Being.Person(personName) => {
+            name = personName
+        },
+        Being.Unknown => {
+            name = "stranger"
+        },
+    }
+    io.println(name)
+}"#,
+    );
+
+    assert!(
+        !result.has_errors(),
+        "expected no frontend errors, got {:?}",
+        result.diagnostics
+    );
+
+    let lowered = lower_program(&result.program).expect("new match forms should lower");
+    let source = emit_c(&lowered);
+
+    assert!(source.contains("gust_rt_string_equal(gust_internal_match_value_"));
+    assert!(source.contains(".gust_tag =="));
+    assert_eq!(
+        source
+            .lines()
+            .filter(|line| {
+                line.contains("gust_internal_match_value_") && line.contains("= gust_fn_")
+            })
+            .count(),
+        1
+    );
+}
