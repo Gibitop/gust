@@ -1308,3 +1308,44 @@ fn main() {
     assert!(source.contains("(false && gust_fn_"));
     assert!(source.contains("(true || gust_fn_"));
 }
+
+#[test]
+fn payload_enums_and_matches_emit_tagged_union_c() {
+    let result = check_source(
+        r#"struct Person {
+    name: String
+}
+
+enum Being {
+    Person(Person)
+    Unknown
+}
+
+fn greeting(being: Being): String {
+    return match being {
+        Being.Person(person) => "Hello, " + person.name,
+        Being.Unknown => "Hello, stranger",
+    }
+}
+
+fn main() {
+    let being = Being.Person(Person { name: "Ada" })
+    io.println(greeting(being))
+}"#,
+    );
+
+    assert!(
+        !result.has_errors(),
+        "expected no frontend errors, got {:?}",
+        result.diagnostics
+    );
+
+    let lowered = lower_program(&result.program).expect("enums and matches should lower");
+    let source = emit_c(&lowered);
+
+    assert!(source.contains("// Gust enum: Being"));
+    assert!(source.contains("gust_enum_"));
+    assert!(source.contains("gust_tag"));
+    assert!(source.contains("gust_payload"));
+    assert!(source.contains(".gust_tag =="));
+}

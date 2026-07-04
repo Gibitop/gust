@@ -1235,3 +1235,222 @@ fn logical_and_binds_more_tightly_than_logical_or() {
         }
     ));
 }
+
+#[test]
+fn payload_enums_and_exhaustive_matches_validate() {
+    let result = check_source(
+        r#"struct Person {
+    name: String
+}
+
+enum Being {
+    Person(Person)
+    Unknown
+}
+
+fn greeting(being: Being): String {
+    return match being {
+        Being.Person(person) => "Hello, " + person.name,
+        Being.Unknown => "Hello, stranger",
+    }
+}
+
+fn main() {
+    let being = Being.Person(Person { name: "Ada" })
+    io.println(greeting(being))
+}"#,
+    );
+
+    assert!(
+        !result.has_errors(),
+        "expected enums and matches to validate, got {:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
+fn enum_matches_must_be_exhaustive() {
+    let result = check_source(
+        r#"enum Status {
+    Ready
+    Waiting
+}
+
+fn label(status: Status): String {
+    return match status {
+        Status.Ready => "ready",
+    }
+}
+
+fn main() {}"#,
+    );
+
+    assert!(
+        result.diagnostics.iter().any(|diagnostic| {
+            diagnostic.severity == Severity::Error
+                && diagnostic
+                    .message
+                    .contains("non-exhaustive match for enum `Status`; missing `Waiting`")
+        }),
+        "expected non-exhaustive match error, got {:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
+fn enum_payloads_and_match_branches_are_type_checked() {
+    let result = check_source(
+        r#"enum Result {
+    Value(String)
+    Empty
+}
+
+fn label(result: Result): String {
+    return match result {
+        Result.Value(value) => value,
+        Result.Empty => false,
+    }
+}
+
+fn main() {
+    let invalid = Result.Value(false)
+}"#,
+    );
+
+    assert!(
+        result
+            .diagnostics
+            .iter()
+            .filter(|diagnostic| {
+                diagnostic.severity == Severity::Error
+                    && diagnostic
+                        .message
+                        .contains("expected value of type `String`, got `bool`")
+            })
+            .count()
+            >= 2,
+        "expected payload and branch type errors, got {:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
+fn enum_match_patterns_reject_duplicate_and_invalid_bindings() {
+    let result = check_source(
+        r#"enum State {
+    Named(String)
+    Empty
+}
+
+fn label(state: State): String {
+    return match state {
+        State.Named(name) => name,
+        State.Named(other) => other,
+        State.Empty(value) => value,
+    }
+}
+
+fn main() {}"#,
+    );
+
+    assert!(
+        result.diagnostics.iter().any(|diagnostic| {
+            diagnostic.severity == Severity::Error
+                && diagnostic
+                    .message
+                    .contains("duplicate match branch for variant `Named`")
+        }),
+        "expected duplicate branch error, got {:?}",
+        result.diagnostics
+    );
+    assert!(
+        result.diagnostics.iter().any(|diagnostic| {
+            diagnostic.severity == Severity::Error
+                && diagnostic
+                    .message
+                    .contains("unit variant `State.Empty` does not bind a payload")
+        }),
+        "expected invalid binding error, got {:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
+fn enum_variants_are_namespaced_by_their_enum() {
+    let result = check_source(
+        r#"enum Left {
+    Value(String)
+}
+
+enum Right {
+    Value(String)
+}
+
+fn leftLabel(value: Left): String {
+    return match value {
+        Left.Value(label) => label,
+    }
+}
+
+fn rightLabel(value: Right): String {
+    return match value {
+        Right.Value(label) => label,
+    }
+}
+
+fn main() {
+    io.println(leftLabel(Left.Value("left")))
+    io.println(rightLabel(Right.Value("right")))
+}"#,
+    );
+
+    assert!(
+        !result.has_errors(),
+        "expected enums to reuse qualified variant names, got {:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
+fn enum_variants_cannot_be_used_without_the_enum_name() {
+    let result = check_source(
+        r#"enum Status {
+    Ready
+}
+
+fn main() {
+    let status = Ready
+}"#,
+    );
+
+    assert!(
+        result.diagnostics.iter().any(|diagnostic| {
+            diagnostic.severity == Severity::Error
+                && diagnostic.message.contains("unknown name `Ready`")
+        }),
+        "expected unqualified variant error, got {:?}",
+        result.diagnostics
+    );
+
+    let result = check_source(
+        r#"enum Status {
+    Ready
+}
+
+fn label(status: Status): String {
+    return match status {
+        Ready => "ready",
+    }
+}
+
+fn main() {}"#,
+    );
+
+    assert!(
+        result.diagnostics.iter().any(|diagnostic| {
+            diagnostic.severity == Severity::Error && diagnostic.message.contains("expected `.`")
+        }),
+        "expected qualified pattern syntax error, got {:?}",
+        result.diagnostics
+    );
+}

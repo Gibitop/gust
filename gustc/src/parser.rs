@@ -614,7 +614,9 @@ impl Parser {
 
     fn parse_pattern(&mut self) -> Pattern {
         let start = self.current().span;
-        let name = self.expect_identifier("expected match pattern");
+        let enum_name = self.expect_identifier("expected enum name in match pattern");
+        self.expect_kind(&TokenKind::Dot, "`.`");
+        let variant = self.expect_identifier("expected enum variant in match pattern");
         let binding = if self.match_kind(&TokenKind::LeftParen) {
             let binding = self.expect_identifier("expected pattern binding");
             self.expect_kind(&TokenKind::RightParen, "`)`");
@@ -624,8 +626,9 @@ impl Parser {
         };
         let span = start.join(self.previous_span());
 
-        Pattern::Identifier {
-            name,
+        Pattern::Variant {
+            enum_name,
+            variant,
             binding,
             span,
         }
