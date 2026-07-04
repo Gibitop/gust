@@ -626,10 +626,10 @@ impl Analyzer {
                 self.validate_comparison(expr.span, left, *op, right)
             }
             ExprKind::Match { value, branches } => {
-                if !matches!(value.kind, ExprKind::Identifier(_)) {
+                if !is_stable_match_value(value) {
                     self.unsupported(
                         value.span,
-                        "matching non-binding expressions is not implemented in executable builds yet",
+                        "matching computed expressions is not implemented in executable builds yet",
                     );
                 }
 
@@ -1184,17 +1184,21 @@ impl Analyzer {
                 };
 
                 match (binding, payload) {
-                    (Some(binding), Some(payload)) => self.define(binding, false, payload),
+                    (Some(binding), Some(payload)) if binding != "_" => {
+                        self.define(binding, false, payload)
+                    }
+                    (Some(_), Some(_)) => {}
                     (Some(_), None) => self.diagnostics.push(Diagnostic::error(
                         *span,
                         format!(
                             "unit variant `{pattern_enum_name}.{variant}` does not bind a payload"
                         ),
                     )),
-                    (None, Some(_)) => self.diagnostics.push(Diagnostic::error(
+                    (None, Some(payload)) => self.diagnostics.push(Diagnostic::error(
                         *span,
                         format!(
-                            "payload variant `{pattern_enum_name}.{variant}` requires a binding in match patterns"
+                            "`{pattern_enum_name}.{variant}` contains a `{}` value; use `{pattern_enum_name}.{variant}(value)` to bind it or `{pattern_enum_name}.{variant}(_)` to ignore it",
+                            payload.name()
                         ),
                     )),
                     (None, None) => {}
@@ -1299,6 +1303,14 @@ impl Analyzer {
 
     fn current_return_type(&self) -> Type {
         self.return_types.last().cloned().unwrap_or(Type::Unknown)
+    }
+}
+
+fn is_stable_match_value(expr: &Expr) -> bool {
+    match &expr.kind {
+        ExprKind::Identifier(_) => true,
+        ExprKind::Member { object, .. } => is_stable_match_value(object),
+        _ => false,
     }
 }
 

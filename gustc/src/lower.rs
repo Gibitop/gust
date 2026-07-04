@@ -190,9 +190,21 @@ pub fn lower_program(program: &Program) -> Result<LoweredProgram, Vec<Diagnostic
     let mut has_unresolved_return_type = false;
 
     for item in &program.items {
+        if let Item::Enum(item) = item {
+            enums.insert(
+                item.name.clone(),
+                LoweredEnum {
+                    name: item.name.clone(),
+                    variants: Vec::new(),
+                },
+            );
+        }
+    }
+
+    for item in &program.items {
         match item {
             Item::Struct(item) => {
-                if let Some(struct_) = lower_struct_definition(item, &mut diagnostics) {
+                if let Some(struct_) = lower_struct_definition(item, &enums, &mut diagnostics) {
                     structs.insert(item.name.clone(), struct_);
                 }
             }
@@ -448,6 +460,7 @@ fn lower_enum_definition(
 
 fn lower_struct_definition(
     item: &StructDecl,
+    enums: &HashMap<String, LoweredEnum>,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> Option<LoweredStruct> {
     let mut fields = Vec::new();
@@ -465,10 +478,12 @@ fn lower_struct_definition(
                     can_lower = false;
                 }
 
-                let Some(type_) = lower_basic_type_ref(
+                let Some(type_) = lower_value_type_ref(
                     &field.type_ref,
+                    &HashMap::new(),
+                    enums,
                     diagnostics,
-                    "only basic struct field types are supported in executable builds",
+                    "struct fields only support basic and known enum types in executable builds",
                 ) else {
                     can_lower = false;
                     continue;
@@ -476,7 +491,7 @@ fn lower_struct_definition(
 
                 fields.push(LoweredField {
                     name: field.name.clone(),
-                    type_: LoweredType::Basic(type_),
+                    type_,
                 });
             }
             StructMember::Method(method) => {
@@ -599,27 +614,6 @@ fn lower_value_type_ref(
 
     diagnostics.push(Diagnostic::error(type_ref.span, message));
     None
-}
-
-fn lower_basic_type_ref(
-    type_ref: &TypeRef,
-    diagnostics: &mut Vec<Diagnostic>,
-    message: &str,
-) -> Option<BasicType> {
-    if !type_ref.args.is_empty() {
-        diagnostics.push(Diagnostic::error(
-            type_ref.span,
-            "generic types are not supported in executable builds",
-        ));
-        return None;
-    }
-
-    let Some(type_) = BasicType::from_name(&type_ref.name) else {
-        diagnostics.push(Diagnostic::error(type_ref.span, message));
-        return None;
-    };
-
-    Some(type_)
 }
 
 fn infer_function_return_type(
@@ -2241,10 +2235,10 @@ fn lower_expr(
             }
         }
         ExprKind::Match { value, branches } => {
-            if !matches!(value.kind, ExprKind::Identifier(_)) {
+            if !is_stable_match_value(value) {
                 diagnostics.push(Diagnostic::error(
                     value.span,
-                    "executable matches currently require a local or parameter value",
+                    "executable matches currently require a local, parameter, or field path",
                 ));
                 return None;
             }
@@ -2297,7 +2291,9 @@ fn lower_expr(
                 };
                 let mut branch_locals = locals.clone();
 
-                if let (Some(binding), Some(payload_type)) = (binding, &variant.payload) {
+                if let (Some(binding), Some(payload_type)) = (binding, &variant.payload)
+                    && binding != "_"
+                {
                     branch_locals.insert(
                         binding.clone(),
                         LoweringLocal {
@@ -2381,4 +2377,12 @@ fn find_qualified_variant<'a>(
         .variants
         .iter()
         .find(|variant| variant.name == variant_name)
+}
+
+fn is_stable_match_value(expr: &Expr) -> bool {
+    match &expr.kind {
+        ExprKind::Identifier(_) => true,
+        ExprKind::Member { object, .. } => is_stable_match_value(object),
+        _ => false,
+    }
 }

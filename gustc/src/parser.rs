@@ -61,7 +61,9 @@ impl Parser {
         self.expect_keyword(Keyword::Import, "`import`");
 
         let mut names = Vec::new();
-        while !self.at_eof() {
+        let braced = self.match_kind(&TokenKind::LeftBrace);
+
+        while !self.at_eof() && (!braced || !self.check_kind(&TokenKind::RightBrace)) {
             if let Some(name) = self.consume_identifier() {
                 names.push(name);
             } else {
@@ -72,6 +74,10 @@ impl Parser {
             if !self.match_kind(&TokenKind::Comma) {
                 break;
             }
+        }
+
+        if braced {
+            self.expect_kind(&TokenKind::RightBrace, "`}`");
         }
 
         let end = self.previous_span();
