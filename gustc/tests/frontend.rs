@@ -944,6 +944,97 @@ fn main() {
 }
 
 #[test]
+fn mutable_locals_can_be_assigned_and_incremented() {
+    let result = check_source(
+        r#"
+fn main() {
+    let mut count: u32 = 1
+    count = count + 2
+    count++
+}
+"#,
+    );
+
+    assert!(
+        !result.has_errors(),
+        "expected mutable local operations to validate, got {:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
+fn assignment_requires_a_mutable_binding() {
+    let result = check_source(
+        r#"
+fn main() {
+    let count = 1
+    count = 2
+}
+"#,
+    );
+
+    assert!(
+        result
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.severity == Severity::Error
+                && diagnostic
+                    .message
+                    .contains("cannot assign to immutable binding `count`")),
+        "expected immutable-assignment error, got {:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
+fn assignment_value_must_match_the_binding_type() {
+    let result = check_source(
+        r#"
+fn main() {
+    let mut message = "Gust"
+    message = 1
+}
+"#,
+    );
+
+    assert!(
+        result
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.severity == Severity::Error
+                && diagnostic
+                    .message
+                    .contains("expected value of type `String`, got `i32`")),
+        "expected assignment-type error, got {:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
+fn increment_requires_a_numeric_binding() {
+    let result = check_source(
+        r#"
+fn main() {
+    let mut message = "Gust"
+    message++
+}
+"#,
+    );
+
+    assert!(
+        result
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.severity == Severity::Error
+                && diagnostic
+                    .message
+                    .contains("operator ++ only supports numeric operands")),
+        "expected numeric-increment error, got {:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
 fn comparison_operators_validate() {
     let result = check_source(
         r#"

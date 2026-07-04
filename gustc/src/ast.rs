@@ -117,6 +117,10 @@ pub enum StmtKind {
         type_annotation: Option<TypeRef>,
         value: Option<Expr>,
     },
+    Assign {
+        target: Expr,
+        value: Expr,
+    },
     Return {
         value: Option<Expr>,
     },
