@@ -21,12 +21,18 @@ fn main() {
     let short: u16 = 16
     let unsigned: u32 = 32
     let wideUnsigned: u64 = 64
+    let hugeUnsigned: u128 = 340282366920938463463374607431768211455
     let pointerSized: usize = 128
 
     let tinySigned: i8 = 8
     let smallSigned: i16 = 16
     let signed = 32 // Unannotated numeric literals default to i32.
     let wideSigned: i64 = 64
+    let hugeSigned: i128 = 170141183460469231731687303715884105727
+    let minimumSigned: i128 = -170141183460469231731687303715884105728
+
+    let singlePrecision: f32 = 1.25
+    let doublePrecision = 2.5 // Unannotated floating-point literals default to f64.
 
     // Numeric and bool locals are valid, but io.println currently accepts only String values.
 }

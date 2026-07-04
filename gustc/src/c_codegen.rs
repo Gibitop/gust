@@ -9,6 +9,8 @@ use crate::lower::{
 pub fn emit_c(program: &LoweredProgram) -> String {
     let uses_bool = program_uses_type(program, BasicType::Bool);
     let uses_usize = program_uses_type(program, BasicType::Usize);
+    let uses_float =
+        program_uses_type(program, BasicType::F32) || program_uses_type(program, BasicType::F64);
     let uses_fixed_width_int = program_uses_fixed_width_int(program);
     let uses_string_concat = program_uses_string_concat(program);
     let uses_string_equality = program_uses_string_equality(program);
@@ -34,6 +36,10 @@ pub fn emit_c(program: &LoweredProgram) -> String {
 
     if uses_println {
         source.push_str("#include <stdio.h>\n");
+    }
+
+    if uses_float {
+        source.push_str("#include <math.h>\n");
     }
 
     if uses_string_concat {
@@ -848,11 +854,65 @@ fn c_basic_type(type_: BasicType) -> &'static str {
         BasicType::U16 => "uint16_t",
         BasicType::U32 => "uint32_t",
         BasicType::U64 => "uint64_t",
+        BasicType::U128 => "unsigned __int128",
         BasicType::Usize => "size_t",
         BasicType::I8 => "int8_t",
         BasicType::I16 => "int16_t",
         BasicType::I32 => "int32_t",
         BasicType::I64 => "int64_t",
+        BasicType::I128 => "__int128",
+        BasicType::F32 => "float",
+        BasicType::F64 => "double",
+    }
+}
+
+fn push_c_number_literal(source: &mut String, value: &str, type_: &LoweredType) {
+    match type_ {
+        LoweredType::Basic(BasicType::F32) => {
+            source.push_str(value);
+            if !value.contains(['.', 'e', 'E']) {
+                source.push_str(".0");
+            }
+            source.push('f');
+        }
+        LoweredType::Basic(BasicType::F64) => {
+            source.push_str(value);
+            if !value.contains(['.', 'e', 'E']) {
+                source.push_str(".0");
+            }
+        }
+        LoweredType::Basic(BasicType::U128) => push_c_u128_literal(source, value),
+        LoweredType::Basic(BasicType::I128) => {
+            source.push_str("((__int128)");
+            push_c_u128_literal(source, value);
+            source.push(')');
+        }
+        _ => source.push_str(value),
+    }
+}
+
+fn push_c_u128_literal(source: &mut String, value: &str) {
+    const CHUNK_DIGITS: usize = 18;
+    const CHUNK_BASE: &str = "1000000000000000000ULL";
+
+    let first_chunk_len = match value.len() % CHUNK_DIGITS {
+        0 => CHUNK_DIGITS,
+        len => len,
+    };
+    let remaining_chunks = (value.len() - first_chunk_len) / CHUNK_DIGITS;
+    for _ in 0..remaining_chunks {
+        source.push('(');
+    }
+    source.push_str("((unsigned __int128)");
+    source.push_str(&value[..first_chunk_len]);
+    source.push_str("ULL)");
+
+    for chunk in value[first_chunk_len..].as_bytes().chunks(CHUNK_DIGITS) {
+        source.push_str(" * (unsigned __int128)");
+        source.push_str(CHUNK_BASE);
+        source.push_str(" + ");
+        source.push_str(std::str::from_utf8(chunk).expect("numeric literals are ASCII"));
+        source.push_str("ULL)");
     }
 }
 
@@ -871,7 +931,9 @@ fn push_c_value(source: &mut String, value: &LoweredExpr) {
                 source.push_str("false");
             }
         }
-        LoweredExprKind::NumberLiteral(value) => source.push_str(value),
+        LoweredExprKind::NumberLiteral(literal) => {
+            push_c_number_literal(source, literal, &value.type_)
+        }
         LoweredExprKind::Local(name) => push_c_local_name(source, name),
         LoweredExprKind::PostfixIncrement(target) => {
             source.push('(');
@@ -891,11 +953,40 @@ fn push_c_value(source: &mut String, value: &LoweredExpr) {
             source.push(')');
         }
         LoweredExprKind::Negate(operand) => {
+            if let LoweredExpr {
+                type_: LoweredType::Basic(BasicType::I128),
+                kind: LoweredExprKind::NumberLiteral(literal),
+            } = operand.as_ref()
+            {
+                source.push_str("((__int128)(-");
+                push_c_u128_literal(source, literal);
+                source.push_str("))");
+                return;
+            }
+
             source.push_str("(-");
             push_c_value(source, operand);
             source.push(')');
         }
         LoweredExprKind::Arithmetic { left, op, right } => {
+            if *op == BinaryOp::Remainder
+                && matches!(
+                    left.type_,
+                    LoweredType::Basic(BasicType::F32 | BasicType::F64)
+                )
+            {
+                if left.type_ == LoweredType::Basic(BasicType::F32) {
+                    source.push_str("fmodf(");
+                } else {
+                    source.push_str("fmod(");
+                }
+                push_c_value(source, left);
+                source.push_str(", ");
+                push_c_value(source, right);
+                source.push(')');
+                return;
+            }
+
             source.push('(');
             push_c_value(source, left);
             source.push(' ');

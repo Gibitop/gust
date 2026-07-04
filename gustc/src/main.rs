@@ -112,6 +112,7 @@ fn main() -> ExitCode {
 
     let output = Command::new("cc")
         .arg(&c_path)
+        .arg("-lm")
         .arg("-o")
         .arg(&output_path)
         .output();

@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use crate::ast::{
     BasicType, BinaryOp, Block, ElseBranch, Expr, ExprKind, FunctionBody, FunctionDecl, Item,
     Pattern, Program, Stmt, StmtKind, StructDecl, StructInitField, StructMember, TypeRef, UnaryOp,
+    number_literal_is_float,
 };
 use crate::diagnostic::Diagnostic;
 use crate::span::Span;
@@ -812,7 +813,9 @@ fn infer_expr_type(
                 | BinaryOp::Remainder,
             right,
         } => {
-            if matches!(left.kind, ExprKind::Number(_))
+            if number_pair_contains_float(left, right) {
+                Some(LoweredType::Basic(BasicType::F64))
+            } else if matches!(left.kind, ExprKind::Number(_))
                 && !matches!(right.kind, ExprKind::Number(_))
             {
                 infer_expr_type(right, locals, signatures, structs, enums)
@@ -820,7 +823,11 @@ fn infer_expr_type(
                 infer_expr_type(left, locals, signatures, structs, enums)
             }
         }
-        ExprKind::Number(_) => Some(LoweredType::Basic(BasicType::I32)),
+        ExprKind::Number(value) => Some(LoweredType::Basic(if number_literal_is_float(value) {
+            BasicType::F64
+        } else {
+            BasicType::I32
+        })),
         ExprKind::Identifier(name) => locals.get(name).cloned(),
         ExprKind::StructInit { name, .. } if structs.contains_key(name) => {
             Some(LoweredType::Struct(name.clone()))
@@ -1694,11 +1701,15 @@ fn lower_expr(
         },
         ExprKind::Number(value) => {
             let type_ = if let Some(LoweredType::Basic(type_)) = expected_type.as_ref() {
-                if type_.is_numeric() {
+                if type_.is_numeric() && (!number_literal_is_float(value) || type_.is_float()) {
                     *type_
+                } else if number_literal_is_float(value) {
+                    BasicType::F64
                 } else {
                     BasicType::I32
                 }
+            } else if number_literal_is_float(value) {
+                BasicType::F64
             } else {
                 BasicType::I32
             };
@@ -1888,6 +1899,29 @@ fn lower_expr(
                     "expected supported arithmetic operand in executable builds",
                 )?;
                 (left, right)
+            } else if number_pair_contains_float(left, right) {
+                let type_ = LoweredType::Basic(BasicType::F64);
+                let left = lower_expr(
+                    left,
+                    locals,
+                    signatures,
+                    structs,
+                    enums,
+                    diagnostics,
+                    Some(type_.clone()),
+                    "expected supported arithmetic operand in executable builds",
+                )?;
+                let right = lower_expr(
+                    right,
+                    locals,
+                    signatures,
+                    structs,
+                    enums,
+                    diagnostics,
+                    Some(type_),
+                    "expected supported arithmetic operand in executable builds",
+                )?;
+                (left, right)
             } else if matches!(left.kind, ExprKind::Number(_))
                 && !matches!(right.kind, ExprKind::Number(_))
             {
@@ -1966,7 +2000,30 @@ fn lower_expr(
             }
         }
         ExprKind::Binary { left, op, right } => {
-            let (left, right) = if matches!(left.kind, ExprKind::Number(_))
+            let (left, right) = if number_pair_contains_float(left, right) {
+                let type_ = LoweredType::Basic(BasicType::F64);
+                let left = lower_expr(
+                    left,
+                    locals,
+                    signatures,
+                    structs,
+                    enums,
+                    diagnostics,
+                    Some(type_.clone()),
+                    "expected supported comparison operand in executable builds",
+                )?;
+                let right = lower_expr(
+                    right,
+                    locals,
+                    signatures,
+                    structs,
+                    enums,
+                    diagnostics,
+                    Some(type_),
+                    "expected supported comparison operand in executable builds",
+                )?;
+                (left, right)
+            } else if matches!(left.kind, ExprKind::Number(_))
                 && !matches!(right.kind, ExprKind::Number(_))
             {
                 let right = lower_expr(
@@ -2377,6 +2434,13 @@ fn find_qualified_variant<'a>(
         .variants
         .iter()
         .find(|variant| variant.name == variant_name)
+}
+
+fn number_pair_contains_float(left: &Expr, right: &Expr) -> bool {
+    matches!(&left.kind, ExprKind::Number(_))
+        && matches!(&right.kind, ExprKind::Number(_))
+        && (matches!(&left.kind, ExprKind::Number(value) if number_literal_is_float(value))
+            || matches!(&right.kind, ExprKind::Number(value) if number_literal_is_float(value)))
 }
 
 fn is_stable_match_value(expr: &Expr) -> bool {

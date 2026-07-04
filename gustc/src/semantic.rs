@@ -3,6 +3,7 @@ use std::collections::{HashMap, HashSet};
 use crate::ast::{
     BasicType, BinaryOp, Block, ElseBranch, Expr, ExprKind, FunctionBody, FunctionDecl, Item,
     Pattern, Program, Stmt, StmtKind, StructDecl, StructInitField, StructMember, TypeRef, UnaryOp,
+    number_literal_is_float,
 };
 use crate::diagnostic::Diagnostic;
 use crate::span::Span;
@@ -499,11 +500,20 @@ impl Analyzer {
                     Type::Unknown
                 }
             }
-            ExprKind::Number(_) => match expected_type {
-                Some(Type::Basic(type_)) if type_.is_numeric() => Type::Basic(type_),
+            ExprKind::Number(value) => match expected_type {
+                Some(Type::Basic(type_))
+                    if type_.is_numeric()
+                        && (!number_literal_is_float(value) || type_.is_float()) =>
+                {
+                    Type::Basic(type_)
+                }
                 Some(Type::Unknown) => Type::Unknown,
                 Some(Type::Basic(_)) | Some(Type::Struct(_)) | Some(Type::Enum(_)) | None => {
-                    Type::Basic(BasicType::I32)
+                    Type::Basic(if number_literal_is_float(value) {
+                        BasicType::F64
+                    } else {
+                        BasicType::I32
+                    })
                 }
             },
             ExprKind::String(_) => Type::Basic(BasicType::String),
@@ -778,6 +788,11 @@ impl Analyzer {
             let left_type = self.validate_expr_with_context(left, Some(type_.clone()));
             let right_type = self.validate_expr_with_context(right, Some(type_));
             (left_type, right_type)
+        } else if number_pair_contains_float(left, right) {
+            let type_ = Type::Basic(BasicType::F64);
+            let left_type = self.validate_expr_with_context(left, Some(type_.clone()));
+            let right_type = self.validate_expr_with_context(right, Some(type_));
+            (left_type, right_type)
         } else if matches!(left.kind, ExprKind::Number(_))
             && !matches!(right.kind, ExprKind::Number(_))
         {
@@ -822,7 +837,12 @@ impl Analyzer {
     }
 
     fn validate_comparison(&mut self, span: Span, left: &Expr, op: BinaryOp, right: &Expr) -> Type {
-        let (left_type, right_type) = if matches!(left.kind, ExprKind::Number(_))
+        let (left_type, right_type) = if number_pair_contains_float(left, right) {
+            let type_ = Type::Basic(BasicType::F64);
+            let left_type = self.validate_expr_with_context(left, Some(type_.clone()));
+            let right_type = self.validate_expr_with_context(right, Some(type_));
+            (left_type, right_type)
+        } else if matches!(left.kind, ExprKind::Number(_))
             && !matches!(right.kind, ExprKind::Number(_))
         {
             let right_type = self.validate_expr(right);
@@ -1312,6 +1332,13 @@ fn is_stable_match_value(expr: &Expr) -> bool {
         ExprKind::Member { object, .. } => is_stable_match_value(object),
         _ => false,
     }
+}
+
+fn number_pair_contains_float(left: &Expr, right: &Expr) -> bool {
+    matches!(&left.kind, ExprKind::Number(_))
+        && matches!(&right.kind, ExprKind::Number(_))
+        && (matches!(&left.kind, ExprKind::Number(value) if number_literal_is_float(value))
+            || matches!(&right.kind, ExprKind::Number(value) if number_literal_is_float(value)))
 }
 
 fn block_always_returns_value(block: &Block) -> bool {

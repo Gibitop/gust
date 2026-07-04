@@ -58,11 +58,15 @@ fn main() {
     let unsigned16: u16
     let unsigned32: u32
     let unsigned64: u64
+    let unsigned128: u128
     let pointerSized: usize
     let signed8: i8
     let signed16: i16
     let signed32: i32
     let signed64: i64
+    let signed128: i128
+    let float32: f32
+    let float64: f64
 }
 "#,
     );
@@ -70,6 +74,48 @@ fn main() {
     assert!(
         !result.has_errors(),
         "expected basic primitive types to be valid, got {:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
+fn floating_point_literals_and_arithmetic_validate() {
+    let result = check_source(
+        r#"
+fn main() {
+    let single: f32 = 1.25
+    let singleSum = single + 1.25
+    let reverseSingleSum = 1.25 + single
+    let double = 6.02e23
+    let mixed = 1 + 2.5
+    let remainder: f64 = 5.5 % 2
+    let ordered = mixed < 4.0
+}
+"#,
+    );
+
+    assert!(
+        !result.has_errors(),
+        "expected floating-point expressions to validate, got {:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
+fn floating_point_literals_do_not_initialize_integer_types() {
+    let result = check_source(
+        r#"
+fn main() {
+    let count: i128 = 1.5
+}
+"#,
+    );
+
+    assert!(
+        result.diagnostics.iter().any(|diagnostic| diagnostic
+            .message
+            .contains("expected value of type `i128`, got `f64`")),
+        "expected integer initializer mismatch, got {:?}",
         result.diagnostics
     );
 }
