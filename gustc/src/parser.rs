@@ -257,10 +257,19 @@ impl Parser {
             Some(Keyword::If) => self.parse_if_statement(),
             Some(Keyword::For) => self.parse_for_statement(),
             _ => {
-                let expr = self.parse_expression();
-                Stmt {
-                    span: expr.span,
-                    kind: StmtKind::Expr(expr),
+                let target = self.parse_expression();
+
+                if self.match_kind(&TokenKind::Equal) {
+                    let value = self.parse_expression();
+                    Stmt {
+                        span: target.span.join(value.span),
+                        kind: StmtKind::Assign { target, value },
+                    }
+                } else {
+                    Stmt {
+                        span: target.span,
+                        kind: StmtKind::Expr(target),
+                    }
                 }
             }
         }

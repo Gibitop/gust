@@ -926,10 +926,15 @@ fn println_rejects_non_string_operands() {
 }
 
 #[test]
-fn mutable_local_is_still_rejected_by_backend() {
+fn mutable_local_assignment_and_increment_emit_c() {
     let result = check_source(
         r#"fn main() {
-    let mut message = "Gust"
+    let mut count: u32 = 1
+    count = count + 2
+    count++
+    if count == 4 {
+        count = 5
+    }
 }"#,
     );
 
@@ -939,17 +944,13 @@ fn mutable_local_is_still_rejected_by_backend() {
         result.diagnostics
     );
 
-    let diagnostics = lower_program(&result.program).expect_err("source should not lower");
+    let lowered = lower_program(&result.program).expect("mutable locals should lower");
+    let source = emit_c(&lowered);
 
-    assert!(
-        diagnostics
-            .iter()
-            .any(|diagnostic| diagnostic.severity == Severity::Error
-                && diagnostic
-                    .message
-                    .contains("`let mut` bindings are not supported")),
-        "expected mutable local diagnostic, got {diagnostics:?}"
-    );
+    assert!(source.contains("uint32_t gust_count = 1;"));
+    assert!(source.contains("gust_count = (gust_count + 2);"));
+    assert!(source.contains("(gust_count++);"));
+    assert!(source.contains("gust_count = 5;"));
 }
 
 #[test]

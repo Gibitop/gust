@@ -311,13 +311,6 @@ impl Analyzer {
                 type_annotation,
                 value,
             } => {
-                if *mutable {
-                    self.unsupported(
-                        statement.span,
-                        "mutable bindings are parsed but mutation lowering is not implemented yet",
-                    );
-                }
-
                 let annotated_type = type_annotation
                     .as_ref()
                     .map(|type_ref| self.validate_type(type_ref));
@@ -347,6 +340,44 @@ impl Analyzer {
                 }
 
                 self.define(name, *mutable, annotated_type.unwrap_or(value_type));
+            }
+            StmtKind::Assign { target, value } => {
+                if matches!(target.kind, ExprKind::Member { .. }) {
+                    self.unsupported(
+                        target.span,
+                        "member assignment is parsed but field mutation lowering is not implemented yet",
+                    );
+                    self.validate_expr(target);
+                    self.validate_expr(value);
+                    return;
+                }
+
+                let ExprKind::Identifier(name) = &target.kind else {
+                    self.validate_expr(target);
+                    self.validate_expr(value);
+                    self.diagnostics.push(Diagnostic::error(
+                        target.span,
+                        "assignment target must be a mutable local binding",
+                    ));
+                    return;
+                };
+
+                let Some(binding) = self.lookup(name) else {
+                    self.validate_expr(target);
+                    self.validate_expr(value);
+                    return;
+                };
+
+                if !binding.mutable {
+                    self.diagnostics.push(Diagnostic::error(
+                        target.span,
+                        format!("cannot assign to immutable binding `{name}`"),
+                    ));
+                }
+
+                let value_type =
+                    self.validate_expr_with_context(value, Some(binding.type_.clone()));
+                self.report_type_mismatch(value.span, binding.type_, value_type);
             }
             StmtKind::Return { value } => {
                 let expected_type = self.current_return_type();
@@ -562,24 +593,50 @@ impl Analyzer {
                 Type::Unknown
             }
             ExprKind::PostfixIncrement(target) => {
-                self.unsupported(
-                    expr.span,
-                    "increment expressions are parsed but mutation lowering is not implemented yet",
-                );
-                self.validate_expr(target);
-
-                if let Some(name) = root_identifier(target) {
-                    if let Some(binding) = self.lookup(name) {
-                        if !binding.mutable {
-                            self.diagnostics.push(Diagnostic::error(
-                                expr.span,
-                                format!("cannot mutate immutable binding `{name}`"),
-                            ));
-                        }
-                    }
+                if matches!(target.kind, ExprKind::Member { .. }) {
+                    self.unsupported(
+                        target.span,
+                        "member increment is parsed but field mutation lowering is not implemented yet",
+                    );
+                    self.validate_expr(target);
+                    return Type::Unknown;
                 }
 
-                Type::Unknown
+                let ExprKind::Identifier(name) = &target.kind else {
+                    self.validate_expr(target);
+                    self.diagnostics.push(Diagnostic::error(
+                        target.span,
+                        "increment target must be a mutable local binding",
+                    ));
+                    return Type::Unknown;
+                };
+
+                let Some(binding) = self.lookup(name) else {
+                    self.validate_expr(target);
+                    return Type::Unknown;
+                };
+
+                if !binding.mutable {
+                    self.diagnostics.push(Diagnostic::error(
+                        expr.span,
+                        format!("cannot mutate immutable binding `{name}`"),
+                    ));
+                }
+
+                if matches!(&binding.type_, Type::Basic(type_) if type_.is_numeric()) {
+                    binding.type_
+                } else if matches!(binding.type_, Type::Unknown) {
+                    Type::Unknown
+                } else {
+                    self.diagnostics.push(Diagnostic::error(
+                        expr.span,
+                        format!(
+                            "operator ++ only supports numeric operands, got `{}`",
+                            binding.type_.name()
+                        ),
+                    ));
+                    Type::Unknown
+                }
             }
         }
     }
@@ -1025,19 +1082,12 @@ fn statement_always_returns_value(statement: &Stmt) -> bool {
                 }
         }
         StmtKind::Let { .. }
+        | StmtKind::Assign { .. }
         | StmtKind::Return { value: None }
         | StmtKind::If {
             else_branch: None, ..
         }
         | StmtKind::For { .. }
         | StmtKind::Expr(_) => false,
-    }
-}
-
-fn root_identifier(expr: &Expr) -> Option<&str> {
-    match &expr.kind {
-        ExprKind::Identifier(name) => Some(name),
-        ExprKind::Member { object, .. } => root_identifier(object),
-        _ => None,
     }
 }

@@ -136,6 +136,7 @@ fn function_uses_type(function: &LoweredFunction, type_: BasicType) -> bool {
 fn statement_uses_type(statement: &LoweredStatement, type_: BasicType) -> bool {
     match statement {
         LoweredStatement::Local { value, .. }
+        | LoweredStatement::Assignment { value, .. }
         | LoweredStatement::Println(value)
         | LoweredStatement::Expr(value) => expr_uses_type(value, type_),
         LoweredStatement::Return(value) => value
@@ -165,9 +166,9 @@ fn expr_uses_type(expr: &LoweredExpr, type_: BasicType) -> bool {
             LoweredExprKind::StringConcat(left, right) => {
                 expr_uses_type(left, type_) || expr_uses_type(right, type_)
             }
-            LoweredExprKind::Not(operand) | LoweredExprKind::Negate(operand) => {
-                expr_uses_type(operand, type_)
-            }
+            LoweredExprKind::PostfixIncrement(operand)
+            | LoweredExprKind::Not(operand)
+            | LoweredExprKind::Negate(operand) => expr_uses_type(operand, type_),
             LoweredExprKind::Logical { left, right, .. }
             | LoweredExprKind::Arithmetic { left, right, .. }
             | LoweredExprKind::Comparison { left, right, .. } => {
@@ -225,6 +226,7 @@ fn program_uses_string_equality(program: &LoweredProgram) -> bool {
 fn statement_uses_string_equality(statement: &LoweredStatement) -> bool {
     match statement {
         LoweredStatement::Local { value, .. }
+        | LoweredStatement::Assignment { value, .. }
         | LoweredStatement::Println(value)
         | LoweredStatement::Expr(value) => expr_uses_string_equality(value),
         LoweredStatement::Return(value) => value.as_ref().is_some_and(expr_uses_string_equality),
@@ -244,9 +246,9 @@ fn statement_uses_string_equality(statement: &LoweredStatement) -> bool {
 
 fn expr_uses_string_equality(expr: &LoweredExpr) -> bool {
     match &expr.kind {
-        LoweredExprKind::Not(operand) | LoweredExprKind::Negate(operand) => {
-            expr_uses_string_equality(operand)
-        }
+        LoweredExprKind::PostfixIncrement(operand)
+        | LoweredExprKind::Not(operand)
+        | LoweredExprKind::Negate(operand) => expr_uses_string_equality(operand),
         LoweredExprKind::Logical { left, right, .. }
         | LoweredExprKind::Arithmetic { left, right, .. } => {
             expr_uses_string_equality(left) || expr_uses_string_equality(right)
@@ -281,6 +283,7 @@ fn function_uses_string_concat(function: &LoweredFunction) -> bool {
 fn statement_uses_string_concat(statement: &LoweredStatement) -> bool {
     match statement {
         LoweredStatement::Local { value, .. }
+        | LoweredStatement::Assignment { value, .. }
         | LoweredStatement::Println(value)
         | LoweredStatement::Expr(value) => expr_uses_string_concat(value),
         LoweredStatement::Return(value) => value.as_ref().is_some_and(expr_uses_string_concat),
@@ -301,9 +304,9 @@ fn statement_uses_string_concat(statement: &LoweredStatement) -> bool {
 fn expr_uses_string_concat(expr: &LoweredExpr) -> bool {
     match &expr.kind {
         LoweredExprKind::StringConcat(_, _) => true,
-        LoweredExprKind::Not(operand) | LoweredExprKind::Negate(operand) => {
-            expr_uses_string_concat(operand)
-        }
+        LoweredExprKind::PostfixIncrement(operand)
+        | LoweredExprKind::Not(operand)
+        | LoweredExprKind::Negate(operand) => expr_uses_string_concat(operand),
         LoweredExprKind::Logical { left, right, .. }
         | LoweredExprKind::Arithmetic { left, right, .. }
         | LoweredExprKind::Comparison { left, right, .. } => {
@@ -336,6 +339,7 @@ fn statement_uses_println(statement: &LoweredStatement) -> bool {
                     .is_some_and(|statements| statements.iter().any(statement_uses_println))
         }
         LoweredStatement::Local { .. }
+        | LoweredStatement::Assignment { .. }
         | LoweredStatement::Expr(_)
         | LoweredStatement::Return(_) => false,
     }
@@ -386,6 +390,7 @@ fn function_calls_name(function: &LoweredFunction, name: &str) -> bool {
 fn statement_calls_name(statement: &LoweredStatement, name: &str) -> bool {
     match statement {
         LoweredStatement::Local { value, .. }
+        | LoweredStatement::Assignment { value, .. }
         | LoweredStatement::Println(value)
         | LoweredStatement::Expr(value) => expr_calls_name(value, name),
         LoweredStatement::Return(value) => value
@@ -414,9 +419,9 @@ fn expr_calls_name(expr: &LoweredExpr, name: &str) -> bool {
         LoweredExprKind::StringConcat(left, right) => {
             expr_calls_name(left, name) || expr_calls_name(right, name)
         }
-        LoweredExprKind::Not(operand) | LoweredExprKind::Negate(operand) => {
-            expr_calls_name(operand, name)
-        }
+        LoweredExprKind::PostfixIncrement(operand)
+        | LoweredExprKind::Not(operand)
+        | LoweredExprKind::Negate(operand) => expr_calls_name(operand, name),
         LoweredExprKind::Logical { left, right, .. }
         | LoweredExprKind::Arithmetic { left, right, .. }
         | LoweredExprKind::Comparison { left, right, .. } => {
@@ -511,6 +516,13 @@ fn push_c_statement(source: &mut String, statement: &LoweredStatement, indent: u
             push_c_value(source, value);
             source.push_str(";\n");
         }
+        LoweredStatement::Assignment { name, value } => {
+            push_c_indent(source, indent);
+            push_c_local_name(source, name);
+            source.push_str(" = ");
+            push_c_value(source, value);
+            source.push_str(";\n");
+        }
         LoweredStatement::Println(value) => match &value.kind {
             LoweredExprKind::StringLiteral(value) => {
                 push_c_indent(source, indent);
@@ -538,6 +550,7 @@ fn push_c_statement(source: &mut String, statement: &LoweredStatement, indent: u
             LoweredExprKind::Void
             | LoweredExprKind::BoolLiteral(_)
             | LoweredExprKind::NumberLiteral(_)
+            | LoweredExprKind::PostfixIncrement(_)
             | LoweredExprKind::Negate(_)
             | LoweredExprKind::Arithmetic { .. }
             | LoweredExprKind::StructLiteral { .. } => {
@@ -677,6 +690,11 @@ fn push_c_value(source: &mut String, value: &LoweredExpr) {
         }
         LoweredExprKind::NumberLiteral(value) => source.push_str(value),
         LoweredExprKind::Local(name) => push_c_local_name(source, name),
+        LoweredExprKind::PostfixIncrement(target) => {
+            source.push('(');
+            push_c_value(source, target);
+            source.push_str("++)");
+        }
         LoweredExprKind::StringConcat(left, right) => {
             source.push_str("gust_rt_string_concat(");
             push_c_value(source, left);

@@ -47,6 +47,10 @@ pub enum LoweredStatement {
         name: String,
         value: LoweredExpr,
     },
+    Assignment {
+        name: String,
+        value: LoweredExpr,
+    },
     Println(LoweredExpr),
     Expr(LoweredExpr),
     Return(Option<LoweredExpr>),
@@ -87,6 +91,7 @@ pub enum LoweredExprKind {
     BoolLiteral(bool),
     NumberLiteral(String),
     Local(String),
+    PostfixIncrement(Box<LoweredExpr>),
     StringConcat(Box<LoweredExpr>, Box<LoweredExpr>),
     Not(Box<LoweredExpr>),
     Negate(Box<LoweredExpr>),
@@ -129,6 +134,12 @@ pub struct LoweredStructFieldValue {
 struct FunctionSignature {
     params: Vec<LoweredType>,
     return_type: LoweredType,
+}
+
+#[derive(Debug, Clone)]
+struct LoweringLocal {
+    type_: LoweredType,
+    mutable: bool,
 }
 
 pub fn lower_program(program: &Program) -> Result<LoweredProgram, Vec<Diagnostic>> {
@@ -558,7 +569,7 @@ fn infer_block_return_types(
                     }
                 }
             }
-            StmtKind::For { .. } | StmtKind::Expr(_) => {}
+            StmtKind::Assign { .. } | StmtKind::For { .. } | StmtKind::Expr(_) => {}
         }
     }
 
@@ -668,8 +679,8 @@ fn infer_expr_type(
         | ExprKind::StructInit { .. }
         | ExprKind::Lambda(_)
         | ExprKind::Match { .. }
-        | ExprKind::Missing
-        | ExprKind::PostfixIncrement(_) => None,
+        | ExprKind::Missing => None,
+        ExprKind::PostfixIncrement(target) => infer_expr_type(target, locals, signatures, structs),
     }
 }
 
@@ -688,7 +699,16 @@ fn lower_function(
     let mut return_value = None;
 
     for (param, type_) in function.params.iter().zip(&signature.params) {
-        if locals.insert(param.name.clone(), type_.clone()).is_some() {
+        if locals
+            .insert(
+                param.name.clone(),
+                LoweringLocal {
+                    type_: type_.clone(),
+                    mutable: param.mutable,
+                },
+            )
+            .is_some()
+        {
             diagnostics.push(Diagnostic::error(
                 param.span,
                 format!("duplicate local `{}` in executable build", param.name),
@@ -722,6 +742,17 @@ fn lower_function(
                         if let Some(statement) = lower_local_statement(
                             statement,
                             &mut locals,
+                            signatures,
+                            structs,
+                            diagnostics,
+                        ) {
+                            statements.push(statement);
+                        }
+                    }
+                    StmtKind::Assign { .. } => {
+                        if let Some(statement) = lower_assignment_statement(
+                            statement,
+                            &locals,
                             signatures,
                             structs,
                             diagnostics,
@@ -852,6 +883,17 @@ fn lower_main(
                             statements.push(statement);
                         }
                     }
+                    StmtKind::Assign { .. } => {
+                        if let Some(statement) = lower_assignment_statement(
+                            statement,
+                            &locals,
+                            signatures,
+                            structs,
+                            diagnostics,
+                        ) {
+                            statements.push(statement);
+                        }
+                    }
                     StmtKind::Return { .. } => {
                         diagnostics.push(Diagnostic::error(
                             statement.span,
@@ -890,7 +932,7 @@ fn lower_main(
 
 fn lower_if_statement(
     statement: &Stmt,
-    locals: &HashMap<String, LoweredType>,
+    locals: &HashMap<String, LoweringLocal>,
     signatures: &HashMap<String, FunctionSignature>,
     structs: &HashMap<String, LoweredStruct>,
     diagnostics: &mut Vec<Diagnostic>,
@@ -956,7 +998,7 @@ fn lower_if_statement(
 
 fn lower_conditional_block(
     block: &Block,
-    locals: &mut HashMap<String, LoweredType>,
+    locals: &mut HashMap<String, LoweringLocal>,
     signatures: &HashMap<String, FunctionSignature>,
     structs: &HashMap<String, LoweredStruct>,
     diagnostics: &mut Vec<Diagnostic>,
@@ -969,6 +1011,13 @@ fn lower_conditional_block(
             StmtKind::Let { .. } => {
                 if let Some(statement) =
                     lower_local_statement(statement, locals, signatures, structs, diagnostics)
+                {
+                    statements.push(statement);
+                }
+            }
+            StmtKind::Assign { .. } => {
+                if let Some(statement) =
+                    lower_assignment_statement(statement, locals, signatures, structs, diagnostics)
                 {
                     statements.push(statement);
                 }
@@ -1039,6 +1088,7 @@ fn lowered_statement_always_returns_value(statement: &LoweredStatement) -> bool 
                     .any(lowered_statement_always_returns_value)
         }
         LoweredStatement::Local { .. }
+        | LoweredStatement::Assignment { .. }
         | LoweredStatement::Println(_)
         | LoweredStatement::Expr(_)
         | LoweredStatement::Return(None)
@@ -1050,11 +1100,24 @@ fn lowered_statement_always_returns_value(statement: &LoweredStatement) -> bool 
 
 fn lower_expression_statement(
     expr: &Expr,
-    locals: &HashMap<String, LoweredType>,
+    locals: &HashMap<String, LoweringLocal>,
     signatures: &HashMap<String, FunctionSignature>,
     structs: &HashMap<String, LoweredStruct>,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> Option<LoweredStatement> {
+    if matches!(expr.kind, ExprKind::PostfixIncrement(_)) {
+        return lower_expr(
+            expr,
+            locals,
+            signatures,
+            structs,
+            diagnostics,
+            None,
+            "expected supported increment expression in executable builds",
+        )
+        .map(LoweredStatement::Expr);
+    }
+
     let ExprKind::Call { callee, args } = &expr.kind else {
         diagnostics.push(Diagnostic::error(
             expr.span,
@@ -1124,7 +1187,7 @@ fn void_expr() -> LoweredExpr {
 
 fn lower_local_statement(
     statement: &Stmt,
-    locals: &mut HashMap<String, LoweredType>,
+    locals: &mut HashMap<String, LoweringLocal>,
     signatures: &HashMap<String, FunctionSignature>,
     structs: &HashMap<String, LoweredStruct>,
     diagnostics: &mut Vec<Diagnostic>,
@@ -1140,14 +1203,6 @@ fn lower_local_statement(
     };
 
     let mut can_lower = true;
-
-    if *mutable {
-        diagnostics.push(Diagnostic::error(
-            statement.span,
-            "`let mut` bindings are not supported in executable builds",
-        ));
-        can_lower = false;
-    }
 
     let annotated_type = if let Some(type_annotation) = type_annotation {
         if !type_annotation.args.is_empty() {
@@ -1224,7 +1279,16 @@ fn lower_local_statement(
         return None;
     }
 
-    if locals.insert(name.clone(), value.type_.clone()).is_some() {
+    if locals
+        .insert(
+            name.clone(),
+            LoweringLocal {
+                type_: value.type_.clone(),
+                mutable: *mutable,
+            },
+        )
+        .is_some()
+    {
         diagnostics.push(Diagnostic::error(
             statement.span,
             format!("duplicate local `{name}` in executable build"),
@@ -1238,11 +1302,60 @@ fn lower_local_statement(
     })
 }
 
+fn lower_assignment_statement(
+    statement: &Stmt,
+    locals: &HashMap<String, LoweringLocal>,
+    signatures: &HashMap<String, FunctionSignature>,
+    structs: &HashMap<String, LoweredStruct>,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> Option<LoweredStatement> {
+    let StmtKind::Assign { target, value } = &statement.kind else {
+        return None;
+    };
+    let ExprKind::Identifier(name) = &target.kind else {
+        diagnostics.push(Diagnostic::error(
+            target.span,
+            "assignment target must be a mutable local binding in executable builds",
+        ));
+        return None;
+    };
+    let Some(local) = locals.get(name) else {
+        diagnostics.push(Diagnostic::error(
+            target.span,
+            format!("unknown local `{name}` in executable build"),
+        ));
+        return None;
+    };
+
+    if !local.mutable {
+        diagnostics.push(Diagnostic::error(
+            target.span,
+            format!("cannot assign to immutable binding `{name}` in executable build"),
+        ));
+        return None;
+    }
+
+    let value = lower_expr(
+        value,
+        locals,
+        signatures,
+        structs,
+        diagnostics,
+        Some(local.type_.clone()),
+        "expected supported assignment value in executable builds",
+    )?;
+
+    Some(LoweredStatement::Assignment {
+        name: name.clone(),
+        value,
+    })
+}
+
 fn lower_struct_init(
     expr: &Expr,
     name: &str,
     fields: &[StructInitField],
-    locals: &HashMap<String, LoweredType>,
+    locals: &HashMap<String, LoweringLocal>,
     signatures: &HashMap<String, FunctionSignature>,
     structs: &HashMap<String, LoweredStruct>,
     diagnostics: &mut Vec<Diagnostic>,
@@ -1322,7 +1435,7 @@ fn lower_struct_init(
 
 fn lower_expr(
     expr: &Expr,
-    locals: &HashMap<String, LoweredType>,
+    locals: &HashMap<String, LoweringLocal>,
     signatures: &HashMap<String, FunctionSignature>,
     structs: &HashMap<String, LoweredStruct>,
     diagnostics: &mut Vec<Diagnostic>,
@@ -1355,7 +1468,7 @@ fn lower_expr(
             }
         }
         ExprKind::Identifier(name) if locals.contains_key(name) => LoweredExpr {
-            type_: locals[name].clone(),
+            type_: locals[name].type_.clone(),
             kind: LoweredExprKind::Local(name.clone()),
         },
         ExprKind::Identifier(name) => {
@@ -1364,6 +1477,49 @@ fn lower_expr(
                 format!("unknown local `{name}` in executable build"),
             ));
             return None;
+        }
+        ExprKind::PostfixIncrement(target) => {
+            let ExprKind::Identifier(name) = &target.kind else {
+                diagnostics.push(Diagnostic::error(
+                    target.span,
+                    "increment target must be a mutable local binding in executable builds",
+                ));
+                return None;
+            };
+            let Some(local) = locals.get(name) else {
+                diagnostics.push(Diagnostic::error(
+                    target.span,
+                    format!("unknown local `{name}` in executable build"),
+                ));
+                return None;
+            };
+
+            if !local.mutable {
+                diagnostics.push(Diagnostic::error(
+                    target.span,
+                    format!("cannot mutate immutable binding `{name}` in executable build"),
+                ));
+                return None;
+            }
+
+            if !matches!(&local.type_, LoweredType::Basic(type_) if type_.is_numeric()) {
+                diagnostics.push(Diagnostic::error(
+                    expr.span,
+                    format!(
+                        "operator ++ does not support values of type `{}` in executable builds",
+                        local.type_.name()
+                    ),
+                ));
+                return None;
+            }
+
+            LoweredExpr {
+                type_: local.type_.clone(),
+                kind: LoweredExprKind::PostfixIncrement(Box::new(LoweredExpr {
+                    type_: local.type_.clone(),
+                    kind: LoweredExprKind::Local(name.clone()),
+                })),
+            }
         }
         ExprKind::Unary {
             op: UnaryOp::Not,
