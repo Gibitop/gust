@@ -1009,6 +1009,75 @@ fn main() {
 }
 
 #[test]
+fn arithmetic_compound_assignments_validate() {
+    let result = check_source(
+        r#"
+fn main() {
+    let mut value: f64 = 10
+    value += 5
+    value -= 2
+    value *= 3
+    value /= 2
+    value %= 4
+
+    let mut message = "hello"
+    message += " world"
+}
+"#,
+    );
+
+    assert!(
+        !result.has_errors(),
+        "expected compound assignments to validate, got {:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
+fn compound_assignment_requires_a_mutable_binding() {
+    let result = check_source(
+        r#"
+fn main() {
+    let count = 1
+    count += 2
+}
+"#,
+    );
+
+    assert!(
+        result
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.severity == Severity::Error
+                && diagnostic
+                    .message
+                    .contains("cannot assign to immutable binding `count`")),
+        "expected immutable-assignment error, got {:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
+fn compound_assignment_uses_arithmetic_type_rules() {
+    let result = check_source(
+        r#"
+fn main() {
+    let mut enabled = true
+    enabled += false
+}
+"#,
+    );
+
+    assert!(
+        result.diagnostics.iter().any(|diagnostic| diagnostic
+            .message
+            .contains("operator + only supports numeric or String operands")),
+        "expected compound-assignment operator error, got {:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
 fn assignment_requires_a_mutable_binding() {
     let result = check_source(
         r#"

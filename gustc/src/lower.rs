@@ -1553,7 +1553,7 @@ fn lower_assignment_statement(
     enums: &HashMap<String, LoweredEnum>,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> Option<LoweredStatement> {
-    let StmtKind::Assign { target, value } = &statement.kind else {
+    let StmtKind::Assign { target, op, value } = &statement.kind else {
         return None;
     };
     let ExprKind::Identifier(name) = &target.kind else {
@@ -1579,6 +1579,20 @@ fn lower_assignment_statement(
         return None;
     }
 
+    let compound_value;
+    let value = if let Some(op) = op {
+        compound_value = Expr {
+            kind: ExprKind::Binary {
+                left: Box::new(target.clone()),
+                op: *op,
+                right: Box::new(value.clone()),
+            },
+            span: statement.span,
+        };
+        &compound_value
+    } else {
+        value
+    };
     let value = lower_expr(
         value,
         locals,

@@ -119,6 +119,7 @@ pub enum StmtKind {
     },
     Assign {
         target: Expr,
+        op: Option<BinaryOp>,
         value: Expr,
     },
     Return {

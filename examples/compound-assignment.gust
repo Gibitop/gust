@@ -1,0 +1,15 @@
+fn main() {
+    let mut value: f64 = 10
+    value += 5
+    value -= 2
+    value *= 3
+    value /= 2
+    value %= 10
+
+    let mut message = "compound"
+    message += " assignment works"
+
+    if value == 9.5 {
+        io.println(message)
+    }
+}

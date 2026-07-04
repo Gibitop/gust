@@ -1044,6 +1044,38 @@ fn mutable_local_assignment_and_increment_emit_c() {
 }
 
 #[test]
+fn compound_assignments_emit_c() {
+    let result = check_source(
+        r#"fn main() {
+    let mut count: i32 = 20
+    count += 4
+    count -= 2
+    count *= 3
+    count /= 2
+    count %= 5
+    let mut message = "hello"
+    message += " world"
+}"#,
+    );
+
+    assert!(
+        !result.has_errors(),
+        "expected no frontend errors, got {:?}",
+        result.diagnostics
+    );
+
+    let lowered = lower_program(&result.program).expect("compound assignments should lower");
+    let source = emit_c(&lowered);
+
+    assert!(source.contains("gust_count = (gust_count + 4);"));
+    assert!(source.contains("gust_count = (gust_count - 2);"));
+    assert!(source.contains("gust_count = (gust_count * 3);"));
+    assert!(source.contains("gust_count = (gust_count / 2);"));
+    assert!(source.contains("gust_count = (gust_count % 5);"));
+    assert!(source.contains("gust_message = gust_rt_string_concat(gust_message, \" world\");"));
+}
+
+#[test]
 fn mutable_struct_helper_signature_is_rejected_by_backend() {
     let result = check_source(
         r#"

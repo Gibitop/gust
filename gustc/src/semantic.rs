@@ -383,7 +383,7 @@ impl Analyzer {
 
                 self.define(name, *mutable, annotated_type.unwrap_or(value_type));
             }
-            StmtKind::Assign { target, value } => {
+            StmtKind::Assign { target, op, value } => {
                 if matches!(target.kind, ExprKind::Member { .. }) {
                     self.unsupported(
                         target.span,
@@ -417,8 +417,17 @@ impl Analyzer {
                     ));
                 }
 
-                let value_type =
-                    self.validate_expr_with_context(value, Some(binding.type_.clone()));
+                let value_type = if let Some(op) = op {
+                    self.validate_arithmetic(
+                        statement.span,
+                        target,
+                        *op,
+                        value,
+                        Some(binding.type_.clone()),
+                    )
+                } else {
+                    self.validate_expr_with_context(value, Some(binding.type_.clone()))
+                };
                 self.report_type_mismatch(value.span, binding.type_, value_type);
             }
             StmtKind::Return { value } => {
