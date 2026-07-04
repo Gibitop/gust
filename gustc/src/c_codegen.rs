@@ -42,7 +42,9 @@ pub fn emit_c(program: &LoweredProgram) -> String {
         source.push_str("#include <math.h>\n");
     }
 
-    if uses_string_concat {
+    let uses_alloc = uses_string_concat || !program.structs.is_empty();
+
+    if uses_alloc {
         source.push_str("#include <stdlib.h>\n#include <string.h>\n");
     } else if uses_string_equality {
         source.push_str("#include <string.h>\n");
@@ -54,10 +56,13 @@ pub fn emit_c(program: &LoweredProgram) -> String {
 
     push_c_type_definitions(&mut source, program);
 
-    if uses_string_concat {
+    if uses_alloc {
         source.push_str("static void* gust_rt_alloc(size_t size) {\n");
         source.push_str("    return malloc(size);\n");
         source.push_str("}\n\n");
+    }
+
+    if uses_string_concat {
         source.push_str(
             "static char* gust_rt_string_concat(const char* left, const char* right) {\n",
         );
@@ -82,6 +87,8 @@ pub fn emit_c(program: &LoweredProgram) -> String {
         source.push_str("    puts(value);\n");
         source.push_str("}\n\n");
     }
+
+    push_c_struct_runtime_helpers(&mut source, program);
 
     for function in ordered_functions(&program.functions) {
         if function_calls_name(function, &function.name) {
@@ -202,7 +209,9 @@ fn expr_uses_type(expr: &LoweredExpr, type_: BasicType) -> bool {
                         .iter()
                         .any(|branch| expr_uses_type(&branch.value, type_))
             }
-            LoweredExprKind::FieldAccess { object, .. } => expr_uses_type(object, type_),
+            LoweredExprKind::FieldAccess { object, .. } | LoweredExprKind::Clone(object) => {
+                expr_uses_type(object, type_)
+            }
             LoweredExprKind::Call { args, .. } => args.iter().any(|arg| expr_uses_type(arg, type_)),
             LoweredExprKind::Void
             | LoweredExprKind::StringLiteral(_)
@@ -304,7 +313,9 @@ fn expr_uses_string_equality(expr: &LoweredExpr) -> bool {
                     .iter()
                     .any(|branch| expr_uses_string_equality(&branch.value))
         }
-        LoweredExprKind::FieldAccess { object, .. } => expr_uses_string_equality(object),
+        LoweredExprKind::FieldAccess { object, .. } | LoweredExprKind::Clone(object) => {
+            expr_uses_string_equality(object)
+        }
         LoweredExprKind::Call { args, .. } => args.iter().any(expr_uses_string_equality),
         LoweredExprKind::Void
         | LoweredExprKind::StringLiteral(_)
@@ -368,7 +379,9 @@ fn expr_uses_string_concat(expr: &LoweredExpr) -> bool {
                     .iter()
                     .any(|branch| expr_uses_string_concat(&branch.value))
         }
-        LoweredExprKind::FieldAccess { object, .. } => expr_uses_string_concat(object),
+        LoweredExprKind::FieldAccess { object, .. } | LoweredExprKind::Clone(object) => {
+            expr_uses_string_concat(object)
+        }
         LoweredExprKind::Call { args, .. } => args.iter().any(expr_uses_string_concat),
         LoweredExprKind::Void
         | LoweredExprKind::StringLiteral(_)
@@ -497,7 +510,9 @@ fn expr_calls_name(expr: &LoweredExpr, name: &str) -> bool {
                     .iter()
                     .any(|branch| expr_calls_name(&branch.value, name))
         }
-        LoweredExprKind::FieldAccess { object, .. } => expr_calls_name(object, name),
+        LoweredExprKind::FieldAccess { object, .. } | LoweredExprKind::Clone(object) => {
+            expr_calls_name(object, name)
+        }
         LoweredExprKind::Call {
             name: called_name,
             args,
@@ -514,7 +529,7 @@ fn push_c_struct(source: &mut String, struct_: &LoweredStruct) {
     source.push_str("// Gust struct: ");
     source.push_str(&struct_.name);
     source.push('\n');
-    source.push_str("typedef struct ");
+    source.push_str("struct ");
     push_c_struct_name(source, &struct_.name);
     source.push_str(" {\n");
 
@@ -526,14 +541,24 @@ fn push_c_struct(source: &mut String, struct_: &LoweredStruct) {
         source.push_str(";\n");
     }
 
-    source.push_str("} ");
-    push_c_struct_name(source, &struct_.name);
-    source.push_str(";\n");
+    source.push_str("};\n");
 }
 
 fn push_c_type_definitions(source: &mut String, program: &LoweredProgram) {
     let mut emitted = HashSet::new();
     let mut remaining = program.structs.len() + program.enums.len();
+
+    for struct_ in &program.structs {
+        source.push_str("typedef struct ");
+        push_c_struct_name(source, &struct_.name);
+        source.push(' ');
+        push_c_struct_name(source, &struct_.name);
+        source.push_str(";\n");
+    }
+
+    if !program.structs.is_empty() {
+        source.push('\n');
+    }
 
     while remaining > 0 {
         let previous_remaining = remaining;
@@ -584,9 +609,176 @@ fn push_c_type_definitions(source: &mut String, program: &LoweredProgram) {
 
 fn type_definition_is_emitted(type_: &LoweredType, emitted: &HashSet<String>) -> bool {
     match type_ {
-        LoweredType::Basic(_) | LoweredType::Void => true,
-        LoweredType::Struct(name) => emitted.contains(&format!("struct:{name}")),
+        LoweredType::Basic(_) | LoweredType::Struct(_) | LoweredType::Void => true,
         LoweredType::Enum(name) => emitted.contains(&format!("enum:{name}")),
+    }
+}
+
+fn push_c_struct_runtime_helpers(source: &mut String, program: &LoweredProgram) {
+    if program.structs.is_empty() {
+        return;
+    }
+
+    source.push_str("typedef struct gust_rt_clone_entry {\n");
+    source.push_str("    const void* gust_source;\n");
+    source.push_str("    void* gust_clone;\n");
+    source.push_str("    struct gust_rt_clone_entry* gust_next;\n");
+    source.push_str("} gust_rt_clone_entry;\n\n");
+    source.push_str(
+        "static void* gust_rt_clone_lookup(gust_rt_clone_entry* entries, const void* source) {\n",
+    );
+    source.push_str("    for (; entries != NULL; entries = entries->gust_next) {\n");
+    source.push_str("        if (entries->gust_source == source) {\n");
+    source.push_str("            return entries->gust_clone;\n");
+    source.push_str("        }\n");
+    source.push_str("    }\n");
+    source.push_str("    return NULL;\n");
+    source.push_str("}\n\n");
+    source.push_str("static void gust_rt_clone_register(gust_rt_clone_entry** entries, const void* source, void* clone) {\n");
+    source
+        .push_str("    gust_rt_clone_entry* entry = gust_rt_alloc(sizeof(gust_rt_clone_entry));\n");
+    source.push_str("    entry->gust_source = source;\n");
+    source.push_str("    entry->gust_clone = clone;\n");
+    source.push_str("    entry->gust_next = *entries;\n");
+    source.push_str("    *entries = entry;\n");
+    source.push_str("}\n\n");
+
+    for struct_ in &program.structs {
+        source.push_str("static ");
+        push_c_struct_name(source, &struct_.name);
+        source.push_str("* ");
+        push_c_struct_clone_internal_name(source, &struct_.name);
+        source.push_str("(const ");
+        push_c_struct_name(source, &struct_.name);
+        source.push_str("* value, gust_rt_clone_entry** entries);\n");
+    }
+    for enum_ in &program.enums {
+        source.push_str("static ");
+        push_c_enum_name(source, &enum_.name);
+        source.push(' ');
+        push_c_enum_clone_internal_name(source, &enum_.name);
+        source.push('(');
+        push_c_enum_name(source, &enum_.name);
+        source.push_str(" value, gust_rt_clone_entry** entries);\n");
+    }
+    source.push('\n');
+
+    for enum_ in &program.enums {
+        source.push_str("static ");
+        push_c_enum_name(source, &enum_.name);
+        source.push(' ');
+        push_c_enum_clone_internal_name(source, &enum_.name);
+        source.push('(');
+        push_c_enum_name(source, &enum_.name);
+        source.push_str(" value, gust_rt_clone_entry** entries) {\n");
+        source.push_str("    ");
+        push_c_enum_name(source, &enum_.name);
+        source.push_str(" result = value;\n");
+        source.push_str("    switch (value.gust_tag) {\n");
+
+        for variant in &enum_.variants {
+            source.push_str("        case ");
+            push_c_enum_variant_tag(source, &enum_.name, &variant.name);
+            source.push_str(":\n");
+            match &variant.payload {
+                Some(LoweredType::Struct(name)) => {
+                    source.push_str("            result.gust_payload.");
+                    push_c_local_name(source, &variant.name);
+                    source.push_str(" = ");
+                    push_c_struct_clone_internal_name(source, name);
+                    source.push_str("(value.gust_payload.");
+                    push_c_local_name(source, &variant.name);
+                    source.push_str(", entries);\n");
+                }
+                Some(LoweredType::Enum(name)) => {
+                    source.push_str("            result.gust_payload.");
+                    push_c_local_name(source, &variant.name);
+                    source.push_str(" = ");
+                    push_c_enum_clone_internal_name(source, name);
+                    source.push_str("(value.gust_payload.");
+                    push_c_local_name(source, &variant.name);
+                    source.push_str(", entries);\n");
+                }
+                Some(LoweredType::Basic(_)) | None => {}
+                Some(LoweredType::Void) => {
+                    unreachable!("enum variants cannot contain void")
+                }
+            }
+            source.push_str("            break;\n");
+        }
+
+        source.push_str("    }\n");
+        source.push_str("    return result;\n");
+        source.push_str("}\n\n");
+    }
+
+    for struct_ in &program.structs {
+        source.push_str("static ");
+        push_c_struct_name(source, &struct_.name);
+        source.push_str("* ");
+        push_c_struct_new_name(source, &struct_.name);
+        source.push('(');
+        push_c_struct_name(source, &struct_.name);
+        source.push_str(" value) {\n    ");
+        push_c_struct_name(source, &struct_.name);
+        source.push_str("* result = gust_rt_alloc(sizeof(");
+        push_c_struct_name(source, &struct_.name);
+        source.push_str("));\n");
+        source.push_str("    *result = value;\n");
+        source.push_str("    return result;\n");
+        source.push_str("}\n\n");
+
+        source.push_str("static ");
+        push_c_struct_name(source, &struct_.name);
+        source.push_str("* ");
+        push_c_struct_clone_internal_name(source, &struct_.name);
+        source.push_str("(const ");
+        push_c_struct_name(source, &struct_.name);
+        source.push_str("* value, gust_rt_clone_entry** entries) {\n");
+        source.push_str("    if (value == NULL) {\n        return NULL;\n    }\n");
+        source.push_str("    void* existing = gust_rt_clone_lookup(*entries, value);\n");
+        source.push_str("    if (existing != NULL) {\n        return existing;\n    }\n    ");
+        push_c_struct_name(source, &struct_.name);
+        source.push_str("* result = gust_rt_alloc(sizeof(");
+        push_c_struct_name(source, &struct_.name);
+        source.push_str("));\n");
+        source.push_str("    gust_rt_clone_register(entries, value, result);\n");
+
+        for field in &struct_.fields {
+            source.push_str("    result->");
+            push_c_local_name(source, &field.name);
+            source.push_str(" = ");
+            if let LoweredType::Struct(name) = &field.type_ {
+                push_c_struct_clone_internal_name(source, name);
+                source.push_str("(value->");
+                push_c_local_name(source, &field.name);
+                source.push_str(", entries)");
+            } else if let LoweredType::Enum(name) = &field.type_ {
+                push_c_enum_clone_internal_name(source, name);
+                source.push_str("(value->");
+                push_c_local_name(source, &field.name);
+                source.push_str(", entries)");
+            } else {
+                source.push_str("value->");
+                push_c_local_name(source, &field.name);
+            }
+            source.push_str(";\n");
+        }
+
+        source.push_str("    return result;\n");
+        source.push_str("}\n\n");
+        source.push_str("static ");
+        push_c_struct_name(source, &struct_.name);
+        source.push_str("* ");
+        push_c_struct_clone_name(source, &struct_.name);
+        source.push_str("(const ");
+        push_c_struct_name(source, &struct_.name);
+        source.push_str("* value) {\n");
+        source.push_str("    gust_rt_clone_entry* entries = NULL;\n");
+        source.push_str("    return ");
+        push_c_struct_clone_internal_name(source, &struct_.name);
+        source.push_str("(value, &entries);\n");
+        source.push_str("}\n\n");
     }
 }
 
@@ -732,6 +924,7 @@ fn push_c_statement(source: &mut String, statement: &LoweredStatement, indent: u
             | LoweredExprKind::Negate(_)
             | LoweredExprKind::Arithmetic { .. }
             | LoweredExprKind::StructLiteral { .. }
+            | LoweredExprKind::Clone(_)
             | LoweredExprKind::EnumLiteral { .. } => {
                 unreachable!("println only lowers String values")
             }
@@ -808,10 +1001,31 @@ fn push_c_struct_name(source: &mut String, name: &str) {
     push_c_identifier_suffix(source, name);
 }
 
+fn push_c_struct_new_name(source: &mut String, name: &str) {
+    source.push_str("gust_rt_new_");
+    push_c_struct_name(source, name);
+}
+
+fn push_c_struct_clone_name(source: &mut String, name: &str) {
+    source.push_str("gust_rt_clone_");
+    push_c_struct_name(source, name);
+}
+
+fn push_c_struct_clone_internal_name(source: &mut String, name: &str) {
+    push_c_struct_clone_name(source, name);
+    source.push_str("_internal");
+}
+
 fn push_c_enum_name(source: &mut String, name: &str) {
     source.push_str("gust_enum_");
     source.push_str(&format!("{:08x}_", stable_name_hash(name)));
     push_c_identifier_suffix(source, name);
+}
+
+fn push_c_enum_clone_internal_name(source: &mut String, name: &str) {
+    source.push_str("gust_rt_clone_");
+    push_c_enum_name(source, name);
+    source.push_str("_internal");
 }
 
 fn push_c_enum_tag_name(source: &mut String, name: &str) {
@@ -848,7 +1062,10 @@ fn push_c_identifier_suffix(source: &mut String, name: &str) {
 fn push_c_type(source: &mut String, type_: &LoweredType) {
     match type_ {
         LoweredType::Basic(type_) => source.push_str(c_basic_type(*type_)),
-        LoweredType::Struct(name) => push_c_struct_name(source, name),
+        LoweredType::Struct(name) => {
+            push_c_struct_name(source, name);
+            source.push('*');
+        }
         LoweredType::Enum(name) => push_c_enum_name(source, name),
         LoweredType::Void => source.push_str("void"),
     }
@@ -1034,7 +1251,8 @@ fn push_c_value(source: &mut String, value: &LoweredExpr) {
             }
         }
         LoweredExprKind::StructLiteral { name, fields } => {
-            source.push('(');
+            push_c_struct_new_name(source, name);
+            source.push_str("((");
             push_c_struct_name(source, name);
             source.push_str("){");
 
@@ -1055,7 +1273,7 @@ fn push_c_value(source: &mut String, value: &LoweredExpr) {
                 source.push(' ');
             }
 
-            source.push('}');
+            source.push_str("})");
         }
         LoweredExprKind::EnumLiteral {
             enum_name,
@@ -1107,8 +1325,17 @@ fn push_c_value(source: &mut String, value: &LoweredExpr) {
         }
         LoweredExprKind::FieldAccess { object, field } => {
             push_c_value(source, object);
-            source.push('.');
+            source.push_str("->");
             push_c_local_name(source, field);
+        }
+        LoweredExprKind::Clone(object) => {
+            let LoweredType::Struct(name) = &object.type_ else {
+                unreachable!("only struct values use lowered clone expressions")
+            };
+            push_c_struct_clone_name(source, name);
+            source.push('(');
+            push_c_value(source, object);
+            source.push(')');
         }
         LoweredExprKind::Call { name, args } => {
             push_c_function_name(source, name);

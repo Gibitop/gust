@@ -71,10 +71,18 @@ The executable backend maps `i128` and `u128` to the C compiler's 128-bit intege
 
 ## Struct field mutation
 
-Struct fields can contain other known struct types. Generated C definitions are ordered so nested
-struct types are defined before structs that contain them.
+Structs are managed reference values.
+Assignment and parameter passing copy references, so aliases observe the same mutations
 
-Fields can be assigned, compound-assigned, and incremented when the field access is rooted in a
-mutable local struct binding, including nested fields. Mutation through immutable bindings is
-rejected. Mutation through computed struct expressions, enum payload mutation, and mutable
-parameters are not implemented yet.
+`mut` grants deep mutation capability through a binding
+
+Mutable references may be used as immutable views, but immutable references cannot become mutable.
+
+Mutable parameters mutate the caller-visible object.
+
+Thread safety is currently the programmer's responsibility.
+
+`.clone()` explicitly deep-clones a struct graph, preserving cycles and repeated references.
+The clone is independent and may initialize a mutable binding.
+
+Strings are immutable and may be shared between a value and its clone.

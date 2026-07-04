@@ -29,8 +29,14 @@ struct Analyzer {
 
 #[derive(Debug, Clone)]
 struct FunctionSignature {
-    params: Vec<Type>,
+    params: Vec<ParamSignature>,
     return_type: Type,
+}
+
+#[derive(Debug, Clone)]
+struct ParamSignature {
+    type_: Type,
+    mutable: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -145,8 +151,10 @@ impl Analyzer {
                                 params: item
                                     .params
                                     .iter()
-                                    .map(|param| {
-                                        self.type_ref_without_diagnostics(param.type_ref.as_ref())
+                                    .map(|param| ParamSignature {
+                                        type_: self
+                                            .type_ref_without_diagnostics(param.type_ref.as_ref()),
+                                        mutable: param.mutable,
                                     })
                                     .collect(),
                                 return_type: self
@@ -290,13 +298,6 @@ impl Analyzer {
         }
 
         for param in &function.params {
-            if param.mutable {
-                self.unsupported(
-                    param.span,
-                    "mutable parameters are parsed but mutation lowering is not implemented yet",
-                );
-            }
-
             let type_ = param
                 .type_ref
                 .as_ref()
@@ -370,6 +371,21 @@ impl Analyzer {
                     self.report_type_mismatch(statement.span, annotated_type, value_type.clone());
                 }
 
+                let binding_type = annotated_type.clone().unwrap_or_else(|| value_type.clone());
+                if *mutable
+                    && value.as_ref().is_some_and(|value| {
+                        self.requires_mutable_capability(&binding_type)
+                            && !self.expr_has_mutable_capability(value)
+                    })
+                {
+                    self.diagnostics.push(Diagnostic::error(
+                        value.as_ref().map_or(statement.span, |value| value.span),
+                        format!(
+                            "cannot initialize mutable binding `{name}` from an immutable value; use `.clone()` to create an independent mutable object"
+                        ),
+                    ));
+                }
+
                 self.define(name, *mutable, annotated_type.unwrap_or(value_type));
             }
             StmtKind::Assign { target, op, value } => {
@@ -398,6 +414,19 @@ impl Analyzer {
                     self.diagnostics.push(Diagnostic::error(
                         target.span,
                         format!("cannot assign to immutable binding `{name}`"),
+                    ));
+                }
+
+                if op.is_none()
+                    && binding.mutable
+                    && self.requires_mutable_capability(&binding.type_)
+                    && !self.expr_has_mutable_capability(value)
+                {
+                    self.diagnostics.push(Diagnostic::error(
+                        value.span,
+                        format!(
+                            "cannot assign an immutable value to mutable binding `{name}`; use `.clone()` to create an independent mutable object"
+                        ),
                     ));
                 }
 
@@ -521,6 +550,12 @@ impl Analyzer {
                 Type::Unknown
             }
             ExprKind::Call { callee, args } => {
+                if let ExprKind::Member { object, name } = &callee.kind
+                    && name == "clone"
+                {
+                    return self.validate_clone(expr.span, object, args);
+                }
+
                 if let ExprKind::Identifier(name) = &callee.kind {
                     return self.validate_call(expr, name, args);
                 }
@@ -802,6 +837,16 @@ impl Analyzer {
         if matches!(field_type, Type::Unknown) {
             self.validate_expr(value);
             return;
+        }
+
+        if op.is_none()
+            && self.requires_mutable_capability(&field_type)
+            && !self.expr_has_mutable_capability(value)
+        {
+            self.diagnostics.push(Diagnostic::error(
+                value.span,
+                "cannot assign an immutable value to a mutable field; use `.clone()` to create an independent mutable object",
+            ));
         }
 
         let value_type =
@@ -1125,12 +1170,55 @@ impl Analyzer {
             return signature.return_type;
         }
 
-        for (arg, expected_type) in args.iter().zip(signature.params) {
-            let arg_type = self.validate_expr_with_context(arg, Some(expected_type.clone()));
-            self.report_type_mismatch(arg.span, expected_type, arg_type);
+        for (arg, param) in args.iter().zip(signature.params) {
+            let arg_type = self.validate_expr_with_context(arg, Some(param.type_.clone()));
+            self.report_type_mismatch(arg.span, param.type_.clone(), arg_type);
+
+            if param.mutable
+                && self.requires_mutable_capability(&param.type_)
+                && !self.expr_has_mutable_capability(arg)
+            {
+                self.diagnostics.push(Diagnostic::error(
+                    arg.span,
+                    format!(
+                        "function `{name}` requires a mutable argument; use `.clone()` to pass an independent mutable object"
+                    ),
+                ));
+            }
         }
 
         signature.return_type
+    }
+
+    fn validate_clone(&mut self, span: Span, object: &Expr, args: &[Expr]) -> Type {
+        if !args.is_empty() {
+            self.diagnostics.push(Diagnostic::error(
+                span,
+                format!("`.clone()` expects no arguments, got {}", args.len()),
+            ));
+            for arg in args {
+                self.validate_expr(arg);
+            }
+        }
+
+        let object_type = self.validate_expr(object);
+        if matches!(
+            object_type,
+            Type::Struct(_) | Type::Basic(BasicType::String)
+        ) {
+            object_type
+        } else if matches!(object_type, Type::Unknown) {
+            Type::Unknown
+        } else {
+            self.diagnostics.push(Diagnostic::error(
+                span,
+                format!(
+                    "`.clone()` is only supported for struct and String values, got `{}`",
+                    object_type.name()
+                ),
+            ));
+            Type::Unknown
+        }
     }
 
     fn validate_variant_call(
@@ -1452,6 +1540,45 @@ impl Analyzer {
             Type::Enum(type_ref.name.clone())
         } else {
             Type::Unknown
+        }
+    }
+
+    fn requires_mutable_capability(&self, type_: &Type) -> bool {
+        matches!(type_, Type::Struct(_) | Type::Basic(BasicType::String))
+    }
+
+    fn expr_has_mutable_capability(&self, expr: &Expr) -> bool {
+        match &expr.kind {
+            ExprKind::Identifier(name) => self.lookup(name).is_some_and(|binding| binding.mutable),
+            ExprKind::Member { object, .. } => self.expr_has_mutable_capability(object),
+            ExprKind::StructInit { name, fields } => {
+                let Some(definition) = self.structs.get(name) else {
+                    return false;
+                };
+
+                fields.iter().all(|field| {
+                    definition.fields.get(&field.name).is_none_or(|type_| {
+                        !self.requires_mutable_capability(type_)
+                            || self.expr_has_mutable_capability(&field.value)
+                    })
+                })
+            }
+            ExprKind::Call { callee, .. } => {
+                matches!(
+                    &callee.kind,
+                    ExprKind::Member { name, .. } if name == "clone"
+                )
+            }
+            ExprKind::String(_)
+            | ExprKind::Number(_)
+            | ExprKind::Bool(_)
+            | ExprKind::Binary { .. }
+            | ExprKind::Unary { .. } => true,
+            ExprKind::Array(_)
+            | ExprKind::Lambda(_)
+            | ExprKind::Match { .. }
+            | ExprKind::PostfixIncrement(_)
+            | ExprKind::Missing => false,
         }
     }
 

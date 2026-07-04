@@ -1,0 +1,76 @@
+struct Message {
+    text: String
+}
+
+struct Pair {
+    first: Message
+    second: Message
+}
+
+fn append(mut pair: Pair, suffix: String) {
+    pair.first.text += suffix
+}
+
+fn printMessage(pair: Pair) {
+    io.println(pair.first.text)
+
+    // Error: `pair` is an immutable parameter.
+    // pair.first.text += "!"
+}
+
+fn main() {
+    let mut message = Message {
+        text: "shared",
+    }
+    let mut pair = Pair {
+        first: message,
+        second: message,
+    }
+
+    // Assignment creates an immutable view of the same object.
+    let view = pair
+    append(pair, " mutation")
+
+    // Both fields alias `message`, and `view` aliases `pair`.
+    if message.text == "shared mutation" && view.second.text == "shared mutation" {
+        io.println("assignment aliases")
+    }
+
+    // A deep clone is independent, but preserves aliases inside its graph.
+    let mut copy = view.clone()
+    copy.first.text += " clone"
+
+    if pair.first.text == "shared mutation" && copy.second.text == "shared mutation clone" {
+        io.println("clone is deep")
+    }
+
+    // Mutable values can be passed to immutable parameters.
+    printMessage(pair)
+
+    let immutableMessage = Message {
+        text: "immutable",
+    }
+    let immutablePair = Pair {
+        first: immutableMessage,
+        second: immutableMessage,
+    }
+
+    // Cloning is the explicit way to obtain independent mutable capability.
+    let mut mutableClone = immutablePair.clone()
+    append(mutableClone, " clone")
+
+    // Error: immutable references cannot gain mutable capability.
+    // let mut invalidMessage = immutableMessage
+
+    // Error: a mutable object cannot contain an immutable nested object.
+    // let mut invalidPair = Pair {
+    //     first: immutableMessage,
+    //     second: immutableMessage,
+    // }
+
+    // Error: mutable parameters require mutable arguments.
+    // append(immutablePair, "!")
+
+    // Error: fields cannot be mutated through an immutable view.
+    // view.first.text += "!"
+}

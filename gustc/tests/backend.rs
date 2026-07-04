@@ -818,13 +818,14 @@ fn main() {
 
     assert!(source.contains("// Gust struct: Person"));
     assert!(source.contains("typedef struct gust_struct_"));
+    assert!(source.contains("struct gust_struct_"));
     assert!(source.contains("_Person {"));
     assert!(source.contains("const char* gust_name;"));
     assert!(source.contains("uint32_t gust_age;"));
-    assert!(source.contains("gust_person = (gust_struct_"));
+    assert!(source.contains("gust_person = gust_rt_new_gust_struct_"));
     assert!(source.contains(".gust_name = \"Gust\""));
     assert!(source.contains(".gust_age = 1"));
-    assert!(source.contains("gust_rt_io_println(gust_person.gust_name);"));
+    assert!(source.contains("gust_rt_io_println(gust_person->gust_name);"));
 }
 
 #[test]
@@ -855,16 +856,16 @@ fn main() {
     let lowered = lower_program(&result.program).expect("struct helper values should lower");
     let source = emit_c(&lowered);
 
-    assert!(source.contains("typedef struct gust_struct_f1168775_Lang {"));
-    assert!(source.contains("} gust_struct_f1168775_Lang;"));
-    assert!(source.contains("static gust_struct_f1168775_Lang gust_fn_de4514cf_makeLang() {"));
+    assert!(source.contains("typedef struct gust_struct_f1168775_Lang gust_struct_f1168775_Lang;"));
+    assert!(source.contains("struct gust_struct_f1168775_Lang {"));
+    assert!(source.contains("static gust_struct_f1168775_Lang* gust_fn_de4514cf_makeLang() {"));
     assert!(source.contains(
-        "static const char* gust_fn_1f1b2f34_getName(gust_struct_f1168775_Lang gust_lang) {"
+        "static const char* gust_fn_1f1b2f34_getName(gust_struct_f1168775_Lang* gust_lang) {"
     ));
-    assert!(source.contains("return gust_lang.gust_name;"));
-    assert!(source.contains("gust_struct_f1168775_Lang gust_lang = gust_fn_de4514cf_makeLang();"));
+    assert!(source.contains("return gust_lang->gust_name;"));
+    assert!(source.contains("gust_struct_f1168775_Lang* gust_lang = gust_fn_de4514cf_makeLang();"));
     assert!(source.contains("gust_rt_io_println(gust_fn_1f1b2f34_getName(gust_lang));"));
-    assert!(source.contains("gust_rt_io_println(gust_fn_de4514cf_makeLang().gust_name);"));
+    assert!(source.contains("gust_rt_io_println(gust_fn_de4514cf_makeLang()->gust_name);"));
 }
 
 #[test]
@@ -1075,17 +1076,17 @@ fn main() {
     let lowered = lower_program(&result.program).expect("mutable struct fields should lower");
     let source = emit_c(&lowered);
 
-    assert!(source.contains("gust_state.gust_count = 2;"));
-    assert!(source.contains("gust_state.gust_count = (gust_state.gust_count + 3);"));
-    assert!(source.contains("gust_state.gust_flags = (gust_state.gust_flags | 2);"));
+    assert!(source.contains("gust_state->gust_count = 2;"));
+    assert!(source.contains("gust_state->gust_count = (gust_state->gust_count + 3);"));
+    assert!(source.contains("gust_state->gust_flags = (gust_state->gust_flags | 2);"));
     assert!(source.contains(
-        "gust_state.gust_label = gust_rt_string_concat(gust_state.gust_label, \" updated\");"
+        "gust_state->gust_label = gust_rt_string_concat(gust_state->gust_label, \" updated\");"
     ));
-    assert!(source.contains("(gust_state.gust_count++);"));
+    assert!(source.contains("(gust_state->gust_count++);"));
 }
 
 #[test]
-fn nested_struct_fields_and_mutation_emit_c_in_dependency_order() {
+fn nested_struct_fields_and_mutation_emit_pointer_access() {
     let result = check_source(
         r#"struct State {
     flags: Flags
@@ -1117,16 +1118,60 @@ fn main() {
 
     let lowered = lower_program(&result.program).expect("nested struct fields should lower");
     let source = emit_c(&lowered);
-    let flags_position = source.find("// Gust struct: Flags").unwrap();
-    let state_position = source.find("// Gust struct: State").unwrap();
+    assert!(source.contains("gust_state->gust_flags->gust_enabled = true;"));
+    assert!(source.contains(
+        "gust_state->gust_flags->gust_count = (gust_state->gust_flags->gust_count + 2);"
+    ));
+    assert!(source.contains("(gust_state->gust_flags->gust_count++);"));
+}
 
-    assert!(flags_position < state_position);
-    assert!(source.contains("gust_state.gust_flags.gust_enabled = true;"));
-    assert!(
-        source
-            .contains("gust_state.gust_flags.gust_count = (gust_state.gust_flags.gust_count + 2);")
+#[test]
+fn struct_assignment_aliases_and_clone_deep_copies() {
+    let result = check_source(
+        r#"struct A {
+    text: String
+}
+
+struct Pair {
+    first: A
+    second: A
+}
+
+fn mutate(mut pair: Pair): void {
+    pair.first.text += " shared"
+}
+
+fn main() {
+    let mut value = A { text: "Gust" }
+    let mut pair = Pair {
+        first: value,
+        second: value,
+    }
+    let view = pair
+    mutate(pair)
+    let mut copy = view.clone()
+    copy.first.text += " clone"
+    io.println(pair.second.text)
+    io.println(copy.second.text)
+}"#,
     );
-    assert!(source.contains("(gust_state.gust_flags.gust_count++);"));
+
+    assert!(
+        !result.has_errors(),
+        "expected no frontend errors, got {:?}",
+        result.diagnostics
+    );
+
+    let lowered = lower_program(&result.program).expect("aliases and clone should lower");
+    let source = emit_c(&lowered);
+
+    assert!(source.contains("gust_struct_"));
+    assert!(source.contains("* gust_view = gust_pair;"));
+    assert!(source.contains("gust_rt_clone_gust_struct_"));
+    assert!(source.contains("gust_rt_clone_lookup"));
+    assert!(source.contains("gust_rt_clone_register"));
+    assert!(source.contains("result->gust_first = gust_rt_clone_"));
+    assert!(source.contains("result->gust_second = gust_rt_clone_"));
 }
 
 #[test]
@@ -1195,18 +1240,21 @@ fn bitwise_shift_and_compound_assignments_emit_c() {
 }
 
 #[test]
-fn mutable_struct_helper_signature_is_rejected_by_backend() {
+fn mutable_struct_parameters_lower_as_shared_references() {
     let result = check_source(
         r#"
 struct Person {
     name: String
 }
 
-fn identity(mut person: Person): Person {
-    return person
+fn rename(mut person: Person): void {
+    person.name += "!"
 }
 
 fn main() {
+    let mut person = Person { name: "Gust" }
+    rename(person)
+    io.println(person.name)
 }
 "#,
     );
@@ -1217,17 +1265,15 @@ fn main() {
         result.diagnostics
     );
 
-    let diagnostics = lower_program(&result.program).expect_err("source should not lower");
+    let lowered = lower_program(&result.program).expect("mutable parameter should lower");
+    let source = emit_c(&lowered);
 
-    assert!(
-        diagnostics
-            .iter()
-            .any(|diagnostic| diagnostic.severity == Severity::Error
-                && diagnostic
-                    .message
-                    .contains("mutable parameters are not supported")),
-        "expected mutable struct parameter diagnostic, got {diagnostics:?}"
-    );
+    assert!(source.contains("_Person* gust_person)"));
+    assert!(source.contains(
+        "gust_person->gust_name = gust_rt_string_concat(gust_person->gust_name, \"!\");"
+    ));
+    assert!(source.contains("gust_fn_"));
+    assert!(source.contains("(gust_person);"));
 }
 
 #[test]
