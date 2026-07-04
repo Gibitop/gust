@@ -2,8 +2,8 @@
 // Gust does not have its own syntax highlighter yet, but the highlighter for rust works ok for now
 // BTW all comments are **markdown**!
 
-from json import escapeString
-from ../animal import Animal // Imports local modules. This will be resolved to the `./Animal.gust` file
+from json import { escapeString }
+from ../animal import { Animal } // Imports local modules. This will be resolved to the `./Animal.gust` file
 
 enum Being {
     Person(Person)
@@ -40,13 +40,13 @@ fn main() {
     // [] is used as a literal for an enumerable type
     // The exact enumerable type is inferred by the compiler or defaulted to an ArrayList
     // Here we explicitly declare the type to be ArrayList<Being>, otherwise the compiler would infer the type to be ArrayList<Person>
-    let mut listOfBeings: ArrayList<Being> = [Person(person)]
+    let mut listOfBeings: ArrayList<Being> = [Being.Person(person)]
 
     // push is used to add a new element to the array
-    listOfBeings.push(Person {
+    listOfBeings.push(Being.Person(Person {
         name: "Jane Doe",
         age: 25,
-    })
+    }))
 
     // For loops iterate over an iterable. Standard array list implements the iterable trait
     for person in listOfBeings {
@@ -74,8 +74,8 @@ fn getGreeting(being: Being): String {
     // Returns are always explicit (through the return keyword) for function with a body block
     return match being {
         // Match branches extract the value from the matched expression
-        Person(person) => "Hello from person " + person.name + "!",
-        Animal(animal) => "Hello from animal " + animal.name + "!",
+        Being.Person(person) => "Hello from person " + person.name + "!",
+        Being.Animal(animal) => "Hello from animal " + animal.name + "!",
     }
 }
 

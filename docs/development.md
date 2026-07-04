@@ -8,6 +8,18 @@ First toolchain will be implemented in the rust programming language. Later the 
 
 Minimal gust project contains a single `.gust` file with a `main` function
 
+## Syntax
+
+Syntax is very similar to Rust. Notable differences:
+- No semicolon
+- No implicit return keyword
+- All `::` are replaced with `.`
+- Function return types are defined with `:` instead of `->`
+- Function return types are optional and can be inferred by the compiler
+- We prefer camelCase where rust uses snake_case
+- No syntax for features missing by design or not implemented in this language yet (eg. life times, macros, etc)
+- Imports are done very differently from rust. See the examples/milestone.gust file for an example. // TODO: replace with a module example, when modules are implemented
+
 ## String memory management
 
 Gust will use garbage collection for managed values, including strings. Do not introduce ownership or lexical `free` semantics for strings as an interim design.
