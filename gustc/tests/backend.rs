@@ -109,6 +109,73 @@ fn main() {
 }
 
 #[test]
+fn inferred_recursive_return_type_emits_c() {
+    let result = check_source(
+        r#"fn fib(n: i32) {
+    if n <= 1 {
+        return n
+    }
+    return fib(n - 1) + fib(n - 2)
+}
+
+fn main() {
+    if fib(10) == 55 {
+        io.println("fib works")
+    }
+}"#,
+    );
+
+    assert!(
+        !result.has_errors(),
+        "expected no frontend errors, got {:?}",
+        result.diagnostics
+    );
+
+    let lowered = lower_program(&result.program).expect("recursive function should lower");
+    let fib = lowered
+        .functions
+        .iter()
+        .find(|function| function.name == "fib")
+        .expect("fib should be lowered");
+
+    assert_eq!(fib.return_type, basic(BasicType::I32));
+    assert_eq!(fib.return_value.type_, basic(BasicType::I32));
+
+    let source = emit_c(&lowered);
+
+    assert!(source.contains("static int32_t gust_fn_"));
+    assert!(source.contains("gust_rt_io_println(\"fib works\");"));
+}
+
+#[test]
+fn unresolved_recursive_return_type_has_a_dedicated_error() {
+    let result = check_source(
+        r#"fn recurse() {
+    return recurse()
+}
+
+fn main() {
+    recurse()
+}"#,
+    );
+
+    assert!(
+        !result.has_errors(),
+        "expected no frontend errors, got {:?}",
+        result.diagnostics
+    );
+
+    let diagnostics =
+        lower_program(&result.program).expect_err("unresolved recursion should not lower");
+
+    assert_eq!(diagnostics.len(), 1);
+    assert_eq!(
+        diagnostics[0].message,
+        "could not infer return type of function `recurse`; add an explicit return type"
+    );
+}
+
+#[test]
 fn string_local_lowers_successfully() {
     let result = check_source(
         r#"fn main() {
