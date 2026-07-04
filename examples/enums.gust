@@ -6,17 +6,40 @@ fn main() {
 
     io.println(greeting(person))
     io.println(greeting(unknown))
+
+    let spaceship = Spaceship {
+        name: "Enterprise",
+        pilot: Being.Dog(Dog {
+            name: "Belka",
+        }),
+    }
+
+    let mut pilotName = match spaceship.pilot {
+        Being.Person(person) => person.name,
+        Being.Dog(dog) => dog.name,
+        Being.Unknown => "Unknown pilot",
+    }
+
+    pilotName = pilotName + "!"
+    io.println(pilotName)
 }
 
 fn greeting(being: Being) {
     return match being {
         Being.Person(person) => "Hello, " + person.name,
+        Being.Dog(_) => "Edge case",
         Being.Unknown => "Hello, stranger",
     }
 }
 
+struct Spaceship {
+    name: String
+    pilot: Being
+}
+
 enum Being {
     Person(Person)
+    Dog(Dog)
     Unknown
 }
 
@@ -24,3 +47,6 @@ struct Person {
     name: String
 }
 
+struct Dog {
+    name: String
+}

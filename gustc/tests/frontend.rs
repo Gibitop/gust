@@ -1376,6 +1376,80 @@ fn main() {}"#,
 }
 
 #[test]
+fn payload_pattern_error_suggests_valid_syntax() {
+    let result = check_source(
+        r#"enum Being {
+    Dog(String)
+}
+
+fn label(being: Being): String {
+    return match being {
+        Being.Dog => "dog",
+    }
+}
+
+fn main() {}"#,
+    );
+
+    assert!(
+        result.diagnostics.iter().any(|diagnostic| {
+            diagnostic.severity == Severity::Error
+                && diagnostic.message.contains(
+                    "`Being.Dog` contains a `String` value; use `Being.Dog(value)` to bind it or `Being.Dog(_)` to ignore it",
+                )
+        }),
+        "expected actionable payload-pattern error, got {:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
+fn underscore_discards_an_enum_payload_without_creating_a_binding() {
+    let result = check_source(
+        r#"enum Being {
+    Dog(String)
+}
+
+fn label(being: Being): String {
+    return match being {
+        Being.Dog(_) => "dog",
+    }
+}
+
+fn main() {}"#,
+    );
+
+    assert!(
+        !result.has_errors(),
+        "expected underscore payload discard to validate, got {:?}",
+        result.diagnostics
+    );
+
+    let result = check_source(
+        r#"enum Being {
+    Dog(String)
+}
+
+fn label(being: Being): String {
+    return match being {
+        Being.Dog(_) => _,
+    }
+}
+
+fn main() {}"#,
+    );
+
+    assert!(
+        result.diagnostics.iter().any(|diagnostic| {
+            diagnostic.severity == Severity::Error
+                && diagnostic.message.contains("unknown name `_`")
+        }),
+        "expected underscore not to create a binding, got {:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
 fn enum_variants_are_namespaced_by_their_enum() {
     let result = check_source(
         r#"enum Left {

@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use crate::ast::{BasicType, BinaryOp};
 use crate::lower::{
     LoweredEnum, LoweredExpr, LoweredExprKind, LoweredFunction, LoweredProgram, LoweredStatement,
@@ -44,15 +46,7 @@ pub fn emit_c(program: &LoweredProgram) -> String {
         source.push('\n');
     }
 
-    for struct_ in &program.structs {
-        push_c_struct(&mut source, struct_);
-        source.push('\n');
-    }
-
-    for enum_ in &program.enums {
-        push_c_enum(&mut source, enum_);
-        source.push('\n');
-    }
+    push_c_type_definitions(&mut source, program);
 
     if uses_string_concat {
         source.push_str("static void* gust_rt_alloc(size_t size) {\n");
@@ -521,6 +515,65 @@ fn push_c_struct(source: &mut String, struct_: &LoweredStruct) {
     source.push_str("} ");
     push_c_struct_name(source, &struct_.name);
     source.push_str(";\n");
+}
+
+fn push_c_type_definitions(source: &mut String, program: &LoweredProgram) {
+    let mut emitted = HashSet::new();
+    let mut remaining = program.structs.len() + program.enums.len();
+
+    while remaining > 0 {
+        let previous_remaining = remaining;
+
+        for struct_ in &program.structs {
+            let key = format!("struct:{}", struct_.name);
+
+            if emitted.contains(&key)
+                || !struct_
+                    .fields
+                    .iter()
+                    .all(|field| type_definition_is_emitted(&field.type_, &emitted))
+            {
+                continue;
+            }
+
+            push_c_struct(source, struct_);
+            source.push('\n');
+            emitted.insert(key);
+            remaining -= 1;
+        }
+
+        for enum_ in &program.enums {
+            let key = format!("enum:{}", enum_.name);
+
+            if emitted.contains(&key)
+                || !enum_.variants.iter().all(|variant| {
+                    variant
+                        .payload
+                        .as_ref()
+                        .is_none_or(|payload| type_definition_is_emitted(payload, &emitted))
+                })
+            {
+                continue;
+            }
+
+            push_c_enum(source, enum_);
+            source.push('\n');
+            emitted.insert(key);
+            remaining -= 1;
+        }
+
+        if remaining == previous_remaining {
+            break;
+        }
+    }
+}
+
+fn type_definition_is_emitted(type_: &LoweredType, emitted: &HashSet<String>) -> bool {
+    match type_ {
+        LoweredType::Basic(_) | LoweredType::Void => true,
+        LoweredType::Struct(name) => emitted.contains(&format!("struct:{name}")),
+        LoweredType::Enum(name) => emitted.contains(&format!("enum:{name}")),
+    }
 }
 
 fn push_c_enum(source: &mut String, enum_: &LoweredEnum) {

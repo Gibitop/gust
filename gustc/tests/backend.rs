@@ -1349,3 +1349,43 @@ fn main() {
     assert!(source.contains("gust_payload"));
     assert!(source.contains(".gust_tag =="));
 }
+
+#[test]
+fn struct_enum_fields_emit_after_their_enum_definition() {
+    let result = check_source(
+        r#"struct Spaceship {
+    pilot: Being
+}
+
+enum Being {
+    Person(String)
+    Unknown
+}
+
+fn main() {
+    let spaceship = Spaceship {
+        pilot: Being.Person("Ada"),
+    }
+    let name = match spaceship.pilot {
+        Being.Person(name) => name,
+        Being.Unknown => "Unknown pilot",
+    }
+    io.println(name)
+}"#,
+    );
+
+    assert!(
+        !result.has_errors(),
+        "expected no frontend errors, got {:?}",
+        result.diagnostics
+    );
+
+    let lowered = lower_program(&result.program).expect("enum struct fields should lower");
+    let source = emit_c(&lowered);
+    let enum_position = source.find("// Gust enum: Being").expect("enum definition");
+    let struct_position = source
+        .find("// Gust struct: Spaceship")
+        .expect("struct definition");
+
+    assert!(enum_position < struct_position);
+}
