@@ -1214,6 +1214,115 @@ fn main() {
 }
 
 #[test]
+fn immutable_struct_references_cannot_gain_mutable_capability() {
+    let result = check_source(
+        r#"
+struct A {
+    text: String
+}
+
+struct B {
+    a: A
+}
+
+fn mutate(mut value: B): void {
+    value.a.text += "!"
+}
+
+fn main() {
+    let immutableA = A { text: "immutable" }
+    let immutableB = B { a: immutableA }
+    let mut invalidA = immutableA
+    let mut invalidB = B { a: immutableA }
+    mutate(immutableB)
+}
+"#,
+    );
+
+    assert_eq!(
+        result
+            .diagnostics
+            .iter()
+            .filter(|diagnostic| diagnostic.message.contains("immutable value"))
+            .count(),
+        2,
+        "expected immutable-to-mutable initialization errors, got {:?}",
+        result.diagnostics
+    );
+    assert!(
+        result
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.message.contains("requires a mutable argument")),
+        "expected mutable-argument error, got {:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
+fn clone_creates_mutable_capability_from_immutable_structs() {
+    let result = check_source(
+        r#"
+struct A {
+    text: String
+}
+
+struct B {
+    a: A
+}
+
+fn mutate(mut value: B): void {
+    value.a.text += "!"
+}
+
+fn main() {
+    let immutableA = A { text: "immutable" }
+    let immutableB = B { a: immutableA }
+    let mut mutableA = immutableA.clone()
+    let mut mutableB = immutableB.clone()
+    mutableA.text += " copy"
+    mutate(mutableB)
+}
+"#,
+    );
+
+    assert!(
+        !result.has_errors(),
+        "expected cloned structs to gain mutable capability, got {:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
+fn mutable_struct_references_can_be_viewed_as_immutable() {
+    let result = check_source(
+        r#"
+struct A {
+    text: String
+}
+
+fn read(value: A): String {
+    return value.text
+}
+
+fn main() {
+    let mut mutableA = A { text: "mutable" }
+    let immutableView = mutableA
+    mutableA.text += " updated"
+    let text = read(mutableA)
+    let viewedText = read(immutableView)
+}
+"#,
+    );
+
+    assert!(
+        !result.has_errors(),
+        "expected mutable-to-immutable views to validate, got {:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
 fn arithmetic_compound_assignments_validate() {
     let result = check_source(
         r#"

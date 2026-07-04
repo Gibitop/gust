@@ -148,6 +148,7 @@ pub enum LoweredExprKind {
         object: Box<LoweredExpr>,
         field: String,
     },
+    Clone(Box<LoweredExpr>),
     Call {
         name: String,
         args: Vec<LoweredExpr>,
@@ -168,9 +169,15 @@ pub struct LoweredStructFieldValue {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct FunctionSignature {
-    params: Vec<LoweredType>,
+    params: Vec<LoweredParamSignature>,
     return_type: LoweredType,
     return_type_known: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct LoweredParamSignature {
+    type_: LoweredType,
+    mutable: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -540,14 +547,6 @@ fn lower_function_signature(
     let mut can_lower = true;
 
     for param in &function.params {
-        if param.mutable {
-            diagnostics.push(Diagnostic::error(
-                param.span,
-                "mutable parameters are not supported in executable builds",
-            ));
-            can_lower = false;
-        }
-
         let Some(type_ref) = &param.type_ref else {
             diagnostics.push(Diagnostic::error(
                 param.span,
@@ -568,7 +567,10 @@ fn lower_function_signature(
             continue;
         };
 
-        params.push(type_);
+        params.push(LoweredParamSignature {
+            type_,
+            mutable: param.mutable,
+        });
     }
 
     let (return_type, return_type_known) = if let Some(return_type) = &function.return_type {
@@ -874,6 +876,12 @@ fn infer_expr_type(
         }
         ExprKind::Call { callee, .. } => {
             if let ExprKind::Member { object, name } = &callee.kind
+                && name == "clone"
+            {
+                return infer_expr_type(object, locals, signatures, structs, enums);
+            }
+
+            if let ExprKind::Member { object, name } = &callee.kind
                 && let ExprKind::Identifier(enum_name) = &object.kind
                 && find_qualified_variant(enums, enum_name, name).is_some()
             {
@@ -917,12 +925,12 @@ fn lower_function(
     let mut statements = Vec::new();
     let mut return_value = None;
 
-    for (param, type_) in function.params.iter().zip(&signature.params) {
+    for (param, signature_param) in function.params.iter().zip(&signature.params) {
         if locals
             .insert(
                 param.name.clone(),
                 LoweringLocal {
-                    type_: type_.clone(),
+                    type_: signature_param.type_.clone(),
                     mutable: param.mutable,
                     replacement: None,
                 },
@@ -937,7 +945,7 @@ fn lower_function(
 
         params.push(LoweredParam {
             name: param.name.clone(),
-            type_: type_.clone(),
+            type_: signature_param.type_.clone(),
         });
     }
 
@@ -2302,6 +2310,45 @@ fn lower_expr(
         }
         ExprKind::Call { callee, args } => {
             if let ExprKind::Member { object, name } = &callee.kind
+                && name == "clone"
+            {
+                if !args.is_empty() {
+                    diagnostics.push(Diagnostic::error(
+                        expr.span,
+                        format!("`.clone()` expects no arguments, got {}", args.len()),
+                    ));
+                    return None;
+                }
+
+                let object = lower_expr(
+                    object,
+                    locals,
+                    signatures,
+                    structs,
+                    enums,
+                    diagnostics,
+                    None,
+                    "expected supported clone source in executable builds",
+                )?;
+
+                if matches!(object.type_, LoweredType::Struct(_)) {
+                    LoweredExpr {
+                        type_: object.type_.clone(),
+                        kind: LoweredExprKind::Clone(Box::new(object)),
+                    }
+                } else if object.type_ == LoweredType::Basic(BasicType::String) {
+                    object
+                } else {
+                    diagnostics.push(Diagnostic::error(
+                        expr.span,
+                        format!(
+                            "`.clone()` is not supported for `{}` in executable builds",
+                            object.type_.name()
+                        ),
+                    ));
+                    return None;
+                }
+            } else if let ExprKind::Member { object, name } = &callee.kind
                 && let ExprKind::Identifier(enum_name) = &object.kind
                 && let Some(variant) = find_qualified_variant(enums, enum_name, name)
             {
@@ -2372,7 +2419,7 @@ fn lower_expr(
 
                 let mut lowered_args = Vec::new();
 
-                for (arg, type_) in args.iter().zip(&signature.params) {
+                for (arg, param) in args.iter().zip(&signature.params) {
                     if let Some(arg) = lower_expr(
                         arg,
                         locals,
@@ -2380,7 +2427,7 @@ fn lower_expr(
                         structs,
                         enums,
                         diagnostics,
-                        Some(type_.clone()),
+                        Some(param.type_.clone()),
                         "expected supported function argument in executable builds",
                     ) {
                         lowered_args.push(arg);

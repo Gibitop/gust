@@ -14,11 +14,11 @@ fn main() {
         }),
     }
 
-    let mut pilotName = match spaceship.pilot {
+    let mut pilotName = (match spaceship.pilot {
         Being.Person(person) => person.name,
         Being.Dog(dog) => dog.name,
         Being.Unknown => "Unknown pilot",
-    }
+    }).clone()
 
     pilotName = pilotName + "!"
     io.println(pilotName)
