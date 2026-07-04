@@ -924,6 +924,29 @@ fn initialized_basic_locals_c_output_is_stable() {
 }
 
 #[test]
+fn float_and_128_bit_numeric_types_lower_and_emit_c() {
+    let result = check_source(
+        r#"fn main() {
+    let signed: i128 = 170141183460469231731687303715884105727
+    let minimum: i128 = -170141183460469231731687303715884105728
+    let unsigned: u128 = 340282366920938463463374607431768211455
+    let single: f32 = 1 / 2
+    let double = 5.5 % 2
+}"#,
+    );
+    let lowered = lower_program(&result.program).expect("extended numeric types should lower");
+    let source = emit_c(&lowered);
+
+    assert!(source.contains("__int128 gust_signed"));
+    assert!(source.contains("__int128 gust_minimum = ((__int128)(-"));
+    assert!(source.contains("unsigned __int128 gust_unsigned"));
+    assert!(source.contains("float gust_single = (1.0f / 2.0f);"));
+    assert!(source.contains("double gust_double = fmod(5.5, 2.0);"));
+    assert!(source.contains("#include <math.h>"));
+    assert!(!source.contains("340282366920938463463374607431768211455"));
+}
+
+#[test]
 fn c_output_mangles_local_names_that_are_c_keywords() {
     let result = check_source(
         r#"fn main() {

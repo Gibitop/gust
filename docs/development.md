@@ -55,3 +55,16 @@ Struct and enum equality will be introduced with trait-based equality rather tha
 `!`, `&&`, and `||` operate only on boolean values.
 
 `&&` and `||` evaluate left to right and short-circuit the right operand.
+
+## Numeric literals
+
+Integer literals default to `i32`. Decimal and exponent-form literals default to `f64`.
+Contextual typing allows integer literals to initialize any numeric type and floating-point
+literals to initialize `f32` or `f64`.
+
+Floating-point types support the same implemented numeric operators as integer types: arithmetic,
+remainder, comparisons, unary negation, and increment on mutable bindings. Bitwise and shift
+operators are not implemented for any numeric type yet. Floating-point equality follows IEEE
+semantics, including `NaN != NaN`.
+
+The executable backend maps `i128` and `u128` to the C compiler's 128-bit integer extension.

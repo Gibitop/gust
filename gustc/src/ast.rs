@@ -276,11 +276,15 @@ pub enum BasicType {
     U16,
     U32,
     U64,
+    U128,
     Usize,
     I8,
     I16,
     I32,
     I64,
+    I128,
+    F32,
+    F64,
 }
 
 impl BasicType {
@@ -292,11 +296,15 @@ impl BasicType {
             "u16" => Some(Self::U16),
             "u32" => Some(Self::U32),
             "u64" => Some(Self::U64),
+            "u128" => Some(Self::U128),
             "usize" => Some(Self::Usize),
             "i8" => Some(Self::I8),
             "i16" => Some(Self::I16),
             "i32" => Some(Self::I32),
             "i64" => Some(Self::I64),
+            "i128" => Some(Self::I128),
+            "f32" => Some(Self::F32),
+            "f64" => Some(Self::F64),
             _ => None,
         }
     }
@@ -309,11 +317,15 @@ impl BasicType {
             Self::U16 => "u16",
             Self::U32 => "u32",
             Self::U64 => "u64",
+            Self::U128 => "u128",
             Self::Usize => "usize",
             Self::I8 => "i8",
             Self::I16 => "i16",
             Self::I32 => "i32",
             Self::I64 => "i64",
+            Self::I128 => "i128",
+            Self::F32 => "f32",
+            Self::F64 => "f64",
         }
     }
 
@@ -324,15 +336,30 @@ impl BasicType {
                 | Self::U16
                 | Self::U32
                 | Self::U64
+                | Self::U128
                 | Self::Usize
                 | Self::I8
                 | Self::I16
                 | Self::I32
                 | Self::I64
+                | Self::I128
+                | Self::F32
+                | Self::F64
         )
     }
 
     pub fn is_signed_numeric(self) -> bool {
-        matches!(self, Self::I8 | Self::I16 | Self::I32 | Self::I64)
+        matches!(
+            self,
+            Self::I8 | Self::I16 | Self::I32 | Self::I64 | Self::I128 | Self::F32 | Self::F64
+        )
     }
+
+    pub fn is_float(self) -> bool {
+        matches!(self, Self::F32 | Self::F64)
+    }
+}
+
+pub fn number_literal_is_float(value: &str) -> bool {
+    value.contains(['.', 'e', 'E'])
 }

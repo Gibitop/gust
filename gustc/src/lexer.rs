@@ -243,6 +243,33 @@ impl<'source> Lexer<'source> {
             self.bump();
         }
 
+        if self.peek() == Some('.')
+            && matches!(self.peek_next(), Some(character) if character.is_ascii_digit())
+        {
+            self.bump();
+
+            while matches!(self.peek(), Some(character) if character.is_ascii_digit()) {
+                self.bump();
+            }
+        }
+
+        if matches!(self.peek(), Some('e' | 'E')) {
+            let exponent_start = self.position;
+            self.bump();
+
+            if matches!(self.peek(), Some('+' | '-')) {
+                self.bump();
+            }
+
+            if matches!(self.peek(), Some(character) if character.is_ascii_digit()) {
+                while matches!(self.peek(), Some(character) if character.is_ascii_digit()) {
+                    self.bump();
+                }
+            } else {
+                self.position = exponent_start;
+            }
+        }
+
         let lexeme = self.source[start..self.position].to_string();
 
         Token {
