@@ -73,6 +73,7 @@ pub enum Keyword {
     Match,
     Mut,
     Return,
+    Static,
     Struct,
     True,
 }
@@ -357,6 +358,7 @@ impl<'source> Lexer<'source> {
             "match" => TokenKind::Keyword(Keyword::Match),
             "mut" => TokenKind::Keyword(Keyword::Mut),
             "return" => TokenKind::Keyword(Keyword::Return),
+            "static" => TokenKind::Keyword(Keyword::Static),
             "struct" => TokenKind::Keyword(Keyword::Struct),
             "true" => TokenKind::Keyword(Keyword::True),
             _ => TokenKind::Identifier(lexeme.clone()),

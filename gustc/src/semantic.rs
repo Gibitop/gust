@@ -15,6 +15,10 @@ pub fn validate(program: &Program) -> Vec<Diagnostic> {
     analyzer.diagnostics
 }
 
+fn extension_name(type_name: &str, function_name: &str) -> String {
+    format!("extension {type_name}.{function_name}")
+}
+
 struct Analyzer {
     diagnostics: Vec<Diagnostic>,
     values: HashSet<String>,
@@ -22,15 +26,19 @@ struct Analyzer {
     structs: HashMap<String, StructDefinition>,
     enums: HashMap<String, EnumDefinition>,
     functions: HashMap<String, FunctionSignature>,
+    extensions: HashMap<String, FunctionSignature>,
+    static_extensions: HashMap<String, FunctionSignature>,
     unsupported_features: HashSet<&'static str>,
     scopes: Vec<HashMap<String, Binding>>,
     return_types: Vec<Type>,
+    self_types: Vec<Type>,
 }
 
 #[derive(Debug, Clone)]
 struct FunctionSignature {
     params: Vec<ParamSignature>,
     return_type: Type,
+    mutable_self: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -42,6 +50,8 @@ struct ParamSignature {
 #[derive(Debug, Clone)]
 struct StructDefinition {
     fields: HashMap<String, Type>,
+    methods: HashMap<String, FunctionSignature>,
+    static_methods: HashMap<String, FunctionSignature>,
 }
 
 #[derive(Debug, Clone)]
@@ -55,11 +65,23 @@ struct Binding {
     type_: Type,
 }
 
+fn is_self_param(param: &crate::ast::Param) -> bool {
+    param.name == "self"
+}
+
+fn has_mutable_receiver(function: &FunctionDecl) -> bool {
+    function
+        .params
+        .iter()
+        .any(|param| is_self_param(param) && param.mutable && param.type_ref.is_none())
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Type {
     Basic(BasicType),
     Struct(String),
     Enum(String),
+    Named(String),
     Unknown,
 }
 
@@ -69,6 +91,7 @@ impl Type {
             Type::Basic(type_) => type_.name().to_string(),
             Type::Struct(name) => name.clone(),
             Type::Enum(name) => name.clone(),
+            Type::Named(name) => name.clone(),
             Type::Unknown => "unknown".to_string(),
         }
     }
@@ -86,9 +109,12 @@ impl Analyzer {
             structs: HashMap::new(),
             enums: HashMap::new(),
             functions: HashMap::new(),
+            extensions: HashMap::new(),
+            static_extensions: HashMap::new(),
             unsupported_features: HashSet::new(),
             scopes: Vec::new(),
             return_types: Vec::new(),
+            self_types: Vec::new(),
         }
     }
 
@@ -122,6 +148,8 @@ impl Analyzer {
                         item.name.clone(),
                         StructDefinition {
                             fields: HashMap::new(),
+                            methods: HashMap::new(),
+                            static_methods: HashMap::new(),
                         },
                     );
                     self.insert_top_level(&mut names, &item.name, item.span);
@@ -136,6 +164,7 @@ impl Analyzer {
                         self.insert_top_level(&mut names, name, item.span);
                     }
                 }
+                Item::Extension(_) => {}
             }
         }
 
@@ -159,10 +188,12 @@ impl Analyzer {
                                     .collect(),
                                 return_type: self
                                     .type_ref_without_diagnostics(item.return_type.as_ref()),
+                                mutable_self: false,
                             },
                         );
                     }
                 }
+                Item::Extension(item) => self.collect_extension_definition(item),
                 Item::Import(_) => {}
             }
         }
@@ -184,28 +215,121 @@ impl Analyzer {
 
     fn collect_struct_definition(&mut self, item: &StructDecl) {
         let mut fields = HashMap::new();
+        let mut methods = HashMap::new();
+        let mut static_methods = HashMap::new();
+        let self_type = Type::Struct(item.name.clone());
 
         for member in &item.members {
-            let StructMember::Field(field) = member else {
-                continue;
-            };
+            match member {
+                StructMember::Field(field) => {
+                    if fields
+                        .insert(
+                            field.name.clone(),
+                            self.type_ref_without_diagnostics(Some(&field.type_ref)),
+                        )
+                        .is_some()
+                    {
+                        self.diagnostics.push(Diagnostic::error(
+                            field.span,
+                            format!("duplicate field `{}` in struct `{}`", field.name, item.name),
+                        ));
+                    }
+                }
+                StructMember::Method(method) => {
+                    let Some(name) = &method.name else {
+                        continue;
+                    };
 
-            if fields
-                .insert(
-                    field.name.clone(),
-                    self.type_ref_without_diagnostics(Some(&field.type_ref)),
-                )
-                .is_some()
-            {
-                self.diagnostics.push(Diagnostic::error(
-                    field.span,
-                    format!("duplicate field `{}` in struct `{}`", field.name, item.name),
-                ));
+                    if name == "clone" {
+                        self.diagnostics.push(Diagnostic::error(
+                            method.span,
+                            "method name `clone` is reserved for the built-in deep clone operation",
+                        ));
+                    }
+
+                    if methods
+                        .insert(
+                            name.clone(),
+                            FunctionSignature {
+                                params: method
+                                    .params
+                                    .iter()
+                                    .filter(|param| !is_self_param(param))
+                                    .map(|param| ParamSignature {
+                                        type_: self.type_ref_in_context(
+                                            param.type_ref.as_ref(),
+                                            &self_type,
+                                        ),
+                                        mutable: param.mutable,
+                                    })
+                                    .collect(),
+                                return_type: self
+                                    .type_ref_in_context(method.return_type.as_ref(), &self_type),
+                                mutable_self: has_mutable_receiver(method),
+                            },
+                        )
+                        .is_some()
+                    {
+                        self.diagnostics.push(Diagnostic::error(
+                            method.span,
+                            format!("duplicate method `{name}` in struct `{}`", item.name),
+                        ));
+                    }
+                }
+                StructMember::StaticMethod(method) => {
+                    let Some(name) = &method.name else {
+                        continue;
+                    };
+
+                    if name == "clone" {
+                        self.diagnostics.push(Diagnostic::error(
+                            method.span,
+                            "static function name `clone` is reserved for the built-in deep clone operation",
+                        ));
+                    }
+
+                    if static_methods
+                        .insert(
+                            name.clone(),
+                            FunctionSignature {
+                                params: method
+                                    .params
+                                    .iter()
+                                    .map(|param| ParamSignature {
+                                        type_: self.type_ref_in_context(
+                                            param.type_ref.as_ref(),
+                                            &self_type,
+                                        ),
+                                        mutable: param.mutable,
+                                    })
+                                    .collect(),
+                                return_type: self
+                                    .type_ref_in_context(method.return_type.as_ref(), &self_type),
+                                mutable_self: false,
+                            },
+                        )
+                        .is_some()
+                    {
+                        self.diagnostics.push(Diagnostic::error(
+                            method.span,
+                            format!(
+                                "duplicate static function `{name}` in struct `{}`",
+                                item.name
+                            ),
+                        ));
+                    }
+                }
             }
         }
 
-        self.structs
-            .insert(item.name.clone(), StructDefinition { fields });
+        self.structs.insert(
+            item.name.clone(),
+            StructDefinition {
+                fields,
+                methods,
+                static_methods,
+            },
+        );
     }
 
     fn collect_enum_definition(&mut self, item: &crate::ast::EnumDecl) {
@@ -233,6 +357,55 @@ impl Analyzer {
 
         self.enums
             .insert(item.name.clone(), EnumDefinition { variants });
+    }
+
+    fn collect_extension_definition(&mut self, item: &crate::ast::ExtensionDecl) {
+        let Some(name) = &item.function.name else {
+            return;
+        };
+        let self_type = self.type_ref_without_diagnostics(Some(&item.type_ref));
+
+        if name == "clone" {
+            self.diagnostics.push(Diagnostic::error(
+                item.function.span,
+                "extension function name `clone` is reserved for the built-in deep clone operation",
+            ));
+        }
+
+        let signature = FunctionSignature {
+            params: item
+                .function
+                .params
+                .iter()
+                .filter(|param| item.static_ || !is_self_param(param))
+                .map(|param| ParamSignature {
+                    type_: self.type_ref_in_context(param.type_ref.as_ref(), &self_type),
+                    mutable: param.mutable,
+                })
+                .collect(),
+            return_type: self.type_ref_in_context(item.function.return_type.as_ref(), &self_type),
+            mutable_self: !item.static_ && has_mutable_receiver(&item.function),
+        };
+        let extensions = if item.static_ {
+            &mut self.static_extensions
+        } else {
+            &mut self.extensions
+        };
+
+        if extensions
+            .insert(extension_name(&self_type.name(), name), signature)
+            .is_some()
+        {
+            self.diagnostics.push(Diagnostic::error(
+                item.function.span,
+                format!(
+                    "duplicate {}extension function `{}` for type `{}`",
+                    if item.static_ { "static " } else { "" },
+                    name,
+                    item.type_ref.name
+                ),
+            ));
+        }
     }
 
     fn insert_top_level(&mut self, names: &mut HashMap<String, Span>, name: &str, span: Span) {
@@ -276,28 +449,81 @@ impl Analyzer {
                                 self.validate_type(&field.type_ref);
                             }
                             StructMember::Method(method) => {
-                                self.unsupported(
-                                    method.span,
-                                    "methods are parsed but method dispatch is not implemented yet",
+                                self.validate_function(
+                                    method,
+                                    Some(Type::Struct(item.name.clone())),
+                                    true,
                                 );
-                                self.validate_function(method, true);
                             }
+                            StructMember::StaticMethod(method) => self.validate_function(
+                                method,
+                                Some(Type::Struct(item.name.clone())),
+                                false,
+                            ),
                         }
                     }
                 }
-                Item::Function(function) => self.validate_function(function, false),
+                Item::Function(function) => self.validate_function(function, None, false),
+                Item::Extension(item) => {
+                    let self_type = self.validate_type(&item.type_ref);
+                    self.validate_function(&item.function, Some(self_type), !item.static_);
+                }
             }
         }
     }
 
-    fn validate_function(&mut self, function: &FunctionDecl, has_self: bool) {
+    fn validate_function(
+        &mut self,
+        function: &FunctionDecl,
+        self_type: Option<Type>,
+        has_self: bool,
+    ) {
         self.push_scope();
 
+        if let Some(self_type) = self_type.clone() {
+            self.self_types.push(self_type.clone());
+            if has_self {
+                self.define("self", has_mutable_receiver(function), self_type.clone());
+            }
+        }
+
+        let self_params = function
+            .params
+            .iter()
+            .filter(|param| is_self_param(param))
+            .collect::<Vec<_>>();
         if has_self {
-            self.define("self", false, Type::Unknown);
+            if self_params.len() > 1 {
+                self.diagnostics.push(Diagnostic::error(
+                    self_params[1].span,
+                    "a function can declare only one `self` receiver",
+                ));
+            }
+            if let Some(param) = self_params.first() {
+                if !param.mutable {
+                    self.diagnostics.push(Diagnostic::error(
+                        param.span,
+                        "immutable `self` is implicit; remove it from the parameter list",
+                    ));
+                }
+                if param.type_ref.is_some() {
+                    self.diagnostics.push(Diagnostic::error(
+                        param.span,
+                        "mutable receivers must be written `mut self` without a type annotation",
+                    ));
+                }
+            }
+        } else if let Some(param) = self_params.first() {
+            self.diagnostics.push(Diagnostic::error(
+                param.span,
+                "`self` receivers are only allowed on instance methods and extension functions",
+            ));
         }
 
         for param in &function.params {
+            if is_self_param(param) {
+                continue;
+            }
             let type_ = param
                 .type_ref
                 .as_ref()
@@ -322,6 +548,9 @@ impl Analyzer {
 
         self.validate_missing_return(function, return_type);
         self.return_types.pop();
+        if self_type.is_some() {
+            self.self_types.pop();
+        }
         self.pop_scope();
     }
 
@@ -526,13 +755,15 @@ impl Analyzer {
                     Type::Basic(type_)
                 }
                 Some(Type::Unknown) => Type::Unknown,
-                Some(Type::Basic(_)) | Some(Type::Struct(_)) | Some(Type::Enum(_)) | None => {
-                    Type::Basic(if number_literal_is_float(value) {
-                        BasicType::F64
-                    } else {
-                        BasicType::I32
-                    })
-                }
+                Some(Type::Basic(_))
+                | Some(Type::Struct(_))
+                | Some(Type::Enum(_))
+                | Some(Type::Named(_))
+                | None => Type::Basic(if number_literal_is_float(value) {
+                    BasicType::F64
+                } else {
+                    BasicType::I32
+                }),
             },
             ExprKind::String(_) => Type::Basic(BasicType::String),
             ExprKind::Bool(_) => Type::Basic(BasicType::Bool),
@@ -564,6 +795,14 @@ impl Analyzer {
                     && self.enums.contains_key(enum_name)
                 {
                     return self.validate_variant_call(expr, enum_name, name, args);
+                }
+                if let ExprKind::Member { object, name } = &callee.kind
+                    && let Some(type_) = self.resolve_type_expression(object)
+                {
+                    return self.validate_static_call(expr, type_, name, args);
+                }
+                if let ExprKind::Member { object, name } = &callee.kind {
+                    return self.validate_method_call(expr, object, name, args);
                 }
 
                 self.validate_expr(callee);
@@ -792,7 +1031,7 @@ impl Analyzer {
                     expr.span,
                     "lambda functions are parsed but closure lowering is not implemented yet",
                 );
-                self.validate_function(function, false);
+                self.validate_function(function, None, false);
                 Type::Unknown
             }
             ExprKind::PostfixIncrement(target) => {
@@ -1228,6 +1467,193 @@ impl Analyzer {
         signature.return_type
     }
 
+    fn resolve_type_expression(&self, expr: &Expr) -> Option<Type> {
+        let ExprKind::Identifier(name) = &expr.kind else {
+            return None;
+        };
+
+        if name == "Self" {
+            return self.self_types.last().cloned();
+        }
+        if self.lookup(name).is_some() {
+            return None;
+        }
+        if let Some(type_) = BasicType::from_name(name) {
+            Some(Type::Basic(type_))
+        } else if self.structs.contains_key(name) {
+            Some(Type::Struct(name.clone()))
+        } else if self.enums.contains_key(name) {
+            Some(Type::Enum(name.clone()))
+        } else if self.types.contains(name) && name != "void" {
+            Some(Type::Named(name.clone()))
+        } else {
+            None
+        }
+    }
+
+    fn validate_static_call(
+        &mut self,
+        expr: &Expr,
+        type_: Type,
+        name: &str,
+        args: &[Expr],
+    ) -> Type {
+        let intrinsic = if let Type::Struct(struct_name) = &type_ {
+            self.structs
+                .get(struct_name)
+                .and_then(|struct_| struct_.static_methods.get(name))
+                .cloned()
+        } else {
+            None
+        };
+        let signature = intrinsic.or_else(|| {
+            self.static_extensions
+                .get(&extension_name(&type_.name(), name))
+                .cloned()
+        });
+        let Some(signature) = signature else {
+            self.diagnostics.push(Diagnostic::error(
+                expr.span,
+                format!(
+                    "unknown static function `{name}` for type `{}`",
+                    type_.name()
+                ),
+            ));
+            for arg in args {
+                self.validate_expr(arg);
+            }
+            return Type::Unknown;
+        };
+        let qualified_name = format!("{}.{name}", type_.name());
+
+        if args.len() != signature.params.len() {
+            self.diagnostics.push(Diagnostic::error(
+                expr.span,
+                format!(
+                    "static function `{qualified_name}` expects {} arguments, got {}",
+                    signature.params.len(),
+                    args.len()
+                ),
+            ));
+            for arg in args {
+                self.validate_expr(arg);
+            }
+            return signature.return_type;
+        }
+
+        for (arg, param) in args.iter().zip(signature.params) {
+            let arg_type = self.validate_expr_with_context(arg, Some(param.type_.clone()));
+            self.report_type_mismatch(arg.span, param.type_, arg_type);
+        }
+
+        signature.return_type
+    }
+
+    fn validate_method_call(
+        &mut self,
+        expr: &Expr,
+        object: &Expr,
+        name: &str,
+        args: &[Expr],
+    ) -> Type {
+        let object_type = self.validate_expr(object);
+        if matches!(object_type, Type::Unknown) {
+            for arg in args {
+                self.validate_expr(arg);
+            }
+            return Type::Unknown;
+        }
+
+        let intrinsic = if let Type::Struct(struct_name) = &object_type {
+            self.structs
+                .get(struct_name)
+                .and_then(|struct_| struct_.methods.get(name))
+                .cloned()
+        } else {
+            None
+        };
+        let signature = intrinsic.or_else(|| {
+            self.extensions
+                .get(&extension_name(&object_type.name(), name))
+                .cloned()
+        });
+        let Some(signature) = signature else {
+            if matches!(object_type, Type::Basic(_)) {
+                self.unsupported(expr.span, "methods on basic values are not implemented yet");
+            } else {
+                let target = match &object_type {
+                    Type::Struct(name) => format!("struct `{name}`"),
+                    _ => format!("type `{}`", object_type.name()),
+                };
+                self.diagnostics.push(Diagnostic::error(
+                    expr.span,
+                    format!("unknown method `{name}` for {target}"),
+                ));
+            }
+
+            for arg in args {
+                self.validate_expr(arg);
+            }
+
+            return Type::Unknown;
+        };
+        let qualified_name = format!("{}.{name}", object_type.name());
+
+        if signature.mutable_self && !self.expr_has_mutable_capability(object) {
+            let message = if let Some(binding_name) = mutable_member_root(object)
+                && self
+                    .lookup(binding_name)
+                    .is_some_and(|binding| !binding.mutable)
+            {
+                format!(
+                    "cannot call mutable function `{qualified_name}` through immutable binding `{binding_name}`; declare it with `let mut {binding_name}` or call the function on a mutable clone"
+                )
+            } else {
+                format!(
+                    "mutable function `{qualified_name}` requires a mutable receiver; bind the value with `let mut` or call the function on a mutable clone"
+                )
+            };
+            self.diagnostics
+                .push(Diagnostic::error(object.span, message));
+        }
+
+        if args.len() != signature.params.len() {
+            self.diagnostics.push(Diagnostic::error(
+                expr.span,
+                format!(
+                    "method `{qualified_name}` expects {} arguments, got {}",
+                    signature.params.len(),
+                    args.len()
+                ),
+            ));
+
+            for arg in args {
+                self.validate_expr(arg);
+            }
+
+            return signature.return_type;
+        }
+
+        for (arg, param) in args.iter().zip(signature.params) {
+            let arg_type = self.validate_expr_with_context(arg, Some(param.type_.clone()));
+            self.report_type_mismatch(arg.span, param.type_.clone(), arg_type);
+
+            if param.mutable
+                && self.requires_mutable_capability(&param.type_)
+                && !self.expr_has_mutable_capability(arg)
+            {
+                self.diagnostics.push(Diagnostic::error(
+                    arg.span,
+                    format!(
+                        "method `{qualified_name}` requires a mutable argument; use `.clone()` to pass an independent mutable object"
+                    ),
+                ));
+            }
+        }
+
+        signature.return_type
+    }
+
     fn validate_clone(&mut self, span: Span, object: &Expr, args: &[Expr]) -> Type {
         if !args.is_empty() {
             self.diagnostics.push(Diagnostic::error(
@@ -1334,6 +1760,25 @@ impl Analyzer {
     }
 
     fn validate_struct_init(&mut self, span: Span, name: &str, fields: &[StructInitField]) -> Type {
+        let resolved_name = if name == "Self" {
+            match self.self_types.last() {
+                Some(Type::Struct(name)) => name.clone(),
+                Some(type_) => {
+                    self.diagnostics.push(Diagnostic::error(
+                        span,
+                        format!(
+                            "`Self` is `{}` and cannot be initialized as a struct",
+                            type_.name()
+                        ),
+                    ));
+                    return Type::Unknown;
+                }
+                None => name.to_string(),
+            }
+        } else {
+            name.to_string()
+        };
+        let name = resolved_name.as_str();
         let Some(definition) = self.structs.get(name).cloned() else {
             if BasicType::from_name(name).is_none() && !self.types.contains(name) {
                 self.diagnostics
@@ -1401,6 +1846,7 @@ impl Analyzer {
                 );
                 return Type::Unknown;
             }
+            Type::Named(_) => return Type::Unknown,
             Type::Basic(_) => {
                 self.diagnostics.push(Diagnostic::error(
                     span,
@@ -1535,6 +1981,17 @@ impl Analyzer {
     }
 
     fn validate_type(&mut self, type_ref: &TypeRef) -> Type {
+        if type_ref.name == "Self" {
+            let self_type = self.self_types.last().cloned();
+            if self_type.is_none() {
+                self.diagnostics.push(Diagnostic::error(
+                    type_ref.span,
+                    "`Self` is only available in methods and extension functions",
+                ));
+            }
+            return self_type.unwrap_or(Type::Unknown);
+        }
+
         let basic_type = BasicType::from_name(&type_ref.name);
 
         if basic_type.is_none() && !self.types.contains(&type_ref.name) {
@@ -1563,6 +2020,8 @@ impl Analyzer {
             Type::Struct(type_ref.name.clone())
         } else if self.enums.contains_key(&type_ref.name) {
             Type::Enum(type_ref.name.clone())
+        } else if type_ref.name != "void" && self.types.contains(&type_ref.name) {
+            Type::Named(type_ref.name.clone())
         } else {
             Type::Unknown
         }
@@ -1591,8 +2050,18 @@ impl Analyzer {
             Type::Struct(type_ref.name.clone())
         } else if self.enums.contains_key(&type_ref.name) {
             Type::Enum(type_ref.name.clone())
+        } else if type_ref.name != "void" && self.types.contains(&type_ref.name) {
+            Type::Named(type_ref.name.clone())
         } else {
             Type::Unknown
+        }
+    }
+
+    fn type_ref_in_context(&self, type_ref: Option<&TypeRef>, self_type: &Type) -> Type {
+        if type_ref.is_some_and(|type_ref| type_ref.name == "Self" && type_ref.args.is_empty()) {
+            self_type.clone()
+        } else {
+            self.type_ref_without_diagnostics(type_ref)
         }
     }
 

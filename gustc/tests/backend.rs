@@ -1317,15 +1317,261 @@ fn basics_reaches_build_mode_rejection() {
                     .contains("imports are not supported in executable builds")),
         "expected unsupported-import diagnostic, got {diagnostics:?}"
     );
-    assert!(
-        diagnostics
-            .iter()
-            .any(|diagnostic| diagnostic.severity == Severity::Error
-                && diagnostic
-                    .message
-                    .contains("methods are not supported in executable builds")),
-        "expected unsupported-method diagnostic, got {diagnostics:?}"
+}
+
+#[test]
+fn struct_methods_lower_to_functions_with_self_receivers() {
+    let result = check_source(
+        r#"struct Lang {
+    name: String
+
+    fn greeting(prefix: String) {
+        return prefix + self.name
+    }
+}
+
+fn main() {
+    let lang = Lang { name: "Gust" }
+    io.println(lang.greeting("Hello, "))
+}"#,
     );
+
+    assert!(
+        !result.has_errors(),
+        "expected no frontend errors, got {:?}",
+        result.diagnostics
+    );
+
+    let lowered = lower_program(&result.program).expect("struct method should lower");
+    let method = lowered
+        .functions
+        .iter()
+        .find(|function| function.name == "Lang.greeting")
+        .expect("method should lower as a function");
+
+    assert_eq!(
+        method.params,
+        vec![
+            LoweredParam {
+                name: "self".to_string(),
+                type_: LoweredType::Struct("Lang".to_string()),
+            },
+            LoweredParam {
+                name: "prefix".to_string(),
+                type_: basic(BasicType::String),
+            },
+        ]
+    );
+
+    let source = emit_c(&lowered);
+    assert!(source.contains("// Gust function: Lang.greeting"));
+    assert!(source.contains("gust_self->gust_name"));
+    assert!(source.contains("gust_lang, \"Hello, \""));
+}
+
+#[test]
+fn mutable_member_and_extension_receivers_lower_as_hidden_parameters() {
+    let result = check_source(
+        r#"struct Counter {
+    value: i32
+
+    fn increment(mut self): void {
+        self.value++
+    }
+}
+
+fn Counter.add(mut self, amount: i32): void {
+    self.value += amount
+}
+
+fn main() {
+    let mut counter = Counter { value: 0 }
+    counter.increment()
+    counter.add(2)
+}"#,
+    );
+
+    assert!(
+        !result.has_errors(),
+        "expected no frontend errors, got {:?}",
+        result.diagnostics
+    );
+
+    let lowered = lower_program(&result.program).expect("mutable receivers should lower");
+    let method = lowered
+        .functions
+        .iter()
+        .find(|function| function.name == "Counter.increment")
+        .expect("mutable method should lower");
+    assert_eq!(method.params.len(), 1);
+    assert_eq!(method.params[0].name, "self");
+    let extension = lowered
+        .functions
+        .iter()
+        .find(|function| function.name == "extension Counter.add")
+        .expect("mutable extension should lower");
+    assert_eq!(extension.params.len(), 2);
+    assert_eq!(extension.params[0].name, "self");
+    assert_eq!(extension.params[1].name, "amount");
+
+    let source = emit_c(&lowered);
+    assert!(source.contains("gust_self->gust_value++"));
+    assert!(source.contains("gust_self->gust_value = (gust_self->gust_value + gust_amount)"));
+}
+
+#[test]
+fn inferred_method_receiver_types_still_enforce_mutable_self() {
+    let result = check_source(
+        r#"struct Counter {
+    value: i32
+
+    static fn new() => Self { value: 0 }
+
+    fn increment(mut self): void {
+        self.value++
+    }
+}
+
+static fn Counter.make() => Self.new()
+
+fn main() {
+    let counter = Counter.make()
+    counter.increment()
+}"#,
+    );
+
+    assert!(
+        !result.has_errors(),
+        "frontend should defer the inferred receiver type, got {:?}",
+        result.diagnostics
+    );
+
+    let diagnostics =
+        lower_program(&result.program).expect_err("immutable inferred receiver must be rejected");
+    assert!(
+        diagnostics.iter().any(|diagnostic| diagnostic
+            .message
+            .contains(
+                "cannot call mutable function `Counter.increment` through immutable binding `counter`; declare it with `let mut counter`"
+            )),
+        "expected dedicated immutable receiver error, got {diagnostics:?}"
+    );
+}
+
+#[test]
+fn extension_functions_lower_with_local_static_dispatch() {
+    let result = check_source(
+        r#"struct Greeter {
+    name: String
+
+    fn label(): String => "member"
+}
+
+fn Greeter.label(): String => "extension"
+fn Greeter.greeting(prefix: String) => prefix + self.name
+fn String.withSuffix(suffix: String) => self + suffix
+
+fn main() {
+    let greeter = Greeter { name: "Gust" }
+    io.println(greeter.label())
+    io.println(greeter.greeting("Hello, "))
+    io.println("Gust".withSuffix("!"))
+}"#,
+    );
+
+    assert!(
+        !result.has_errors(),
+        "expected no frontend errors, got {:?}",
+        result.diagnostics
+    );
+
+    let lowered = lower_program(&result.program).expect("extensions should lower");
+    assert!(
+        lowered
+            .functions
+            .iter()
+            .any(|function| function.name == "extension Greeter.label")
+    );
+    assert!(
+        lowered
+            .functions
+            .iter()
+            .any(|function| function.name == "extension Greeter.greeting")
+    );
+    assert!(
+        lowered
+            .functions
+            .iter()
+            .any(|function| function.name == "extension String.withSuffix")
+    );
+
+    let LoweredStatement::Println(LoweredExpr {
+        kind: LoweredExprKind::Call { name, .. },
+        ..
+    }) = &lowered.statements[1]
+    else {
+        panic!("expected member call");
+    };
+    assert_eq!(name, "Greeter.label");
+
+    let source = emit_c(&lowered);
+    assert!(source.contains("// Gust function: extension Greeter.greeting"));
+    assert!(source.contains("// Gust function: extension String.withSuffix"));
+}
+
+#[test]
+fn static_members_and_extensions_lower_without_receivers() {
+    let result = check_source(
+        r#"struct Greeter {
+    name: String
+
+    static fn new(name: String): Self => Self { name: name }
+    static fn label(): String => "member"
+}
+
+static fn Greeter.default(): Self => Self.new("Gust")
+static fn Greeter.label(): String => "extension"
+
+fn main() {
+    let greeter = Greeter.default()
+    io.println(Greeter.label())
+    io.println(greeter.name)
+}"#,
+    );
+
+    assert!(
+        !result.has_errors(),
+        "expected no frontend errors, got {:?}",
+        result.diagnostics
+    );
+
+    let lowered = lower_program(&result.program).expect("static functions should lower");
+    let constructor = lowered
+        .functions
+        .iter()
+        .find(|function| function.name == "static Greeter.new")
+        .expect("static member should lower");
+    assert_eq!(constructor.params.len(), 1);
+    let extension = lowered
+        .functions
+        .iter()
+        .find(|function| function.name == "static extension Greeter.default")
+        .expect("static extension should lower");
+    assert!(extension.params.is_empty());
+
+    let LoweredStatement::Println(LoweredExpr {
+        kind: LoweredExprKind::Call { name, args },
+        ..
+    }) = &lowered.statements[1]
+    else {
+        panic!("expected static member call");
+    };
+    assert_eq!(name, "static Greeter.label");
+    assert!(args.is_empty());
+
+    let source = emit_c(&lowered);
+    assert!(source.contains("// Gust function: static Greeter.new"));
+    assert!(source.contains("// Gust function: static extension Greeter.default"));
 }
 
 #[test]

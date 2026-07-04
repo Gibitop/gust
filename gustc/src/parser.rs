@@ -1,7 +1,7 @@
 use crate::ast::{
-    BinaryOp, Block, ElseBranch, EnumDecl, EnumVariant, Expr, ExprKind, FieldDecl, FunctionBody,
-    FunctionDecl, ImportDecl, Item, MatchBranch, MatchBranchBody, Param, Pattern, Program, Stmt,
-    StmtKind, StructDecl, StructInitField, StructMember, TypeRef, UnaryOp,
+    BinaryOp, Block, ElseBranch, EnumDecl, EnumVariant, Expr, ExprKind, ExtensionDecl, FieldDecl,
+    FunctionBody, FunctionDecl, ImportDecl, Item, MatchBranch, MatchBranchBody, Param, Pattern,
+    Program, Stmt, StmtKind, StructDecl, StructInitField, StructMember, TypeRef, UnaryOp,
 };
 use crate::diagnostic::Diagnostic;
 use crate::lexer::{Keyword, Token, TokenKind};
@@ -34,7 +34,8 @@ impl Parser {
                 Some(Keyword::From) => items.push(Item::Import(self.parse_import())),
                 Some(Keyword::Enum) => items.push(Item::Enum(self.parse_enum())),
                 Some(Keyword::Struct) => items.push(Item::Struct(self.parse_struct())),
-                Some(Keyword::Fn) => items.push(Item::Function(self.parse_function(true))),
+                Some(Keyword::Fn) => items.push(self.parse_top_level_function()),
+                Some(Keyword::Static) => items.push(self.parse_static_extension()),
                 _ => {
                     self.error_here("expected a top-level declaration");
                     self.advance();
@@ -133,7 +134,14 @@ impl Parser {
         while !self.at_eof() && !self.check_kind(&TokenKind::RightBrace) {
             let member_start = self.position;
 
-            if self.current_keyword() == Some(Keyword::Fn) {
+            if self.current_keyword() == Some(Keyword::Static) {
+                let start = self.expect_keyword(Keyword::Static, "`static`").span;
+                self.expect_keyword(Keyword::Fn, "`fn`");
+                let name = self.expect_identifier("expected static function name");
+                members.push(StructMember::StaticMethod(
+                    self.parse_function_tail(start, Some(name)),
+                ));
+            } else if self.current_keyword() == Some(Keyword::Fn) {
                 members.push(StructMember::Method(self.parse_function(true)));
             } else if self.check_identifier() {
                 let field_start = self.current().span;
@@ -176,6 +184,48 @@ impl Parser {
             None
         };
 
+        self.parse_function_tail(start, name)
+    }
+
+    fn parse_top_level_function(&mut self) -> Item {
+        let start = self.expect_keyword(Keyword::Fn, "`fn`").span;
+        self.parse_top_level_function_tail(start, false)
+    }
+
+    fn parse_static_extension(&mut self) -> Item {
+        let start = self.expect_keyword(Keyword::Static, "`static`").span;
+        self.expect_keyword(Keyword::Fn, "`fn`");
+        self.parse_top_level_function_tail(start, true)
+    }
+
+    fn parse_top_level_function_tail(&mut self, start: Span, static_: bool) -> Item {
+        let name_span = self.current().span;
+        let first_name = self.expect_identifier("expected function or extension type name");
+
+        if self.match_kind(&TokenKind::Dot) {
+            let function_name = self.expect_identifier("expected extension function name");
+            let function = self.parse_function_tail(start, Some(function_name));
+            let type_ref = TypeRef {
+                name: first_name,
+                args: Vec::new(),
+                span: name_span,
+            };
+
+            Item::Extension(ExtensionDecl {
+                span: start.join(function.span),
+                type_ref,
+                function,
+                static_,
+            })
+        } else {
+            if static_ {
+                self.error_here("static functions must be declared on a type");
+            }
+            Item::Function(self.parse_function_tail(start, Some(first_name)))
+        }
+    }
+
+    fn parse_function_tail(&mut self, start: Span, name: Option<String>) -> FunctionDecl {
         self.expect_kind(&TokenKind::LeftParen, "`(`");
         let params = self.parse_params();
         self.expect_kind(&TokenKind::RightParen, "`)`");
@@ -729,7 +779,9 @@ impl Parser {
         while !self.at_eof() {
             if matches!(
                 self.current_keyword(),
-                Some(Keyword::From | Keyword::Enum | Keyword::Struct | Keyword::Fn)
+                Some(
+                    Keyword::From | Keyword::Enum | Keyword::Struct | Keyword::Fn | Keyword::Static,
+                )
             ) {
                 return;
             }

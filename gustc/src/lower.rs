@@ -191,6 +191,7 @@ struct FunctionSignature {
     params: Vec<LoweredParamSignature>,
     return_type: LoweredType,
     return_type_known: bool,
+    mutable_self: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -204,6 +205,63 @@ struct LoweringLocal {
     type_: LoweredType,
     mutable: bool,
     replacement: Option<LoweredExpr>,
+}
+
+fn is_self_param(param: &crate::ast::Param) -> bool {
+    param.name == "self"
+}
+
+fn has_mutable_receiver(function: &FunctionDecl) -> bool {
+    function
+        .params
+        .iter()
+        .any(|param| is_self_param(param) && param.mutable && param.type_ref.is_none())
+}
+
+fn method_name(struct_name: &str, method_name: &str) -> String {
+    format!("{struct_name}.{method_name}")
+}
+
+fn extension_name(type_name: &str, function_name: &str) -> String {
+    format!("extension {type_name}.{function_name}")
+}
+
+fn static_method_name(type_name: &str, function_name: &str) -> String {
+    format!("static {type_name}.{function_name}")
+}
+
+fn static_extension_name(type_name: &str, function_name: &str) -> String {
+    format!("static extension {type_name}.{function_name}")
+}
+
+fn callable_method_name(
+    type_: &LoweredType,
+    name: &str,
+    signatures: &HashMap<String, FunctionSignature>,
+) -> Option<String> {
+    if let LoweredType::Struct(struct_name) = type_ {
+        let name = method_name(struct_name, name);
+        if signatures.contains_key(&name) {
+            return Some(name);
+        }
+    }
+
+    let name = extension_name(&type_.name(), name);
+    signatures.contains_key(&name).then_some(name)
+}
+
+fn callable_static_name(
+    type_: &LoweredType,
+    name: &str,
+    signatures: &HashMap<String, FunctionSignature>,
+) -> Option<String> {
+    let method_name = static_method_name(&type_.name(), name);
+    if signatures.contains_key(&method_name) {
+        return Some(method_name);
+    }
+
+    let name = static_extension_name(&type_.name(), name);
+    signatures.contains_key(&name).then_some(name)
 }
 
 pub fn lower_program(program: &Program) -> Result<LoweredProgram, Vec<Diagnostic>> {
@@ -236,7 +294,7 @@ pub fn lower_program(program: &Program) -> Result<LoweredProgram, Vec<Diagnostic
                     },
                 );
             }
-            Item::Import(_) | Item::Function(_) => {}
+            Item::Import(_) | Item::Extension(_) | Item::Function(_) => {}
         }
     }
 
@@ -260,6 +318,7 @@ pub fn lower_program(program: &Program) -> Result<LoweredProgram, Vec<Diagnostic
                 }
             }
             Item::Function(_) => {}
+            Item::Extension(_) => {}
             Item::Import(item) => diagnostics.push(Diagnostic::error(
                 item.span,
                 "imports are not supported in executable builds",
@@ -276,44 +335,144 @@ pub fn lower_program(program: &Program) -> Result<LoweredProgram, Vec<Diagnostic
         }
     }
 
+    let mut functions_to_lower = Vec::new();
+
     for item in &program.items {
-        let Item::Function(function) = item else {
-            continue;
-        };
+        match item {
+            Item::Struct(struct_) => {
+                for member in &struct_.members {
+                    let (function, lowered_name, has_self) = match member {
+                        StructMember::Method(function) => (
+                            function,
+                            method_name(
+                                &struct_.name,
+                                function.name.as_deref().unwrap_or("<missing>"),
+                            ),
+                            true,
+                        ),
+                        StructMember::StaticMethod(function) => (
+                            function,
+                            static_method_name(
+                                &struct_.name,
+                                function.name.as_deref().unwrap_or("<missing>"),
+                            ),
+                            false,
+                        ),
+                        StructMember::Field(_) => continue,
+                    };
+                    if function.name.is_none() {
+                        continue;
+                    }
+                    let self_type = LoweredType::Struct(struct_.name.clone());
+                    let Some(mut signature) = lower_function_signature(
+                        function,
+                        Some(&self_type),
+                        has_self,
+                        &structs,
+                        &enums,
+                        &mut diagnostics,
+                    ) else {
+                        continue;
+                    };
+                    if has_self {
+                        signature.params.insert(
+                            0,
+                            LoweredParamSignature {
+                                type_: self_type.clone(),
+                                mutable: false,
+                            },
+                        );
+                    }
+                    signatures.insert(lowered_name.clone(), signature);
+                    functions_to_lower.push((lowered_name, function, Some(self_type), has_self));
+                }
+            }
+            Item::Extension(extension) => {
+                let Some(name) = &extension.function.name else {
+                    continue;
+                };
+                let Some(self_type) = lower_value_type_ref(
+                    &extension.type_ref,
+                    &structs,
+                    &enums,
+                    &mut diagnostics,
+                    "extension functions require a supported receiver type in executable builds",
+                ) else {
+                    continue;
+                };
+                let lowered_name = if extension.static_ {
+                    static_extension_name(&self_type.name(), name)
+                } else {
+                    extension_name(&self_type.name(), name)
+                };
+                let Some(mut signature) = lower_function_signature(
+                    &extension.function,
+                    Some(&self_type),
+                    !extension.static_,
+                    &structs,
+                    &enums,
+                    &mut diagnostics,
+                ) else {
+                    continue;
+                };
+                if !extension.static_ {
+                    signature.params.insert(
+                        0,
+                        LoweredParamSignature {
+                            type_: self_type.clone(),
+                            mutable: false,
+                        },
+                    );
+                }
+                signatures.insert(lowered_name.clone(), signature);
+                functions_to_lower.push((
+                    lowered_name,
+                    &extension.function,
+                    Some(self_type),
+                    !extension.static_,
+                ));
+            }
+            Item::Function(function) => {
+                let Some(name) = &function.name else {
+                    continue;
+                };
 
-        let Some(name) = &function.name else {
-            continue;
-        };
+                if name == "main" {
+                    continue;
+                }
 
-        if name == "main" {
-            continue;
-        }
-
-        if let Some(signature) =
-            lower_function_signature(function, &structs, &enums, &mut diagnostics)
-        {
-            signatures.insert(name.clone(), signature);
+                if let Some(signature) = lower_function_signature(
+                    function,
+                    None,
+                    false,
+                    &structs,
+                    &enums,
+                    &mut diagnostics,
+                ) {
+                    signatures.insert(name.clone(), signature);
+                    functions_to_lower.push((name.clone(), function, None, false));
+                }
+            }
+            Item::Import(_) | Item::Enum(_) => {}
         }
     }
 
     for _ in 0..signatures.len() {
         let mut changed = false;
 
-        for item in &program.items {
-            let Item::Function(function) = item else {
-                continue;
-            };
-            let Some(name) = &function.name else {
-                continue;
-            };
-
-            if name == "main" || function.return_type.is_some() {
+        for (name, function, self_type, has_self) in &functions_to_lower {
+            if function.return_type.is_some() {
                 continue;
             }
 
-            let Ok(Some(return_type)) =
-                infer_function_return_type(function, &signatures, &structs, &enums)
-            else {
+            let Ok(Some(return_type)) = infer_function_return_type(
+                function,
+                self_type.as_ref(),
+                *has_self,
+                &signatures,
+                &structs,
+                &enums,
+            ) else {
                 continue;
             };
             let Some(signature) = signatures.get_mut(name) else {
@@ -341,19 +500,19 @@ pub fn lower_program(program: &Program) -> Result<LoweredProgram, Vec<Diagnostic
         return Err(diagnostics);
     };
 
-    for item in &program.items {
-        let Item::Function(function) = item else {
-            continue;
-        };
-        let Some(name) = &function.name else {
-            continue;
-        };
-
-        if name == "main" || function.return_type.is_some() {
+    for (name, function, self_type, has_self) in &functions_to_lower {
+        if function.return_type.is_some() {
             continue;
         }
 
-        if let Err(conflict) = infer_function_return_type(function, &signatures, &structs, &enums) {
+        if let Err(conflict) = infer_function_return_type(
+            function,
+            self_type.as_ref(),
+            *has_self,
+            &signatures,
+            &structs,
+            &enums,
+        ) {
             has_return_type_conflict = true;
             diagnostics.push(Diagnostic::error(
                 conflict.span,
@@ -370,15 +529,8 @@ pub fn lower_program(program: &Program) -> Result<LoweredProgram, Vec<Diagnostic
         return Err(diagnostics);
     }
 
-    for item in &program.items {
-        let Item::Function(function) = item else {
-            continue;
-        };
-        let Some(name) = &function.name else {
-            continue;
-        };
-
-        if name == "main" || function.return_type.is_some() {
+    for (name, function, _, _) in &functions_to_lower {
+        if function.return_type.is_some() {
             continue;
         }
 
@@ -402,22 +554,17 @@ pub fn lower_program(program: &Program) -> Result<LoweredProgram, Vec<Diagnostic
 
     let mut functions = Vec::new();
 
-    for item in &program.items {
-        let Item::Function(function) = item else {
-            continue;
-        };
-
-        let Some(name) = &function.name else {
-            continue;
-        };
-
-        if name == "main" || !signatures.contains_key(name) {
-            continue;
-        }
-
-        if let Some(function) =
-            lower_function(function, &signatures, &structs, &enums, &mut diagnostics)
-        {
+    for (name, function, self_type, has_self) in &functions_to_lower {
+        if let Some(function) = lower_function(
+            function,
+            name,
+            self_type.as_ref(),
+            *has_self,
+            &signatures,
+            &structs,
+            &enums,
+            &mut diagnostics,
+        ) {
             functions.push(function);
         }
     }
@@ -536,13 +683,7 @@ fn lower_struct_definition(
                     type_,
                 });
             }
-            StructMember::Method(method) => {
-                diagnostics.push(Diagnostic::error(
-                    method.span,
-                    "methods are not supported in executable builds",
-                ));
-                can_lower = false;
-            }
+            StructMember::Method(_) | StructMember::StaticMethod(_) => {}
         }
     }
 
@@ -558,6 +699,8 @@ fn lower_struct_definition(
 
 fn lower_function_signature(
     function: &FunctionDecl,
+    self_type: Option<&LoweredType>,
+    has_self: bool,
     structs: &HashMap<String, LoweredStruct>,
     enums: &HashMap<String, LoweredEnum>,
     diagnostics: &mut Vec<Diagnostic>,
@@ -565,7 +708,11 @@ fn lower_function_signature(
     let mut params = Vec::new();
     let mut can_lower = true;
 
-    for param in &function.params {
+    for param in function
+        .params
+        .iter()
+        .filter(|param| !has_self || !is_self_param(param))
+    {
         let Some(type_ref) = &param.type_ref else {
             diagnostics.push(Diagnostic::error(
                 param.span,
@@ -575,8 +722,9 @@ fn lower_function_signature(
             continue;
         };
 
-        let Some(type_) = lower_value_type_ref(
+        let Some(type_) = lower_value_type_ref_in_context(
             type_ref,
+            self_type,
             structs,
             enums,
             diagnostics,
@@ -593,8 +741,9 @@ fn lower_function_signature(
     }
 
     let (return_type, return_type_known) = if let Some(return_type) = &function.return_type {
-        let Some(return_type) = lower_value_type_ref(
+        let Some(return_type) = lower_value_type_ref_in_context(
             return_type,
+            self_type,
             structs,
             enums,
             diagnostics,
@@ -612,10 +761,32 @@ fn lower_function_signature(
             params,
             return_type,
             return_type_known,
+            mutable_self: has_self && has_mutable_receiver(function),
         })
     } else {
         None
     }
+}
+
+fn lower_value_type_ref_in_context(
+    type_ref: &TypeRef,
+    self_type: Option<&LoweredType>,
+    structs: &HashMap<String, LoweredStruct>,
+    enums: &HashMap<String, LoweredEnum>,
+    diagnostics: &mut Vec<Diagnostic>,
+    message: &str,
+) -> Option<LoweredType> {
+    if type_ref.name == "Self" && type_ref.args.is_empty() {
+        return self_type.cloned().or_else(|| {
+            diagnostics.push(Diagnostic::error(
+                type_ref.span,
+                "`Self` is only available in methods and extension functions",
+            ));
+            None
+        });
+    }
+
+    lower_value_type_ref(type_ref, structs, enums, diagnostics, message)
 }
 
 fn lower_value_type_ref(
@@ -655,13 +826,26 @@ fn lower_value_type_ref(
 
 fn infer_function_return_type(
     function: &FunctionDecl,
+    self_type: Option<&LoweredType>,
+    has_self: bool,
     signatures: &HashMap<String, FunctionSignature>,
     structs: &HashMap<String, LoweredStruct>,
     enums: &HashMap<String, LoweredEnum>,
 ) -> Result<Option<LoweredType>, ReturnTypeConflict> {
     let mut locals = HashMap::new();
 
-    for param in &function.params {
+    if let Some(self_type) = self_type {
+        locals.insert("Self".to_string(), self_type.clone());
+        if has_self {
+            locals.insert("self".to_string(), self_type.clone());
+        }
+    }
+
+    for param in function
+        .params
+        .iter()
+        .filter(|param| !has_self || !is_self_param(param))
+    {
         let Some(type_ref) = param.type_ref.as_ref() else {
             return Ok(None);
         };
@@ -870,8 +1054,18 @@ fn infer_expr_type(
             BasicType::I32
         })),
         ExprKind::Identifier(name) => locals.get(name).cloned(),
-        ExprKind::StructInit { name, .. } if structs.contains_key(name) => {
-            Some(LoweredType::Struct(name.clone()))
+        ExprKind::StructInit { name, .. } => {
+            let name = if name == "Self" {
+                let LoweredType::Struct(name) = locals.get("Self")? else {
+                    return None;
+                };
+                name
+            } else {
+                name
+            };
+            structs
+                .contains_key(name)
+                .then(|| LoweredType::Struct(name.clone()))
         }
         ExprKind::Member { object, name } => {
             if let ExprKind::Identifier(enum_name) = &object.kind
@@ -907,6 +1101,23 @@ fn infer_expr_type(
                 return Some(LoweredType::Enum(enum_name.clone()));
             }
 
+            if let ExprKind::Member { object, name } = &callee.kind
+                && let Some(type_) = infer_type_expression(object, locals, structs, enums)
+            {
+                return signatures
+                    .get(&callable_static_name(&type_, name, signatures)?)
+                    .filter(|signature| signature.return_type_known)
+                    .map(|signature| signature.return_type.clone());
+            }
+
+            if let ExprKind::Member { object, name } = &callee.kind {
+                let object_type = infer_expr_type(object, locals, signatures, structs, enums)?;
+                return signatures
+                    .get(&callable_method_name(&object_type, name, signatures)?)
+                    .filter(|signature| signature.return_type_known)
+                    .map(|signature| signature.return_type.clone());
+            }
+
             let ExprKind::Identifier(name) = &callee.kind else {
                 return None;
             };
@@ -916,10 +1127,7 @@ fn infer_expr_type(
                 .filter(|signature| signature.return_type_known)
                 .map(|signature| signature.return_type.clone())
         }
-        ExprKind::Array(_)
-        | ExprKind::StructInit { .. }
-        | ExprKind::Lambda(_)
-        | ExprKind::Missing => None,
+        ExprKind::Array(_) | ExprKind::Lambda(_) | ExprKind::Missing => None,
         ExprKind::Match { branches, .. } => branches.iter().find_map(|branch| {
             let MatchBranchBody::Expr(expr) = &branch.body else {
                 return None;
@@ -932,14 +1140,91 @@ fn infer_expr_type(
     }
 }
 
+fn infer_type_expression(
+    expr: &Expr,
+    locals: &HashMap<String, LoweredType>,
+    structs: &HashMap<String, LoweredStruct>,
+    enums: &HashMap<String, LoweredEnum>,
+) -> Option<LoweredType> {
+    let ExprKind::Identifier(name) = &expr.kind else {
+        return None;
+    };
+
+    if name == "Self" {
+        return locals.get(name).cloned();
+    }
+    if locals.contains_key(name) {
+        return None;
+    }
+    if let Some(type_) = BasicType::from_name(name) {
+        Some(LoweredType::Basic(type_))
+    } else if structs.contains_key(name) {
+        Some(LoweredType::Struct(name.clone()))
+    } else if enums.contains_key(name) {
+        Some(LoweredType::Enum(name.clone()))
+    } else {
+        None
+    }
+}
+
+fn lower_type_expression(
+    expr: &Expr,
+    locals: &HashMap<String, LoweringLocal>,
+    structs: &HashMap<String, LoweredStruct>,
+    enums: &HashMap<String, LoweredEnum>,
+) -> Option<LoweredType> {
+    let ExprKind::Identifier(name) = &expr.kind else {
+        return None;
+    };
+
+    if name == "Self" {
+        return locals.get(name).map(|local| local.type_.clone());
+    }
+    if locals.contains_key(name) {
+        return None;
+    }
+    if let Some(type_) = BasicType::from_name(name) {
+        Some(LoweredType::Basic(type_))
+    } else if structs.contains_key(name) {
+        Some(LoweredType::Struct(name.clone()))
+    } else if enums.contains_key(name) {
+        Some(LoweredType::Enum(name.clone()))
+    } else {
+        None
+    }
+}
+
+fn expression_has_mutable_capability(expr: &Expr, locals: &HashMap<String, LoweringLocal>) -> bool {
+    match &expr.kind {
+        ExprKind::Identifier(name) => locals.get(name).is_some_and(|local| local.mutable),
+        ExprKind::Member { object, .. } => expression_has_mutable_capability(object, locals),
+        ExprKind::StructInit { .. }
+        | ExprKind::String(_)
+        | ExprKind::Number(_)
+        | ExprKind::Bool(_)
+        | ExprKind::Binary { .. }
+        | ExprKind::Unary { .. } => true,
+        ExprKind::Call { callee, .. } => {
+            matches!(&callee.kind, ExprKind::Member { name, .. } if name == "clone")
+        }
+        ExprKind::Array(_)
+        | ExprKind::Lambda(_)
+        | ExprKind::Match { .. }
+        | ExprKind::PostfixIncrement(_)
+        | ExprKind::Missing => false,
+    }
+}
+
 fn lower_function(
     function: &FunctionDecl,
+    name: &str,
+    self_type: Option<&LoweredType>,
+    has_self: bool,
     signatures: &HashMap<String, FunctionSignature>,
     structs: &HashMap<String, LoweredStruct>,
     enums: &HashMap<String, LoweredEnum>,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> Option<LoweredFunction> {
-    let name = function.name.as_ref()?;
     let signature = signatures.get(name)?;
 
     let mut locals = HashMap::new();
@@ -947,7 +1232,43 @@ fn lower_function(
     let mut statements = Vec::new();
     let mut return_value = None;
 
-    for (param, signature_param) in function.params.iter().zip(&signature.params) {
+    if let Some(self_type) = self_type {
+        locals.insert(
+            "Self".to_string(),
+            LoweringLocal {
+                type_: self_type.clone(),
+                mutable: false,
+                replacement: None,
+            },
+        );
+    }
+
+    let signature_params = if has_self {
+        let self_type = self_type?;
+        let self_param = signature.params.first()?;
+        locals.insert(
+            "self".to_string(),
+            LoweringLocal {
+                type_: self_type.clone(),
+                mutable: signature.mutable_self,
+                replacement: None,
+            },
+        );
+        params.push(LoweredParam {
+            name: "self".to_string(),
+            type_: self_param.type_.clone(),
+        });
+        &signature.params[1..]
+    } else {
+        &signature.params[..]
+    };
+
+    for (param, signature_param) in function
+        .params
+        .iter()
+        .filter(|param| !has_self || !is_self_param(param))
+        .zip(signature_params)
+    {
         if locals
             .insert(
                 param.name.clone(),
@@ -1083,7 +1404,7 @@ fn lower_function(
     }
 
     Some(LoweredFunction {
-        name: name.clone(),
+        name: name.to_string(),
         params,
         return_type: signature.return_type.clone(),
         statements,
@@ -1602,6 +1923,18 @@ fn lower_local_statement(
             ));
             can_lower = false;
             None
+        } else if type_annotation.name == "Self" {
+            locals
+                .get("Self")
+                .map(|local| local.type_.clone())
+                .or_else(|| {
+                    diagnostics.push(Diagnostic::error(
+                        type_annotation.span,
+                        "`Self` is only available in methods and extension functions",
+                    ));
+                    can_lower = false;
+                    None
+                })
         } else if let Some(type_) = BasicType::from_name(&type_annotation.name) {
             Some(LoweredType::Basic(type_))
         } else if structs.contains_key(&type_annotation.name) {
@@ -1797,6 +2130,21 @@ fn lower_struct_init(
     enums: &HashMap<String, LoweredEnum>,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> Option<LoweredExpr> {
+    let resolved_name = if name == "Self" {
+        match locals.get("Self").map(|local| &local.type_) {
+            Some(LoweredType::Struct(name)) => name.as_str(),
+            _ => {
+                diagnostics.push(Diagnostic::error(
+                    expr.span,
+                    "`Self` does not name a struct in this executable build",
+                ));
+                return None;
+            }
+        }
+    } else {
+        name
+    };
+    let name = resolved_name;
     let Some(struct_) = structs.get(name) else {
         diagnostics.push(Diagnostic::error(
             expr.span,
@@ -2509,6 +2857,153 @@ fn lower_expr(
                         enum_name: enum_name.clone(),
                         variant: name.clone(),
                         payload,
+                    },
+                }
+            } else if let ExprKind::Member { object, name } = &callee.kind
+                && let Some(type_) = lower_type_expression(object, locals, structs, enums)
+            {
+                let Some(lowered_name) = callable_static_name(&type_, name, signatures) else {
+                    diagnostics.push(Diagnostic::error(
+                        expr.span,
+                        format!(
+                            "unknown static function `{name}` for type `{}` in executable build",
+                            type_.name()
+                        ),
+                    ));
+                    return None;
+                };
+                let Some(signature) = signatures.get(&lowered_name) else {
+                    unreachable!("resolved static function must have a signature")
+                };
+
+                if args.len() != signature.params.len() {
+                    diagnostics.push(Diagnostic::error(
+                        expr.span,
+                        format!(
+                            "static function `{}.{name}` expects {} arguments, got {}",
+                            type_.name(),
+                            signature.params.len(),
+                            args.len()
+                        ),
+                    ));
+                    return None;
+                }
+
+                let mut lowered_args = Vec::new();
+                for (arg, param) in args.iter().zip(&signature.params) {
+                    if let Some(arg) = lower_expr(
+                        arg,
+                        locals,
+                        signatures,
+                        structs,
+                        enums,
+                        diagnostics,
+                        Some(param.type_.clone()),
+                        "expected supported static function argument in executable builds",
+                    ) {
+                        lowered_args.push(arg);
+                    }
+                }
+                if lowered_args.len() != args.len() {
+                    return None;
+                }
+
+                LoweredExpr {
+                    type_: signature.return_type.clone(),
+                    kind: LoweredExprKind::Call {
+                        name: lowered_name,
+                        args: lowered_args,
+                    },
+                }
+            } else if let ExprKind::Member { object, name } = &callee.kind {
+                let receiver_has_mutable_capability =
+                    expression_has_mutable_capability(object, locals);
+                let receiver_binding = mutable_member_root(object).map(str::to_string);
+                let receiver_span = object.span;
+                let object = lower_expr(
+                    object,
+                    locals,
+                    signatures,
+                    structs,
+                    enums,
+                    diagnostics,
+                    None,
+                    "expected supported method receiver in executable builds",
+                )?;
+                let Some(lowered_name) = callable_method_name(&object.type_, name, signatures)
+                else {
+                    diagnostics.push(Diagnostic::error(
+                        callee.span,
+                        format!(
+                            "unknown method `{name}` for type `{}` in executable build",
+                            object.type_.name()
+                        ),
+                    ));
+                    return None;
+                };
+                let Some(signature) = signatures.get(&lowered_name) else {
+                    unreachable!("resolved method must have a signature")
+                };
+                let params = &signature.params[1..];
+
+                if signature.mutable_self && !receiver_has_mutable_capability {
+                    let qualified_name = format!("{}.{name}", object.type_.name());
+                    let message = if let Some(binding_name) = receiver_binding
+                        && locals
+                            .get(&binding_name)
+                            .is_some_and(|local| !local.mutable)
+                    {
+                        format!(
+                            "cannot call mutable function `{qualified_name}` through immutable binding `{binding_name}`; declare it with `let mut {binding_name}` or call the function on a mutable clone"
+                        )
+                    } else {
+                        format!(
+                            "mutable function `{qualified_name}` requires a mutable receiver; bind the value with `let mut` or call the function on a mutable clone"
+                        )
+                    };
+                    diagnostics.push(Diagnostic::error(receiver_span, message));
+                    return None;
+                }
+
+                if args.len() != params.len() {
+                    diagnostics.push(Diagnostic::error(
+                        expr.span,
+                        format!(
+                            "method `{}.{name}` expects {} arguments, got {}",
+                            object.type_.name(),
+                            params.len(),
+                            args.len()
+                        ),
+                    ));
+                    return None;
+                }
+
+                let mut lowered_args = vec![object];
+
+                for (arg, param) in args.iter().zip(params) {
+                    if let Some(arg) = lower_expr(
+                        arg,
+                        locals,
+                        signatures,
+                        structs,
+                        enums,
+                        diagnostics,
+                        Some(param.type_.clone()),
+                        "expected supported method argument in executable builds",
+                    ) {
+                        lowered_args.push(arg);
+                    }
+                }
+
+                if lowered_args.len() != args.len() + 1 {
+                    return None;
+                }
+
+                LoweredExpr {
+                    type_: signature.return_type.clone(),
+                    kind: LoweredExprKind::Call {
+                        name: lowered_name,
+                        args: lowered_args,
                     },
                 }
             } else {
