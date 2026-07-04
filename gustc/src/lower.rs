@@ -62,7 +62,7 @@ pub enum LoweredStatement {
         value: LoweredExpr,
     },
     Assignment {
-        name: String,
+        target: LoweredExpr,
         value: LoweredExpr,
     },
     Println(LoweredExpr),
@@ -191,21 +191,35 @@ pub fn lower_program(program: &Program) -> Result<LoweredProgram, Vec<Diagnostic
     let mut has_unresolved_return_type = false;
 
     for item in &program.items {
-        if let Item::Enum(item) = item {
-            enums.insert(
-                item.name.clone(),
-                LoweredEnum {
-                    name: item.name.clone(),
-                    variants: Vec::new(),
-                },
-            );
+        match item {
+            Item::Enum(item) => {
+                enums.insert(
+                    item.name.clone(),
+                    LoweredEnum {
+                        name: item.name.clone(),
+                        variants: Vec::new(),
+                    },
+                );
+            }
+            Item::Struct(item) => {
+                structs.insert(
+                    item.name.clone(),
+                    LoweredStruct {
+                        name: item.name.clone(),
+                        fields: Vec::new(),
+                    },
+                );
+            }
+            Item::Import(_) | Item::Function(_) => {}
         }
     }
 
     for item in &program.items {
         match item {
             Item::Struct(item) => {
-                if let Some(struct_) = lower_struct_definition(item, &enums, &mut diagnostics) {
+                if let Some(struct_) =
+                    lower_struct_definition(item, &structs, &enums, &mut diagnostics)
+                {
                     structs.insert(item.name.clone(), struct_);
                 }
             }
@@ -461,6 +475,7 @@ fn lower_enum_definition(
 
 fn lower_struct_definition(
     item: &StructDecl,
+    structs: &HashMap<String, LoweredStruct>,
     enums: &HashMap<String, LoweredEnum>,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> Option<LoweredStruct> {
@@ -481,10 +496,10 @@ fn lower_struct_definition(
 
                 let Some(type_) = lower_value_type_ref(
                     &field.type_ref,
-                    &HashMap::new(),
+                    structs,
                     enums,
                     diagnostics,
-                    "struct fields only support basic and known enum types in executable builds",
+                    "struct fields only support basic and known struct or enum types in executable builds",
                 ) else {
                     can_lower = false;
                     continue;
@@ -1561,28 +1576,54 @@ fn lower_assignment_statement(
     let StmtKind::Assign { target, op, value } = &statement.kind else {
         return None;
     };
-    let ExprKind::Identifier(name) = &target.kind else {
-        diagnostics.push(Diagnostic::error(
-            target.span,
-            "assignment target must be a mutable local binding in executable builds",
-        ));
-        return None;
+    let binding_name = match &target.kind {
+        ExprKind::Identifier(name) => name,
+        ExprKind::Member { object, .. } => {
+            let Some(name) = mutable_member_root(object) else {
+                diagnostics.push(Diagnostic::error(
+                    target.span,
+                    "field assignment target must be rooted in a mutable local struct binding in executable builds",
+                ));
+                return None;
+            };
+            name
+        }
+        _ => {
+            diagnostics.push(Diagnostic::error(
+                target.span,
+                "assignment target must be a mutable local binding in executable builds",
+            ));
+            return None;
+        }
     };
-    let Some(local) = locals.get(name) else {
+    let Some(local) = locals.get(binding_name) else {
         diagnostics.push(Diagnostic::error(
             target.span,
-            format!("unknown local `{name}` in executable build"),
+            format!("unknown local `{binding_name}` in executable build"),
         ));
         return None;
     };
 
     if !local.mutable {
-        diagnostics.push(Diagnostic::error(
-            target.span,
-            format!("cannot assign to immutable binding `{name}` in executable build"),
-        ));
+        let message = if matches!(target.kind, ExprKind::Member { .. }) {
+            format!("cannot mutate field of immutable binding `{binding_name}` in executable build")
+        } else {
+            format!("cannot assign to immutable binding `{binding_name}` in executable build")
+        };
+        diagnostics.push(Diagnostic::error(target.span, message));
         return None;
     }
+
+    let lowered_target = lower_expr(
+        target,
+        locals,
+        signatures,
+        structs,
+        enums,
+        diagnostics,
+        None,
+        "expected supported assignment target in executable builds",
+    )?;
 
     let compound_value;
     let value = if let Some(op) = op {
@@ -1605,12 +1646,12 @@ fn lower_assignment_statement(
         structs,
         enums,
         diagnostics,
-        Some(local.type_.clone()),
+        Some(lowered_target.type_.clone()),
         "expected supported assignment value in executable builds",
     )?;
 
     Some(LoweredStatement::Assignment {
-        name: name.clone(),
+        target: lowered_target,
         value,
     })
 }
@@ -1753,17 +1794,30 @@ fn lower_expr(
             return None;
         }
         ExprKind::PostfixIncrement(target) => {
-            let ExprKind::Identifier(name) = &target.kind else {
-                diagnostics.push(Diagnostic::error(
-                    target.span,
-                    "increment target must be a mutable local binding in executable builds",
-                ));
-                return None;
+            let binding_name = match &target.kind {
+                ExprKind::Identifier(name) => name,
+                ExprKind::Member { object, .. } => {
+                    let Some(name) = mutable_member_root(object) else {
+                        diagnostics.push(Diagnostic::error(
+                            target.span,
+                            "increment target must be rooted in a mutable local struct binding in executable builds",
+                        ));
+                        return None;
+                    };
+                    name
+                }
+                _ => {
+                    diagnostics.push(Diagnostic::error(
+                        target.span,
+                        "increment target must be a mutable local binding in executable builds",
+                    ));
+                    return None;
+                }
             };
-            let Some(local) = locals.get(name) else {
+            let Some(local) = locals.get(binding_name) else {
                 diagnostics.push(Diagnostic::error(
                     target.span,
-                    format!("unknown local `{name}` in executable build"),
+                    format!("unknown local `{binding_name}` in executable build"),
                 ));
                 return None;
             };
@@ -1771,28 +1825,36 @@ fn lower_expr(
             if !local.mutable {
                 diagnostics.push(Diagnostic::error(
                     target.span,
-                    format!("cannot mutate immutable binding `{name}` in executable build"),
+                    format!("cannot mutate immutable binding `{binding_name}` in executable build"),
                 ));
                 return None;
             }
 
-            if !matches!(&local.type_, LoweredType::Basic(type_) if type_.is_numeric()) {
+            let target = lower_expr(
+                target,
+                locals,
+                signatures,
+                structs,
+                enums,
+                diagnostics,
+                None,
+                "expected supported increment target in executable builds",
+            )?;
+
+            if !matches!(&target.type_, LoweredType::Basic(type_) if type_.is_numeric()) {
                 diagnostics.push(Diagnostic::error(
                     expr.span,
                     format!(
                         "operator ++ does not support values of type `{}` in executable builds",
-                        local.type_.name()
+                        target.type_.name()
                     ),
                 ));
                 return None;
             }
 
             LoweredExpr {
-                type_: local.type_.clone(),
-                kind: LoweredExprKind::PostfixIncrement(Box::new(LoweredExpr {
-                    type_: local.type_.clone(),
-                    kind: LoweredExprKind::Local(name.clone()),
-                })),
+                type_: target.type_.clone(),
+                kind: LoweredExprKind::PostfixIncrement(Box::new(target)),
             }
         }
         ExprKind::Unary {
@@ -2481,6 +2543,14 @@ fn find_qualified_variant<'a>(
         .variants
         .iter()
         .find(|variant| variant.name == variant_name)
+}
+
+fn mutable_member_root(expr: &Expr) -> Option<&str> {
+    match &expr.kind {
+        ExprKind::Identifier(name) => Some(name),
+        ExprKind::Member { object, .. } => mutable_member_root(object),
+        _ => None,
+    }
 }
 
 fn number_pair_contains_float(left: &Expr, right: &Expr) -> bool {

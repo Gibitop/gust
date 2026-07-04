@@ -1009,6 +1009,211 @@ fn main() {
 }
 
 #[test]
+fn mutable_struct_fields_can_be_assigned_compounded_and_incremented() {
+    let result = check_source(
+        r#"
+struct State {
+    count: u32
+    flags: u8
+    label: String
+}
+
+fn main() {
+    let mut state = State {
+        count: 20,
+        flags: 1,
+        label: "state",
+    }
+    state.count = 24
+    state.count += 4
+    state.count -= 2
+    state.count *= 3
+    state.count /= 2
+    state.count %= 5
+    state.count++
+    state.flags |= 2
+    state.flags &= 3
+    state.flags ^= 1
+    state.flags <<= 2
+    state.flags >>= 1
+    state.label += " updated"
+}
+"#,
+    );
+
+    assert!(
+        !result.has_errors(),
+        "expected mutable struct field operations to validate, got {:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
+fn struct_field_mutation_requires_a_mutable_binding() {
+    let result = check_source(
+        r#"
+struct State {
+    count: u32
+}
+
+fn main() {
+    let state = State { count: 1 }
+    state.count = 2
+    state.count++
+}
+"#,
+    );
+
+    assert_eq!(
+        result
+            .diagnostics
+            .iter()
+            .filter(|diagnostic| diagnostic
+                .message
+                .contains("cannot mutate field of immutable binding `state`"))
+            .count(),
+        2,
+        "expected immutable-field errors, got {:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
+fn struct_field_mutation_uses_field_type_rules() {
+    let result = check_source(
+        r#"
+struct State {
+    count: u32
+    enabled: bool
+}
+
+fn main() {
+    let mut state = State {
+        count: 1,
+        enabled: true,
+    }
+    state.count = "many"
+    state.enabled++
+}
+"#,
+    );
+
+    assert!(
+        result.diagnostics.iter().any(|diagnostic| diagnostic
+            .message
+            .contains("expected value of type `u32`, got `String`")),
+        "expected field assignment type error, got {:?}",
+        result.diagnostics
+    );
+    assert!(
+        result.diagnostics.iter().any(|diagnostic| diagnostic
+            .message
+            .contains("operator ++ only supports numeric operands, got `bool`")),
+        "expected field increment type error, got {:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
+fn struct_field_mutation_rejects_computed_struct_values() {
+    let result = check_source(
+        r#"
+struct State {
+    count: u32
+}
+
+fn makeState(): State {
+    return State { count: 1 }
+}
+
+fn main() {
+    makeState().count = 2
+    makeState().count++
+}
+"#,
+    );
+
+    assert!(
+        result.diagnostics.iter().any(|diagnostic| diagnostic
+            .message
+            .contains("field assignment target must be rooted in")),
+        "expected rooted-field assignment error, got {:?}",
+        result.diagnostics
+    );
+    assert!(
+        result.diagnostics.iter().any(|diagnostic| diagnostic
+            .message
+            .contains("increment target must be rooted in")),
+        "expected rooted-field increment error, got {:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
+fn nested_struct_fields_can_be_mutated_through_a_mutable_root() {
+    let result = check_source(
+        r#"
+struct State {
+    flags: Flags
+}
+
+struct Flags {
+    enabled: bool
+    count: u32
+}
+
+fn main() {
+    let mut state = State {
+        flags: Flags {
+            enabled: false,
+            count: 1,
+        },
+    }
+    state.flags.enabled = true
+    state.flags.count += 2
+    state.flags.count++
+}
+"#,
+    );
+
+    assert!(
+        !result.has_errors(),
+        "expected nested struct field mutation to validate, got {:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
+fn nested_struct_field_mutation_requires_a_mutable_root() {
+    let result = check_source(
+        r#"
+struct State {
+    flags: Flags
+}
+
+struct Flags {
+    enabled: bool
+}
+
+fn main() {
+    let state = State {
+        flags: Flags { enabled: false },
+    }
+    state.flags.enabled = true
+}
+"#,
+    );
+
+    assert!(
+        result.diagnostics.iter().any(|diagnostic| diagnostic
+            .message
+            .contains("cannot mutate field of immutable binding `state`")),
+        "expected immutable-root error, got {:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
 fn arithmetic_compound_assignments_validate() {
     let result = check_source(
         r#"

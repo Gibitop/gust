@@ -1044,6 +1044,92 @@ fn mutable_local_assignment_and_increment_emit_c() {
 }
 
 #[test]
+fn mutable_struct_field_operations_emit_c() {
+    let result = check_source(
+        r#"struct State {
+    count: u32
+    flags: u8
+    label: String
+}
+
+fn main() {
+    let mut state = State {
+        count: 1,
+        flags: 1,
+        label: "state",
+    }
+    state.count = 2
+    state.count += 3
+    state.flags |= 2
+    state.label += " updated"
+    state.count++
+}"#,
+    );
+
+    assert!(
+        !result.has_errors(),
+        "expected no frontend errors, got {:?}",
+        result.diagnostics
+    );
+
+    let lowered = lower_program(&result.program).expect("mutable struct fields should lower");
+    let source = emit_c(&lowered);
+
+    assert!(source.contains("gust_state.gust_count = 2;"));
+    assert!(source.contains("gust_state.gust_count = (gust_state.gust_count + 3);"));
+    assert!(source.contains("gust_state.gust_flags = (gust_state.gust_flags | 2);"));
+    assert!(source.contains(
+        "gust_state.gust_label = gust_rt_string_concat(gust_state.gust_label, \" updated\");"
+    ));
+    assert!(source.contains("(gust_state.gust_count++);"));
+}
+
+#[test]
+fn nested_struct_fields_and_mutation_emit_c_in_dependency_order() {
+    let result = check_source(
+        r#"struct State {
+    flags: Flags
+}
+
+struct Flags {
+    enabled: bool
+    count: u32
+}
+
+fn main() {
+    let mut state = State {
+        flags: Flags {
+            enabled: false,
+            count: 1,
+        },
+    }
+    state.flags.enabled = true
+    state.flags.count += 2
+    state.flags.count++
+}"#,
+    );
+
+    assert!(
+        !result.has_errors(),
+        "expected no frontend errors, got {:?}",
+        result.diagnostics
+    );
+
+    let lowered = lower_program(&result.program).expect("nested struct fields should lower");
+    let source = emit_c(&lowered);
+    let flags_position = source.find("// Gust struct: Flags").unwrap();
+    let state_position = source.find("// Gust struct: State").unwrap();
+
+    assert!(flags_position < state_position);
+    assert!(source.contains("gust_state.gust_flags.gust_enabled = true;"));
+    assert!(
+        source
+            .contains("gust_state.gust_flags.gust_count = (gust_state.gust_flags.gust_count + 2);")
+    );
+    assert!(source.contains("(gust_state.gust_flags.gust_count++);"));
+}
+
+#[test]
 fn compound_assignments_emit_c() {
     let result = check_source(
         r#"fn main() {

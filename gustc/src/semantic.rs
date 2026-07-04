@@ -265,18 +265,7 @@ impl Analyzer {
                     for member in &item.members {
                         match member {
                             StructMember::Field(field) => {
-                                let type_ = self.validate_type(&field.type_ref);
-
-                                if matches!(type_, Type::Struct(_))
-                                    || (matches!(type_, Type::Unknown)
-                                        && BasicType::from_name(&field.type_ref.name).is_none()
-                                        && self.types.contains(&field.type_ref.name))
-                                {
-                                    self.diagnostics.push(Diagnostic::error(
-                                        field.span,
-                                        "struct fields only support basic types for now",
-                                    ));
-                                }
+                                self.validate_type(&field.type_ref);
                             }
                             StructMember::Method(method) => {
                                 self.unsupported(
@@ -385,12 +374,7 @@ impl Analyzer {
             }
             StmtKind::Assign { target, op, value } => {
                 if matches!(target.kind, ExprKind::Member { .. }) {
-                    self.unsupported(
-                        target.span,
-                        "member assignment is parsed but field mutation lowering is not implemented yet",
-                    );
-                    self.validate_expr(target);
-                    self.validate_expr(value);
+                    self.validate_member_assignment(statement.span, target, *op, value);
                     return;
                 }
 
@@ -417,34 +401,13 @@ impl Analyzer {
                     ));
                 }
 
-                let value_type = if let Some(op) = op {
-                    if matches!(
-                        op,
-                        BinaryOp::BitwiseAnd
-                            | BinaryOp::BitwiseOr
-                            | BinaryOp::BitwiseXor
-                            | BinaryOp::ShiftLeft
-                            | BinaryOp::ShiftRight
-                    ) {
-                        self.validate_bitwise(
-                            statement.span,
-                            target,
-                            *op,
-                            value,
-                            Some(binding.type_.clone()),
-                        )
-                    } else {
-                        self.validate_arithmetic(
-                            statement.span,
-                            target,
-                            *op,
-                            value,
-                            Some(binding.type_.clone()),
-                        )
-                    }
-                } else {
-                    self.validate_expr_with_context(value, Some(binding.type_.clone()))
-                };
+                let value_type = self.validate_assignment_value(
+                    statement.span,
+                    target,
+                    *op,
+                    value,
+                    binding.type_.clone(),
+                );
                 self.report_type_mismatch(value.span, binding.type_, value_type);
             }
             StmtKind::Return { value } => {
@@ -761,12 +724,7 @@ impl Analyzer {
             }
             ExprKind::PostfixIncrement(target) => {
                 if matches!(target.kind, ExprKind::Member { .. }) {
-                    self.unsupported(
-                        target.span,
-                        "member increment is parsed but field mutation lowering is not implemented yet",
-                    );
-                    self.validate_expr(target);
-                    return Type::Unknown;
+                    return self.validate_member_increment(expr.span, target);
                 }
 
                 let ExprKind::Identifier(name) = &target.kind else {
@@ -805,6 +763,116 @@ impl Analyzer {
                     Type::Unknown
                 }
             }
+        }
+    }
+
+    fn validate_member_assignment(
+        &mut self,
+        span: Span,
+        target: &Expr,
+        op: Option<BinaryOp>,
+        value: &Expr,
+    ) {
+        let ExprKind::Member { object, .. } = &target.kind else {
+            return;
+        };
+        let Some(binding_name) = mutable_member_root(object) else {
+            self.validate_expr(target);
+            self.validate_expr(value);
+            self.diagnostics.push(Diagnostic::error(
+                target.span,
+                "field assignment target must be rooted in a mutable local struct binding",
+            ));
+            return;
+        };
+        let Some(binding) = self.lookup(binding_name) else {
+            self.validate_expr(target);
+            self.validate_expr(value);
+            return;
+        };
+
+        if !binding.mutable {
+            self.diagnostics.push(Diagnostic::error(
+                target.span,
+                format!("cannot mutate field of immutable binding `{binding_name}`"),
+            ));
+        }
+
+        let field_type = self.validate_expr(target);
+        if matches!(field_type, Type::Unknown) {
+            self.validate_expr(value);
+            return;
+        }
+
+        let value_type =
+            self.validate_assignment_value(span, target, op, value, field_type.clone());
+        self.report_type_mismatch(value.span, field_type, value_type);
+    }
+
+    fn validate_assignment_value(
+        &mut self,
+        span: Span,
+        target: &Expr,
+        op: Option<BinaryOp>,
+        value: &Expr,
+        expected_type: Type,
+    ) -> Type {
+        if let Some(op) = op {
+            if matches!(
+                op,
+                BinaryOp::BitwiseAnd
+                    | BinaryOp::BitwiseOr
+                    | BinaryOp::BitwiseXor
+                    | BinaryOp::ShiftLeft
+                    | BinaryOp::ShiftRight
+            ) {
+                self.validate_bitwise(span, target, op, value, Some(expected_type))
+            } else {
+                self.validate_arithmetic(span, target, op, value, Some(expected_type))
+            }
+        } else {
+            self.validate_expr_with_context(value, Some(expected_type))
+        }
+    }
+
+    fn validate_member_increment(&mut self, span: Span, target: &Expr) -> Type {
+        let ExprKind::Member { object, .. } = &target.kind else {
+            return Type::Unknown;
+        };
+        let Some(binding_name) = mutable_member_root(object) else {
+            self.validate_expr(target);
+            self.diagnostics.push(Diagnostic::error(
+                target.span,
+                "increment target must be rooted in a mutable local struct binding",
+            ));
+            return Type::Unknown;
+        };
+        let Some(binding) = self.lookup(binding_name) else {
+            self.validate_expr(target);
+            return Type::Unknown;
+        };
+
+        if !binding.mutable {
+            self.diagnostics.push(Diagnostic::error(
+                span,
+                format!("cannot mutate field of immutable binding `{binding_name}`"),
+            ));
+        }
+
+        let field_type = self.validate_expr(target);
+        if matches!(&field_type, Type::Basic(type_) if type_.is_numeric()) {
+            field_type
+        } else if matches!(field_type, Type::Unknown) {
+            Type::Unknown
+        } else {
+            self.diagnostics.push(Diagnostic::error(
+                span,
+                format!(
+                    "operator ++ only supports numeric operands, got `{}`",
+                    field_type.name()
+                ),
+            ));
+            Type::Unknown
         }
     }
 
@@ -1427,6 +1495,14 @@ fn is_stable_match_value(expr: &Expr) -> bool {
         ExprKind::Identifier(_) => true,
         ExprKind::Member { object, .. } => is_stable_match_value(object),
         _ => false,
+    }
+}
+
+fn mutable_member_root(expr: &Expr) -> Option<&str> {
+    match &expr.kind {
+        ExprKind::Identifier(name) => Some(name),
+        ExprKind::Member { object, .. } => mutable_member_root(object),
+        _ => None,
     }
 }
 
