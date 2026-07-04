@@ -1,0 +1,9 @@
+struct Greeter {
+    name: String
+}
+
+fn punctuation(): String => "!"
+
+fn greeting(greeter: Greeter): String {
+    return "Hello, " + greeter.name + punctuation()
+}
