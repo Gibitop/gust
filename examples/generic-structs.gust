@@ -1,0 +1,36 @@
+struct Box<T> {
+    value: T
+
+    fn get(): T {
+        return self.value
+    }
+
+    fn replace(mut self, value: T) {
+        self.value = value
+    }
+}
+
+struct Pair<T> {
+    first: T
+    second: T
+}
+
+fn main() {
+    let mut number = Box<i32> {
+        value: 42,
+    }
+    let message = Box<String> {
+        value: "Generics work!",
+    }
+    let nested = Box<Pair<i32>> {
+        value: Pair<i32> {
+            first: 1,
+            second: 2,
+        },
+    }
+
+    number.replace(43)
+    io.println(number.get().toString())
+    io.println(message.get())
+    io.println(nested.get().second.toString())
+}

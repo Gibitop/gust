@@ -3,6 +3,7 @@ pub mod c_codegen;
 pub mod diagnostic;
 pub mod lexer;
 pub mod lower;
+pub mod monomorphize;
 pub mod parser;
 pub mod project;
 pub mod semantic;

@@ -111,6 +111,7 @@ impl Parser {
     fn parse_enum(&mut self) -> EnumDecl {
         let start = self.expect_keyword(Keyword::Enum, "`enum`").span;
         let name = self.expect_identifier("expected enum name");
+        let type_params = self.parse_type_params();
         self.expect_kind(&TokenKind::LeftBrace, "`{`");
 
         let mut variants = Vec::new();
@@ -138,6 +139,7 @@ impl Parser {
 
         EnumDecl {
             name,
+            type_params,
             variants,
             span: start.join(end),
         }
@@ -146,6 +148,7 @@ impl Parser {
     fn parse_struct(&mut self) -> StructDecl {
         let start = self.expect_keyword(Keyword::Struct, "`struct`").span;
         let name = self.expect_identifier("expected struct name");
+        let type_params = self.parse_type_params();
         self.expect_kind(&TokenKind::LeftBrace, "`{`");
 
         let mut members = Vec::new();
@@ -189,9 +192,27 @@ impl Parser {
 
         StructDecl {
             name,
+            type_params,
             members,
             span: start.join(end),
         }
+    }
+
+    fn parse_type_params(&mut self) -> Vec<String> {
+        let mut params = Vec::new();
+        if !self.match_kind(&TokenKind::Less) {
+            return params;
+        }
+
+        while !self.at_eof() && !self.check_type_greater() {
+            params.push(self.expect_identifier("expected type parameter name"));
+            if !self.match_kind(&TokenKind::Comma) {
+                break;
+            }
+        }
+
+        self.expect_type_greater();
+        params
     }
 
     fn parse_function(&mut self, named: bool) -> FunctionDecl {
@@ -548,9 +569,26 @@ impl Parser {
                     span: expr.span.join(self.previous_span()),
                     kind: ExprKind::PostfixIncrement(Box::new(expr)),
                 };
-            } else if self.allow_struct_init && self.check_kind(&TokenKind::LeftBrace) {
+            } else if self.allow_struct_init
+                && (self.check_kind(&TokenKind::LeftBrace) || self.check_kind(&TokenKind::Less))
+            {
                 if let Some(name) = expression_path(&expr) {
-                    expr = self.parse_struct_init(name, expr.span);
+                    let position = self.position;
+                    let diagnostic_count = self.diagnostics.len();
+                    let args = if self.check_kind(&TokenKind::Less) {
+                        self.parse_type_args()
+                    } else {
+                        Some(Vec::new())
+                    };
+                    if let Some(args) = args
+                        && self.check_kind(&TokenKind::LeftBrace)
+                    {
+                        expr = self.parse_struct_init(name, args, expr.span);
+                    } else {
+                        self.position = position;
+                        self.diagnostics.truncate(diagnostic_count);
+                        break;
+                    }
                 } else {
                     break;
                 }
@@ -562,7 +600,7 @@ impl Parser {
         expr
     }
 
-    fn parse_struct_init(&mut self, name: String, start: Span) -> Expr {
+    fn parse_struct_init(&mut self, name: String, args: Vec<TypeRef>, start: Span) -> Expr {
         self.expect_kind(&TokenKind::LeftBrace, "`{`");
         let mut fields = Vec::new();
 
@@ -583,9 +621,25 @@ impl Parser {
         let span = start.join(self.previous_span());
 
         Expr {
-            kind: ExprKind::StructInit { name, fields },
+            kind: ExprKind::StructInit { name, args, fields },
             span,
         }
+    }
+
+    fn parse_type_args(&mut self) -> Option<Vec<TypeRef>> {
+        if !self.match_kind(&TokenKind::Less) {
+            return None;
+        }
+
+        let mut args = Vec::new();
+        while !self.at_eof() && !self.check_type_greater() {
+            args.push(self.parse_type()?);
+            if !self.match_kind(&TokenKind::Comma) {
+                break;
+            }
+        }
+        self.expect_type_greater();
+        Some(args)
     }
 
     fn parse_primary_expression(&mut self) -> Expr {
