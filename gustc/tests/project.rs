@@ -338,7 +338,7 @@ fn imported_generic_structs_are_monomorphized_after_module_linking() {
         r#"from ./box import { Box }
 
 fn main() {
-    let value = Box<String>.new("from module")
+    let value = Box.new("from module")
     io.println(value.get())
 }"#,
     );

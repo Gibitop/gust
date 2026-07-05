@@ -2740,11 +2740,11 @@ fn main() {
 fn generic_structs_require_the_declared_type_argument_count() {
     let missing = check_source(
         r#"struct Box<T> {
-    value: T
+    marker: i32
 }
 
 fn main() {
-    let value = Box { value: 1 }
+    let value = Box { marker: 1 }
 }"#,
     );
     assert!(missing.diagnostics.iter().any(|diagnostic| {
@@ -2779,9 +2779,11 @@ fn generic_static_calls_and_contextual_struct_literals_validate() {
 }
 
 fn main() {
-    let number = Box<i32>.new(42)
+    let number = Box.new(42)
+    let inferred = Box { value: "inferred" }
     let text: Box<String> = Box { value: "Gust" }
     io.println(number.value.toString())
+    io.println(inferred.value)
     io.println(text.value)
 }"#,
     );
@@ -2791,4 +2793,77 @@ fn main() {
         "expected generic construction to validate, got {:?}",
         result.diagnostics
     );
+}
+
+#[test]
+fn generic_inference_uses_typed_locals_and_expected_return_types() {
+    let result = check_source(
+        r#"struct Empty<T> {
+    marker: i32
+
+    static fn new(): Self => Self { marker: 0 }
+}
+
+struct Box<T> {
+    value: T
+
+    static fn new(value: T): Self => Self { value: value }
+}
+
+fn makeEmpty(): Empty<String> => Empty.new()
+
+fn main() {
+    let value: u32 = 1
+    let box = Box.new(value)
+    let empty: Empty<bool> = Empty.new()
+    io.println(box.value.toString())
+    io.println(empty.marker.toString())
+    io.println(makeEmpty().marker.toString())
+}"#,
+    );
+
+    assert!(
+        !result.has_errors(),
+        "expected contextual generic inference to validate, got {:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
+fn generic_inference_reports_ambiguous_and_conflicting_arguments() {
+    let ambiguous = check_source(
+        r#"struct Empty<T> {
+    marker: i32
+
+    static fn new(): Self => Self { marker: 0 }
+}
+
+fn main() {
+    let value = Empty.new()
+}"#,
+    );
+    assert!(ambiguous.diagnostics.iter().any(|diagnostic| {
+        diagnostic
+            .message
+            .contains("no concrete type was found for `T`")
+    }));
+
+    let conflicting = check_source(
+        r#"struct Pair<T> {
+    first: T
+    second: T
+}
+
+fn main() {
+    let value = Pair {
+        first: 1,
+        second: "two",
+    }
+}"#,
+    );
+    assert!(conflicting.diagnostics.iter().any(|diagnostic| {
+        diagnostic
+            .message
+            .contains("conflicting types `i32` and `String` were inferred for `T`")
+    }));
 }
