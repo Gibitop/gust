@@ -154,3 +154,17 @@ the extended type.
 
 `Self` refers to the enclosing or extended type inside both static and instance functions. Real
 static functions take precedence over static extension functions with the same name.
+
+## Generic structs
+
+Structs may declare type parameters, such as `struct Box<T>`. Type parameters are available in
+fields and methods, and every concrete use is monomorphized before semantic analysis and executable
+lowering. Different concrete arguments therefore produce distinct struct and method definitions.
+Concrete methods are instantiated on demand from method call sites; unused generic methods are not
+validated or emitted.
+
+Generic struct literals currently include their concrete arguments explicitly:
+`Box<i32> { value: 1 }`. Nested generic struct types are supported.
+
+Generic enums, generic top-level functions, inferred generic struct literals, bounds, and generic
+static function calls are not implemented yet.

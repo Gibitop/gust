@@ -270,6 +270,11 @@ fn callable_static_name(
 }
 
 pub fn lower_program(program: &Program) -> Result<LoweredProgram, Vec<Diagnostic>> {
+    let program = crate::monomorphize::monomorphize(program)?;
+    lower_monomorphized_program(&program)
+}
+
+fn lower_monomorphized_program(program: &Program) -> Result<LoweredProgram, Vec<Diagnostic>> {
     let mut diagnostics = Vec::new();
     let mut main = None;
     let mut structs = HashMap::new();
@@ -2709,7 +2714,7 @@ fn lower_expr(
                 },
             }
         }
-        ExprKind::StructInit { name, fields } => lower_struct_init(
+        ExprKind::StructInit { name, fields, .. } => lower_struct_init(
             expr,
             name,
             fields,

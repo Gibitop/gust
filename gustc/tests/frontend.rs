@@ -2700,3 +2700,71 @@ fn main() {
         result.diagnostics
     );
 }
+
+#[test]
+fn generic_structs_validate_each_concrete_specialization() {
+    let result = check_source(
+        r#"struct Box<T> {
+    value: T
+
+    fn get(): T {
+        return self.value
+    }
+}
+
+struct Pair<T> {
+    first: T
+    second: T
+}
+
+fn main() {
+    let number = Box<i32> { value: 42 }
+    let text = Box<String> { value: "Gust" }
+    let pair = Pair<Box<i32>> {
+        first: number,
+        second: Box<i32> { value: 7 },
+    }
+    io.println(text.get())
+    io.println(pair.second.get().toString())
+}"#,
+    );
+
+    assert!(
+        !result.has_errors(),
+        "expected generic structs to validate, got {:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
+fn generic_structs_require_the_declared_type_argument_count() {
+    let missing = check_source(
+        r#"struct Box<T> {
+    value: T
+}
+
+fn main() {
+    let value = Box { value: 1 }
+}"#,
+    );
+    assert!(missing.diagnostics.iter().any(|diagnostic| {
+        diagnostic
+            .message
+            .contains("generic struct `Box` expects 1 type arguments, got 0")
+    }));
+
+    let duplicate = check_source(
+        r#"struct Pair<T, T> {
+    value: T
+}
+
+fn main() {
+    let value = Pair<i32, i32> { value: 1 }
+}"#,
+    );
+    assert!(duplicate.diagnostics.iter().any(|diagnostic| {
+        diagnostic
+            .message
+            .contains("duplicate type parameter `T` in struct `Pair`")
+    }));
+}

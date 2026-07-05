@@ -50,6 +50,7 @@ pub struct ImportName {
 #[derive(Debug, Clone)]
 pub struct EnumDecl {
     pub name: String,
+    pub type_params: Vec<String>,
     pub variants: Vec<EnumVariant>,
     pub span: Span,
 }
@@ -64,6 +65,7 @@ pub struct EnumVariant {
 #[derive(Debug, Clone)]
 pub struct StructDecl {
     pub name: String,
+    pub type_params: Vec<String>,
     pub members: Vec<StructMember>,
     pub span: Span,
 }
@@ -192,6 +194,7 @@ pub enum ExprKind {
     },
     StructInit {
         name: String,
+        args: Vec<TypeRef>,
         fields: Vec<StructInitField>,
     },
     Binary {

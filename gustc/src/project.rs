@@ -512,14 +512,17 @@ impl<'names, 'diagnostics> ModuleRewriter<'names, 'diagnostics> {
         match item {
             Item::Enum(item) => {
                 self.rewrite_declared_name(&mut item.name);
+                self.scopes.push(item.type_params.iter().cloned().collect());
                 for variant in &mut item.variants {
                     if let Some(type_ref) = &mut variant.payload {
                         self.rewrite_type(type_ref);
                     }
                 }
+                self.scopes.pop();
             }
             Item::Struct(item) => {
                 self.rewrite_declared_name(&mut item.name);
+                self.scopes.push(item.type_params.iter().cloned().collect());
                 for member in &mut item.members {
                     match member {
                         StructMember::Field(field) => self.rewrite_type(&mut field.type_ref),
@@ -528,6 +531,7 @@ impl<'names, 'diagnostics> ModuleRewriter<'names, 'diagnostics> {
                         }
                     }
                 }
+                self.scopes.pop();
             }
             Item::Function(function) => {
                 if let Some(name) = &mut function.name
@@ -677,11 +681,14 @@ impl<'names, 'diagnostics> ModuleRewriter<'names, 'diagnostics> {
                 }
             }
             ExprKind::Member { object, .. } => self.rewrite_expr(object),
-            ExprKind::StructInit { name, fields } => {
+            ExprKind::StructInit { name, args, fields } => {
                 if let Some(internal_name) = self.resolve_qualified_name(name, expr.span) {
                     *name = internal_name;
                 } else if let Some(internal_name) = self.visible_names.get(name) {
                     *name = internal_name.clone();
+                }
+                for arg in args {
+                    self.rewrite_type(arg);
                 }
                 for field in fields {
                     self.rewrite_expr(&mut field.value);
@@ -730,6 +737,9 @@ impl<'names, 'diagnostics> ModuleRewriter<'names, 'diagnostics> {
     }
 
     fn rewrite_type(&self, type_ref: &mut TypeRef) {
+        if self.is_local(&type_ref.name) {
+            return;
+        }
         if let Some(internal_name) =
             resolve_qualified_name(self.visible_namespaces, self.exports, &type_ref.name)
         {
@@ -941,7 +951,10 @@ fn shift_expr(expr: &mut Expr, offset: usize) {
             }
         }
         ExprKind::Member { object, .. } => shift_expr(object, offset),
-        ExprKind::StructInit { fields, .. } => {
+        ExprKind::StructInit { args, fields, .. } => {
+            for arg in args {
+                shift_type(arg, offset);
+            }
             for field in fields {
                 shift_span(&mut field.span, offset);
                 shift_expr(&mut field.value, offset);

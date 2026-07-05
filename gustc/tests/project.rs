@@ -330,6 +330,39 @@ fn main() {
     }));
 }
 
+#[test]
+fn imported_generic_structs_are_monomorphized_after_module_linking() {
+    let project = TempProject::new();
+    project.write(
+        "main.gust",
+        r#"from ./box import { Box }
+
+fn main() {
+    let value = Box<String> { value: "from module" }
+    io.println(value.get())
+}"#,
+    );
+    project.write(
+        "box.gust",
+        r#"struct Box<T> {
+    value: T
+
+    fn get(): T {
+        return self.value
+    }
+}"#,
+    );
+
+    let result = check_project(&project.path("main.gust")).expect("project should load");
+    assert!(
+        result.diagnostics.is_empty(),
+        "expected imported generic struct to validate, got {:?}",
+        result.diagnostics
+    );
+
+    lower_program(&result.program).expect("imported generic struct should lower");
+}
+
 fn path_suffix(path: &str) -> &str {
     Path::new(path).to_str().expect("test path should be UTF-8")
 }

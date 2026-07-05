@@ -1990,3 +1990,58 @@ fn main() {
         1
     );
 }
+
+#[test]
+fn generic_struct_specializations_emit_distinct_c_types_and_methods() {
+    let result = check_source(
+        r#"struct Box<T> {
+    value: T
+
+    fn get(): T {
+        return self.getValue()
+    }
+
+    fn getValue(): T {
+        return self.value
+    }
+
+    fn replace(mut self, value: T) {
+        self.value = value
+    }
+
+    fn addOne(): T {
+        return self.value + 1
+    }
+}
+
+fn main() {
+    let mut number = Box<i32> { value: 42 }
+    let text = Box<String> { value: "Generics work!" }
+    let flag = Box<bool> { value: true }
+    number.replace(43)
+    io.println(number.get().toString())
+    io.println(text.get())
+}"#,
+    );
+
+    assert!(
+        !result.has_errors(),
+        "expected no frontend errors, got {:?}",
+        result.diagnostics
+    );
+
+    let lowered = lower_program(&result.program).expect("generic structs should lower");
+    let source = emit_c(&lowered);
+
+    assert!(source.contains("// Gust struct: Box<String>"));
+    assert!(source.contains("// Gust struct: Box<bool>"));
+    assert!(source.contains("// Gust struct: Box<i32>"));
+    assert!(source.contains("// Gust function: Box<String>.get"));
+    assert!(source.contains("// Gust function: Box<i32>.get"));
+    assert!(source.contains("// Gust function: Box<String>.getValue"));
+    assert!(source.contains("// Gust function: Box<i32>.getValue"));
+    assert!(!source.contains("// Gust function: Box<bool>.get"));
+    assert!(!source.contains("// Gust function: Box<bool>.getValue"));
+    assert!(!source.contains(".addOne"));
+    assert!(!source.contains("// Gust function: Box<String>.replace"));
+}

@@ -9,9 +9,13 @@ use crate::diagnostic::Diagnostic;
 use crate::span::Span;
 
 pub fn validate(program: &Program) -> Vec<Diagnostic> {
+    let program = match crate::monomorphize::monomorphize(program) {
+        Ok(program) => program,
+        Err(diagnostics) => return diagnostics,
+    };
     let mut analyzer = Analyzer::new();
-    analyzer.collect_top_level(program);
-    analyzer.validate_program(program);
+    analyzer.collect_top_level(&program);
+    analyzer.validate_program(&program);
     analyzer.diagnostics
 }
 
@@ -834,7 +838,7 @@ impl Analyzer {
                     self.validate_member(expr.span, object, name)
                 }
             }
-            ExprKind::StructInit { name, fields } => {
+            ExprKind::StructInit { name, fields, .. } => {
                 self.validate_struct_init(expr.span, name, fields)
             }
             ExprKind::Unary {
@@ -2122,7 +2126,7 @@ impl Analyzer {
         match &expr.kind {
             ExprKind::Identifier(name) => self.lookup(name).is_some_and(|binding| binding.mutable),
             ExprKind::Member { object, .. } => self.expr_has_mutable_capability(object),
-            ExprKind::StructInit { name, fields } => {
+            ExprKind::StructInit { name, fields, .. } => {
                 let Some(definition) = self.structs.get(name) else {
                     return false;
                 };
