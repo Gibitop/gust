@@ -2750,7 +2750,7 @@ fn main() {
     assert!(missing.diagnostics.iter().any(|diagnostic| {
         diagnostic
             .message
-            .contains("generic struct `Box` expects 1 type arguments, got 0")
+            .contains("cannot infer type arguments for generic struct `Box`")
     }));
 
     let duplicate = check_source(
@@ -2767,4 +2767,28 @@ fn main() {
             .message
             .contains("duplicate type parameter `T` in struct `Pair`")
     }));
+}
+
+#[test]
+fn generic_static_calls_and_contextual_struct_literals_validate() {
+    let result = check_source(
+        r#"struct Box<T> {
+    value: T
+
+    static fn new(value: T): Self => Self { value: value }
+}
+
+fn main() {
+    let number = Box<i32>.new(42)
+    let text: Box<String> = Box { value: "Gust" }
+    io.println(number.value.toString())
+    io.println(text.value)
+}"#,
+    );
+
+    assert!(
+        !result.has_errors(),
+        "expected generic construction to validate, got {:?}",
+        result.diagnostics
+    );
 }
