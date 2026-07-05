@@ -15,6 +15,7 @@ struct Monomorphizer {
     concrete_structs: HashSet<String>,
     pending: VecDeque<(String, Vec<TypeRef>)>,
     emitted: HashSet<String>,
+    specializations: HashMap<String, (String, Vec<TypeRef>)>,
     diagnostics: Vec<Diagnostic>,
 }
 
@@ -46,6 +47,7 @@ impl Monomorphizer {
             concrete_structs,
             pending: VecDeque::new(),
             emitted: HashSet::new(),
+            specializations: HashMap::new(),
             diagnostics: Vec::new(),
         }
     }
@@ -199,6 +201,9 @@ impl Monomorphizer {
             } => {
                 if let Some(type_ref) = type_annotation {
                     self.rewrite_type(type_ref, substitutions);
+                    if let Some(value) = value {
+                        self.apply_literal_context(value, type_ref);
+                    }
                 }
                 if let Some(value) = value {
                     self.rewrite_expr(value, substitutions);
@@ -238,6 +243,28 @@ impl Monomorphizer {
     }
 
     fn rewrite_expr(&mut self, expr: &mut Expr, substitutions: &HashMap<String, TypeRef>) {
+        if let ExprKind::GenericType { name, args } = &mut expr.kind {
+            for arg in args.iter_mut() {
+                self.rewrite_type(arg, substitutions);
+            }
+            if self.templates.contains_key(name) {
+                self.specialize(name, args, expr.span);
+                *name = specialized_name(name, args);
+                expr.kind = ExprKind::Identifier(name.clone());
+            } else if self.concrete_structs.contains(name) {
+                self.diagnostics.push(Diagnostic::error(
+                    expr.span,
+                    format!("struct `{name}` does not accept type arguments"),
+                ));
+            } else {
+                self.diagnostics.push(Diagnostic::error(
+                    expr.span,
+                    format!("unknown generic struct `{name}`"),
+                ));
+            }
+            return;
+        }
+
         match &mut expr.kind {
             ExprKind::Array(items) => {
                 for item in items {
@@ -256,9 +283,18 @@ impl Monomorphizer {
                     self.rewrite_type(arg, substitutions);
                 }
                 if self.templates.contains_key(name) {
-                    self.specialize(name, args, expr.span);
-                    *name = specialized_name(name, args);
-                    args.clear();
+                    if args.is_empty() {
+                        self.diagnostics.push(Diagnostic::error(
+                            expr.span,
+                            format!(
+                                "cannot infer type arguments for generic struct `{name}`; write `{name}<Type> {{ ... }}` or add a concrete type annotation"
+                            ),
+                        ));
+                    } else {
+                        self.specialize(name, args, expr.span);
+                        *name = specialized_name(name, args);
+                        args.clear();
+                    }
                 } else if self.concrete_structs.contains(name) && !args.is_empty() {
                     self.diagnostics.push(Diagnostic::error(
                         expr.span,
@@ -287,6 +323,7 @@ impl Monomorphizer {
             }
             ExprKind::Lambda(function) => self.rewrite_function(function, substitutions),
             ExprKind::Identifier(_)
+            | ExprKind::GenericType { .. }
             | ExprKind::Number(_)
             | ExprKind::String(_)
             | ExprKind::Bool(_)
@@ -321,6 +358,21 @@ impl Monomorphizer {
         }
     }
 
+    fn apply_literal_context(&self, expr: &mut Expr, expected: &TypeRef) {
+        let ExprKind::StructInit { name, args, .. } = &mut expr.kind else {
+            return;
+        };
+        if !args.is_empty() {
+            return;
+        }
+        let Some((generic_name, concrete_args)) = self.specializations.get(&expected.name) else {
+            return;
+        };
+        if name == generic_name {
+            *args = concrete_args.clone();
+        }
+    }
+
     fn specialize(&mut self, name: &str, args: &[TypeRef], span: crate::span::Span) {
         let expected = self.templates[name].type_params.len();
         if args.len() != expected {
@@ -335,6 +387,10 @@ impl Monomorphizer {
         }
 
         self.pending.push_back((name.to_string(), args.to_vec()));
+        self.specializations.insert(
+            specialized_name(name, args),
+            (name.to_string(), args.to_vec()),
+        );
     }
 }
 
@@ -342,15 +398,16 @@ impl Monomorphizer {
 struct StructShape {
     fields: HashMap<String, String>,
     methods: HashMap<String, Option<String>>,
+    static_methods: HashMap<String, Option<String>>,
 }
 
 struct MethodReachability<'items> {
     structs: HashMap<String, StructShape>,
     functions: HashMap<String, Option<String>>,
     generic_structs: &'items HashSet<String>,
-    generic_methods: HashMap<(String, String), FunctionDecl>,
-    used: HashSet<(String, String)>,
-    pending: VecDeque<(String, String)>,
+    generic_methods: HashMap<(String, String, bool), FunctionDecl>,
+    used: HashSet<(String, String, bool)>,
+    pending: VecDeque<(String, String, bool)>,
 }
 
 impl<'items> MethodReachability<'items> {
@@ -396,17 +453,57 @@ impl<'items> MethodReachability<'items> {
                             ))
                         })
                         .collect();
+                    let static_methods = item
+                        .members
+                        .iter()
+                        .filter_map(|member| {
+                            let StructMember::StaticMethod(function) = member else {
+                                return None;
+                            };
+                            let name = function.name.clone()?;
+                            Some((
+                                name,
+                                function.return_type.as_ref().and_then(|type_ref| {
+                                    if type_ref.name == "Self" && type_ref.args.is_empty() {
+                                        Some(item.name.clone())
+                                    } else {
+                                        concrete_type_name(type_ref)
+                                    }
+                                }),
+                            ))
+                        })
+                        .collect();
                     if generic_structs.contains(&item.name) {
                         for member in &item.members {
-                            if let StructMember::Method(function) = member
-                                && let Some(name) = &function.name
-                            {
-                                generic_methods
-                                    .insert((item.name.clone(), name.clone()), function.clone());
+                            match member {
+                                StructMember::Method(function) => {
+                                    if let Some(name) = &function.name {
+                                        generic_methods.insert(
+                                            (item.name.clone(), name.clone(), false),
+                                            function.clone(),
+                                        );
+                                    }
+                                }
+                                StructMember::StaticMethod(function) => {
+                                    if let Some(name) = &function.name {
+                                        generic_methods.insert(
+                                            (item.name.clone(), name.clone(), true),
+                                            function.clone(),
+                                        );
+                                    }
+                                }
+                                StructMember::Field(_) => {}
                             }
                         }
                     }
-                    structs.insert(item.name.clone(), StructShape { fields, methods });
+                    structs.insert(
+                        item.name.clone(),
+                        StructShape {
+                            fields,
+                            methods,
+                            static_methods,
+                        },
+                    );
                 }
                 Item::Function(function) => {
                     if let Some(name) = &function.name {
@@ -430,24 +527,24 @@ impl<'items> MethodReachability<'items> {
         }
     }
 
-    fn find(mut self, items: &[Item]) -> HashSet<(String, String)> {
+    fn find(mut self, items: &[Item]) -> HashSet<(String, String, bool)> {
         for item in items {
             match item {
                 Item::Struct(item) if !self.generic_structs.contains(&item.name) => {
                     for member in &item.members {
                         match member {
                             StructMember::Method(function) => {
-                                self.visit_function(function, Some(&item.name));
+                                self.visit_function(function, Some(&item.name), true);
                             }
                             StructMember::StaticMethod(function) => {
-                                self.visit_function(function, None);
+                                self.visit_function(function, Some(&item.name), false);
                             }
                             StructMember::Field(_) => {}
                         }
                     }
                 }
-                Item::Function(function) => self.visit_function(function, None),
-                Item::Extension(item) => self.visit_function(&item.function, None),
+                Item::Function(function) => self.visit_function(function, None, false),
+                Item::Extension(item) => self.visit_function(&item.function, None, false),
                 Item::Import(_) | Item::Enum(_) | Item::Struct(_) => {}
             }
         }
@@ -456,16 +553,24 @@ impl<'items> MethodReachability<'items> {
             let Some(function) = self.generic_methods.get(&key).cloned() else {
                 continue;
             };
-            self.visit_function(&function, Some(&key.0));
+            self.visit_function(&function, Some(&key.0), !key.2);
         }
 
         self.used
     }
 
-    fn visit_function(&mut self, function: &FunctionDecl, self_type: Option<&str>) {
+    fn visit_function(
+        &mut self,
+        function: &FunctionDecl,
+        owner_type: Option<&str>,
+        has_self: bool,
+    ) {
         let mut locals = HashMap::new();
-        if let Some(self_type) = self_type {
-            locals.insert("self".to_string(), self_type.to_string());
+        if let Some(owner_type) = owner_type {
+            locals.insert("Self".to_string(), owner_type.to_string());
+            if has_self {
+                locals.insert("self".to_string(), owner_type.to_string());
+            }
         }
         for param in &function.params {
             if let Some(type_ref) = &param.type_ref
@@ -565,12 +670,33 @@ impl<'items> MethodReachability<'items> {
                 match &callee.kind {
                     ExprKind::Identifier(name) => self.functions.get(name).cloned().flatten(),
                     ExprKind::Member { object, name } => {
+                        if let ExprKind::Identifier(identifier) = &object.kind
+                            && (identifier == "Self" || !locals.contains_key(identifier))
+                        {
+                            let type_name = if identifier == "Self" {
+                                locals.get(identifier).map(String::as_str)
+                            } else {
+                                Some(identifier.as_str())
+                            };
+                            let Some(type_name) =
+                                type_name.filter(|name| self.structs.contains_key(*name))
+                            else {
+                                return None;
+                            };
+                            self.use_method(type_name, name, true);
+                            return self
+                                .structs
+                                .get(type_name)
+                                .and_then(|shape| shape.static_methods.get(name))
+                                .cloned()
+                                .flatten();
+                        }
                         let object_type = self.visit_expr(object, locals);
                         if name == "clone" {
                             return object_type;
                         }
                         if let Some(object_type) = object_type {
-                            self.use_method(&object_type, name);
+                            self.use_method(&object_type, name, false);
                             self.structs
                                 .get(&object_type)
                                 .and_then(|shape| shape.methods.get(name))
@@ -619,7 +745,7 @@ impl<'items> MethodReachability<'items> {
                 type_
             }
             ExprKind::Lambda(function) => {
-                self.visit_function(function, None);
+                self.visit_function(function, None, false);
                 None
             }
             ExprKind::String(_) => Some("String".to_string()),
@@ -632,12 +758,12 @@ impl<'items> MethodReachability<'items> {
                 .to_string(),
             ),
             ExprKind::Bool(_) => Some("bool".to_string()),
-            ExprKind::Missing => None,
+            ExprKind::GenericType { .. } | ExprKind::Missing => None,
         }
     }
 
-    fn use_method(&mut self, struct_name: &str, method_name: &str) {
-        let key = (struct_name.to_string(), method_name.to_string());
+    fn use_method(&mut self, struct_name: &str, method_name: &str, static_: bool) {
+        let key = (struct_name.to_string(), method_name.to_string(), static_);
         if self.generic_methods.contains_key(&key) && self.used.insert(key.clone()) {
             self.pending.push_back(key);
         }
@@ -647,11 +773,11 @@ impl<'items> MethodReachability<'items> {
         let matching = self
             .generic_methods
             .keys()
-            .filter(|(_, name)| name == method_name)
+            .filter(|(_, name, static_)| name == method_name && !static_)
             .cloned()
             .collect::<Vec<_>>();
-        for (struct_name, method_name) in matching {
-            self.use_method(&struct_name, &method_name);
+        for (struct_name, method_name, static_) in matching {
+            self.use_method(&struct_name, &method_name, static_);
         }
     }
 
@@ -670,10 +796,14 @@ fn prune_unused_generic_methods(items: &mut [Item], generic_structs: &HashSet<St
             continue;
         }
         item.members.retain(|member| match member {
-            StructMember::Method(function) | StructMember::StaticMethod(function) => function
+            StructMember::Method(function) => function
                 .name
                 .as_ref()
-                .is_some_and(|name| used.contains(&(item.name.clone(), name.clone()))),
+                .is_some_and(|name| used.contains(&(item.name.clone(), name.clone(), false))),
+            StructMember::StaticMethod(function) => function
+                .name
+                .as_ref()
+                .is_some_and(|name| used.contains(&(item.name.clone(), name.clone(), true))),
             StructMember::Field(_) => true,
         });
     }

@@ -1997,6 +1997,12 @@ fn generic_struct_specializations_emit_distinct_c_types_and_methods() {
         r#"struct Box<T> {
     value: T
 
+    static fn new(value: T): Self => Self.build(value)
+
+    static fn build(value: T): Self => Self { value: value }
+
+    static fn unused(value: T): T => value + 1
+
     fn get(): T {
         return self.getValue()
     }
@@ -2016,10 +2022,12 @@ fn generic_struct_specializations_emit_distinct_c_types_and_methods() {
 
 fn main() {
     let mut number = Box<i32> { value: 42 }
-    let text = Box<String> { value: "Generics work!" }
+    let constructed = Box<i32>.new(7)
+    let text: Box<String> = Box { value: "Generics work!" }
     let flag = Box<bool> { value: true }
     number.replace(43)
     io.println(number.get().toString())
+    io.println(constructed.get().toString())
     io.println(text.get())
 }"#,
     );
@@ -2038,10 +2046,16 @@ fn main() {
     assert!(source.contains("// Gust struct: Box<i32>"));
     assert!(source.contains("// Gust function: Box<String>.get"));
     assert!(source.contains("// Gust function: Box<i32>.get"));
+    assert!(source.contains("// Gust function: static Box<i32>.new"));
+    assert!(source.contains("// Gust function: static Box<i32>.build"));
     assert!(source.contains("// Gust function: Box<String>.getValue"));
     assert!(source.contains("// Gust function: Box<i32>.getValue"));
+    assert!(!source.contains("// Gust function: static Box<String>.new"));
+    assert!(!source.contains("// Gust function: static Box<bool>.new"));
+    assert!(!source.contains("// Gust function: static Box<String>.build"));
     assert!(!source.contains("// Gust function: Box<bool>.get"));
     assert!(!source.contains("// Gust function: Box<bool>.getValue"));
     assert!(!source.contains(".addOne"));
+    assert!(!source.contains(".unused"));
     assert!(!source.contains("// Gust function: Box<String>.replace"));
 }

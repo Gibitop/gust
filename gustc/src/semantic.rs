@@ -784,6 +784,7 @@ impl Analyzer {
             ExprKind::String(_) => Type::Basic(BasicType::String),
             ExprKind::Bool(_) => Type::Basic(BasicType::Bool),
             ExprKind::Missing => Type::Unknown,
+            ExprKind::GenericType { .. } => Type::Unknown,
             ExprKind::Array(items) => {
                 self.unsupported(
                     expr.span,
@@ -2150,6 +2151,7 @@ impl Analyzer {
             | ExprKind::Binary { .. }
             | ExprKind::Unary { .. } => true,
             ExprKind::Array(_)
+            | ExprKind::GenericType { .. }
             | ExprKind::Lambda(_)
             | ExprKind::Match { .. }
             | ExprKind::PostfixIncrement(_)

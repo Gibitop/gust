@@ -580,10 +580,19 @@ impl Parser {
                     } else {
                         Some(Vec::new())
                     };
-                    if let Some(args) = args
-                        && self.check_kind(&TokenKind::LeftBrace)
-                    {
-                        expr = self.parse_struct_init(name, args, expr.span);
+                    if let Some(args) = args {
+                        if self.check_kind(&TokenKind::LeftBrace) {
+                            expr = self.parse_struct_init(name, args, expr.span);
+                        } else if self.check_kind(&TokenKind::Dot) && !args.is_empty() {
+                            expr = Expr {
+                                span: expr.span.join(self.previous_span()),
+                                kind: ExprKind::GenericType { name, args },
+                            };
+                        } else {
+                            self.position = position;
+                            self.diagnostics.truncate(diagnostic_count);
+                            break;
+                        }
                     } else {
                         self.position = position;
                         self.diagnostics.truncate(diagnostic_count);

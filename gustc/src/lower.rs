@@ -1137,7 +1137,10 @@ fn infer_expr_type(
                 .filter(|signature| signature.return_type_known)
                 .map(|signature| signature.return_type.clone())
         }
-        ExprKind::Array(_) | ExprKind::Lambda(_) | ExprKind::Missing => None,
+        ExprKind::Array(_)
+        | ExprKind::GenericType { .. }
+        | ExprKind::Lambda(_)
+        | ExprKind::Missing => None,
         ExprKind::Match { branches, .. } => branches.iter().find_map(|branch| {
             let MatchBranchBody::Expr(expr) = &branch.body else {
                 return None;
@@ -1218,6 +1221,7 @@ fn expression_has_mutable_capability(expr: &Expr, locals: &HashMap<String, Lower
             matches!(&callee.kind, ExprKind::Member { name, .. } if name == "clone")
         }
         ExprKind::Array(_)
+        | ExprKind::GenericType { .. }
         | ExprKind::Lambda(_)
         | ExprKind::Match { .. }
         | ExprKind::PostfixIncrement(_)

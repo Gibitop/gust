@@ -164,7 +164,11 @@ Concrete methods are instantiated on demand from method call sites; unused gener
 validated or emitted.
 
 Generic struct literals currently include their concrete arguments explicitly:
-`Box<i32> { value: 1 }`. Nested generic struct types are supported.
+`Box<i32> { value: 1 }`. A concrete type annotation also provides context, allowing
+`let value: Box<i32> = Box { value: 1 }`. Nested generic struct types are supported.
 
-Generic enums, generic top-level functions, inferred generic struct literals, bounds, and generic
-static function calls are not implemented yet.
+Parameterized types may be used for static calls such as `Box<i32>.new(1)`. Generic static methods
+are instantiated on demand using the same rules as instance methods.
+
+Generic enums, generic top-level functions, inference without a concrete expected type, and bounds
+are not implemented yet.
