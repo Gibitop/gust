@@ -1,11 +1,11 @@
 struct Box<T> {
     value: T
 
-    static fn new(value: T): Self => Self {
+    static fn new(value: T) => Self {
         value: value,
     }
 
-    fn get(): T {
+    fn get() {
         return self.value
     }
 
@@ -20,15 +20,15 @@ struct Pair<T> {
 }
 
 fn main() {
-    let mut number = Box<i32> {
+    let mut number = Box {
         value: 42,
     }
-    let constructed = Box<i32>.new(7)
+    let constructed = Box<u8>.new(7)
     let message: Box<String> = Box {
         value: "Generics work!",
     }
-    let nested = Box<Pair<i32>>.new(
-        Pair<i32> {
+    let nested = Box.new(
+        Pair {
             first: 1,
             second: 2,
         },

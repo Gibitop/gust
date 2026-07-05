@@ -1997,17 +1997,17 @@ fn generic_struct_specializations_emit_distinct_c_types_and_methods() {
         r#"struct Box<T> {
     value: T
 
-    static fn new(value: T): Self => Self.build(value)
+    static fn new(value: T) => Self.build(value)
 
-    static fn build(value: T): Self => Self { value: value }
+    static fn build(value: T) => Self { value: value }
 
     static fn unused(value: T): T => value + 1
 
-    fn get(): T {
+    fn get() {
         return self.getValue()
     }
 
-    fn getValue(): T {
+    fn getValue() {
         return self.value
     }
 
@@ -2021,10 +2021,10 @@ fn generic_struct_specializations_emit_distinct_c_types_and_methods() {
 }
 
 fn main() {
-    let mut number = Box<i32> { value: 42 }
-    let constructed = Box<i32>.new(7)
-    let text: Box<String> = Box { value: "Generics work!" }
-    let flag = Box<bool> { value: true }
+    let mut number = Box { value: 42 }
+    let constructed = Box.new(7)
+    let text = Box { value: "Generics work!" }
+    let flag = Box { value: true }
     number.replace(43)
     io.println(number.get().toString())
     io.println(constructed.get().toString())

@@ -163,12 +163,21 @@ lowering. Different concrete arguments therefore produce distinct struct and met
 Concrete methods are instantiated on demand from method call sites; unused generic methods are not
 validated or emitted.
 
-Generic struct literals currently include their concrete arguments explicitly:
-`Box<i32> { value: 1 }`. A concrete type annotation also provides context, allowing
-`let value: Box<i32> = Box { value: 1 }`. Nested generic struct types are supported.
+Return types may be omitted from generic instance and static methods. They are inferred for each
+concrete specialization before method reachability is resolved, including calls between inferred
+generic methods.
+
+Generic struct literals infer concrete arguments from their fields when every type parameter can be
+resolved, so `Box { value: 1 }` produces `Box<i32>`. A concrete type annotation also provides
+context, allowing `let value: Box<i32> = Box { value: 1  `.
+Explicit arguments remain available as
+`Box<i32> { value: 1 }`. Nested generic struct types are supported.
 
 Parameterized types may be used for static calls such as `Box<i32>.new(1)`. Generic static methods
-are instantiated on demand using the same rules as instance methods.
+also infer arguments from their parameters, allowing `Box.new(1)`. Expected local and return types
+provide arguments when a call has insufficient value information. Generic static methods are
+instantiated on demand using the same rules as instance methods.
 
-Generic enums, generic top-level functions, inference without a concrete expected type, and bounds
-are not implemented yet.
+Inference reports an error when constraints conflict or leave a type parameter unresolved.
+
+Generic enums, generic top-level functions, and bounds are not implemented yet.
