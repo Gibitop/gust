@@ -2045,6 +2045,54 @@ fn main() {
 }
 
 #[test]
+fn block_bodied_match_expression_branches_emit_c() {
+    let result = check_source(
+        r#"enum Being {
+    Person(String)
+    Unknown
+}
+
+fn constructBeing(kind: String): Being {
+    if kind == "person" {
+        return Being.Person("Ada")
+    }
+    return Being.Unknown
+}
+
+fn main() {
+    let mut name = ""
+    let greeting = match constructBeing("person") {
+        Being.Person(personName) => {
+            let extractedName = personName
+            name = extractedName
+            return "Hello"
+        },
+        Being.Unknown => {
+            name = "stranger"
+            return "Hi"
+        },
+    }
+    io.println(greeting + ", " + name)
+}"#,
+    );
+
+    assert!(
+        !result.has_errors(),
+        "expected no frontend errors, got {:?}",
+        result.diagnostics
+    );
+
+    let lowered = lower_program(&result.program).expect("block match expression should lower");
+    let source = emit_c(&lowered);
+
+    assert!(source.contains("const char* gust_internal_match_value_"));
+    assert!(source.contains("_result;"));
+    assert!(source.contains("_result = \"Hello\";"));
+    assert!(source.contains("_result = \"Hi\";"));
+    assert!(source.contains("gust_rt_io_println(gust_rt_string_concat("));
+}
+
+#[test]
 fn generic_struct_specializations_emit_distinct_c_types_and_methods() {
     let result = check_source(
         r#"struct Box<T> {

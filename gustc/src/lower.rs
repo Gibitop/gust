@@ -165,6 +165,7 @@ pub enum LoweredExprKind {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LoweredMatchBranch {
     pub pattern: LoweredPattern,
+    pub statements: Vec<LoweredStatement>,
     pub value: LoweredExpr,
 }
 
@@ -1964,6 +1965,110 @@ fn lower_match_statement(
     })
 }
 
+fn lower_match_expression_branch_block(
+    block: &Block,
+    locals: &mut HashMap<String, LoweringLocal>,
+    signatures: &HashMap<String, FunctionSignature>,
+    structs: &HashMap<String, LoweredStruct>,
+    enums: &HashMap<String, LoweredEnum>,
+    diagnostics: &mut Vec<Diagnostic>,
+    expected_type: Option<LoweredType>,
+) -> Option<(Vec<LoweredStatement>, LoweredExpr)> {
+    let Some((last_statement, setup_statements)) = block.statements.split_last() else {
+        diagnostics.push(Diagnostic::error(
+            block.span,
+            "block-bodied match expression branches must return a value",
+        ));
+        return None;
+    };
+    let StmtKind::Return { value: Some(value) } = &last_statement.kind else {
+        diagnostics.push(Diagnostic::error(
+            last_statement.span,
+            "block-bodied match expression branches must end with `return value`",
+        ));
+        return None;
+    };
+
+    let mut statements = Vec::new();
+    for statement in setup_statements {
+        match &statement.kind {
+            StmtKind::Let { .. } => {
+                if let Some(statement) = lower_local_statement(
+                    statement,
+                    locals,
+                    signatures,
+                    structs,
+                    enums,
+                    diagnostics,
+                ) {
+                    statements.push(statement);
+                }
+            }
+            StmtKind::Assign { .. } => {
+                if let Some(statement) = lower_assignment_statement(
+                    statement,
+                    locals,
+                    signatures,
+                    structs,
+                    enums,
+                    diagnostics,
+                ) {
+                    statements.push(statement);
+                }
+            }
+            StmtKind::If { .. } => {
+                if let Some(statement) = lower_if_statement(
+                    statement,
+                    locals,
+                    signatures,
+                    structs,
+                    enums,
+                    diagnostics,
+                    None,
+                ) {
+                    statements.push(statement);
+                }
+            }
+            StmtKind::Expr(expr) => {
+                if let Some(statement) = lower_expression_statement(
+                    expr,
+                    locals,
+                    signatures,
+                    structs,
+                    enums,
+                    diagnostics,
+                    None,
+                ) {
+                    statements.push(statement);
+                }
+            }
+            StmtKind::Return { .. } => {
+                diagnostics.push(Diagnostic::error(
+                    statement.span,
+                    "return statements are only supported as the final value of block-bodied match expression branches",
+                ));
+            }
+            StmtKind::For { .. } => diagnostics.push(Diagnostic::error(
+                statement.span,
+                "for loops are not supported in executable builds",
+            )),
+        }
+    }
+
+    let value = lower_expr(
+        value,
+        locals,
+        signatures,
+        structs,
+        enums,
+        diagnostics,
+        expected_type,
+        "expected supported match branch value in executable builds",
+    )?;
+
+    Some((statements, value))
+}
+
 fn void_expr() -> LoweredExpr {
     LoweredExpr {
         type_: LoweredType::Void,
@@ -3201,13 +3306,6 @@ fn lower_expr(
             let temp_name = match_temp_name(expr.span);
 
             for branch in branches {
-                let MatchBranchBody::Expr(branch_value) = &branch.body else {
-                    diagnostics.push(Diagnostic::error(
-                        branch.body.span(),
-                        "block-bodied match branches can only be used when the match is a statement",
-                    ));
-                    return None;
-                };
                 let mut branch_locals = locals.clone();
                 let pattern = lower_match_pattern(
                     &branch.pattern,
@@ -3218,19 +3316,35 @@ fn lower_expr(
                     &temp_name,
                 )?;
 
-                let branch_value = lower_expr(
-                    branch_value,
-                    &branch_locals,
-                    signatures,
-                    structs,
-                    enums,
-                    diagnostics,
-                    expected_type.clone().or_else(|| result_type.clone()),
-                    "expected supported match branch value in executable builds",
-                )?;
+                let expected_branch_type = expected_type.clone().or_else(|| result_type.clone());
+                let (statements, branch_value) = match &branch.body {
+                    MatchBranchBody::Expr(branch_value) => (
+                        Vec::new(),
+                        lower_expr(
+                            branch_value,
+                            &branch_locals,
+                            signatures,
+                            structs,
+                            enums,
+                            diagnostics,
+                            expected_branch_type,
+                            "expected supported match branch value in executable builds",
+                        )?,
+                    ),
+                    MatchBranchBody::Block(block) => lower_match_expression_branch_block(
+                        block,
+                        &mut branch_locals,
+                        signatures,
+                        structs,
+                        enums,
+                        diagnostics,
+                        expected_branch_type,
+                    )?,
+                };
                 result_type.get_or_insert_with(|| branch_value.type_.clone());
                 lowered_branches.push(LoweredMatchBranch {
                     pattern,
+                    statements,
                     value: branch_value,
                 });
             }
