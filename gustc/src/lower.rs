@@ -1229,6 +1229,67 @@ fn expression_has_mutable_capability(expr: &Expr, locals: &HashMap<String, Lower
     }
 }
 
+fn lowered_expression_has_mutable_capability(
+    expr: &LoweredExpr,
+    locals: &HashMap<String, LoweringLocal>,
+    signatures: &HashMap<String, FunctionSignature>,
+    structs: &HashMap<String, LoweredStruct>,
+) -> bool {
+    match &expr.kind {
+        LoweredExprKind::Local(name) => locals.get(name).is_some_and(|local| local.mutable),
+        LoweredExprKind::FieldAccess { object, .. } => {
+            lowered_expression_has_mutable_capability(object, locals, signatures, structs)
+        }
+        LoweredExprKind::StructLiteral { name, fields } => {
+            let Some(struct_) = structs.get(name) else {
+                return false;
+            };
+
+            fields.iter().all(|field| {
+                struct_
+                    .fields
+                    .iter()
+                    .find(|definition| definition.name == field.name)
+                    .is_none_or(|definition| {
+                        !matches!(definition.type_, LoweredType::Struct(_))
+                            || lowered_expression_has_mutable_capability(
+                                &field.value,
+                                locals,
+                                signatures,
+                                structs,
+                            )
+                    })
+            })
+        }
+        LoweredExprKind::Clone(_) => true,
+        LoweredExprKind::Call { name, args } => signatures.get(name).is_some_and(|signature| {
+            matches!(signature.return_type, LoweredType::Struct(_))
+                && args.iter().zip(&signature.params).all(|(arg, param)| {
+                    !matches!(param.type_, LoweredType::Struct(_))
+                        || lowered_expression_has_mutable_capability(
+                            arg, locals, signatures, structs,
+                        )
+                })
+        }),
+        LoweredExprKind::StringLiteral(_)
+        | LoweredExprKind::BoolLiteral(_)
+        | LoweredExprKind::NumberLiteral(_)
+        | LoweredExprKind::StringConcat(_, _)
+        | LoweredExprKind::Not(_)
+        | LoweredExprKind::Negate(_)
+        | LoweredExprKind::Arithmetic { .. }
+        | LoweredExprKind::Logical { .. }
+        | LoweredExprKind::Comparison { .. }
+        | LoweredExprKind::NumberToString(_) => true,
+        LoweredExprKind::Void
+        | LoweredExprKind::PostfixIncrement(_)
+        | LoweredExprKind::EnumLiteral { .. }
+        | LoweredExprKind::EnumPayload { .. }
+        | LoweredExprKind::MatchValue(_)
+        | LoweredExprKind::Match { .. } => false,
+    }
+}
+
 fn lower_function(
     function: &FunctionDecl,
     name: &str,
@@ -2016,6 +2077,19 @@ fn lower_local_statement(
     };
 
     if !can_lower {
+        return None;
+    }
+
+    if *mutable
+        && matches!(value.type_, LoweredType::Struct(_))
+        && !lowered_expression_has_mutable_capability(&value, locals, signatures, structs)
+    {
+        diagnostics.push(Diagnostic::error(
+            statement.span,
+            format!(
+                "cannot initialize mutable binding `{name}` from an immutable value; use `.clone()` to create an independent mutable object"
+            ),
+        ));
         return None;
     }
 
