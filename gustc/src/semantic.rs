@@ -2139,11 +2139,44 @@ impl Analyzer {
                     })
                 })
             }
-            ExprKind::Call { callee, .. } => {
-                matches!(
+            ExprKind::Call { callee, args } => {
+                if matches!(
                     &callee.kind,
                     ExprKind::Member { name, .. } if name == "clone"
-                )
+                ) {
+                    return true;
+                }
+
+                let signature = match &callee.kind {
+                    ExprKind::Identifier(name) => self.functions.get(name),
+                    ExprKind::Member { object, name } => {
+                        if let Some(type_) = self.resolve_type_expression(object) {
+                            match &type_ {
+                                Type::Struct(struct_name) => self
+                                    .structs
+                                    .get(struct_name)
+                                    .and_then(|struct_| struct_.static_methods.get(name))
+                                    .or_else(|| {
+                                        self.static_extensions
+                                            .get(&extension_name(&type_.name(), name))
+                                    }),
+                                _ => self
+                                    .static_extensions
+                                    .get(&extension_name(&type_.name(), name)),
+                            }
+                        } else {
+                            None
+                        }
+                    }
+                    _ => None,
+                };
+
+                signature.is_some_and(|signature| {
+                    args.iter().zip(&signature.params).all(|(arg, param)| {
+                        !self.requires_mutable_capability(&param.type_)
+                            || self.expr_has_mutable_capability(arg)
+                    })
+                })
             }
             ExprKind::String(_)
             | ExprKind::Number(_)

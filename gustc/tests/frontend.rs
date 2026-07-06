@@ -1774,6 +1774,41 @@ fn main() {
 }
 
 #[test]
+fn constructor_calls_preserve_argument_mutability() {
+    let result = check_source(
+        r#"
+struct A {
+    text: String
+}
+
+struct B {
+    a: A
+
+    static fn new(a: A): Self => Self { a: a }
+}
+
+fn main() {
+    let mut mutableA = A { text: "mutable" }
+    let mut validB = B.new(mutableA)
+    let immutableA = A { text: "immutable" }
+    let mut invalidB = B.new(immutableA)
+}
+"#,
+    );
+
+    assert_eq!(
+        result
+            .diagnostics
+            .iter()
+            .filter(|diagnostic| diagnostic.message.contains("immutable value"))
+            .count(),
+        1,
+        "expected only the immutable constructor argument to fail, got {:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
 fn clone_creates_mutable_capability_from_immutable_structs() {
     let result = check_source(
         r#"

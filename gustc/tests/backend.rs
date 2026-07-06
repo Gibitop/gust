@@ -1543,6 +1543,57 @@ fn main() {
 }
 
 #[test]
+fn inferred_constructor_return_preserves_argument_mutability() {
+    let result = check_source(
+        r#"
+struct A {
+    value: String
+}
+
+struct Container {
+    value: A
+
+    static fn new(value: A) => Self {
+        value: value,
+    }
+}
+
+fn main() {
+    let mut mutableA = A { value: "Hello" }
+    let mut validContainer = Container.new(mutableA)
+    let immutableA = A { value: "Hello" }
+    let mut invalidContainer = Container.new(immutableA)
+}
+"#,
+    );
+
+    assert!(
+        !result.has_errors(),
+        "frontend should defer the inferred constructor type, got {:?}",
+        result.diagnostics
+    );
+
+    let diagnostics = lower_program(&result.program)
+        .expect_err("immutable constructor argument must not gain mutable capability");
+    assert_eq!(
+        diagnostics
+            .iter()
+            .filter(|diagnostic| diagnostic.message.contains("immutable value"))
+            .count(),
+        1,
+        "expected only the immutable constructor argument to fail, got {diagnostics:?}"
+    );
+    assert!(
+        diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.message.contains(
+                "cannot initialize mutable binding `invalidContainer` from an immutable value"
+            )),
+        "expected invalid constructor binding error, got {diagnostics:?}"
+    );
+}
+
+#[test]
 fn extension_functions_lower_with_local_static_dispatch() {
     let result = check_source(
         r#"struct Greeter {
