@@ -104,14 +104,14 @@ pub fn emit_c(program: &LoweredProgram) -> String {
             source.push_str(";\n\n");
         }
 
-        push_c_function(&mut source, function);
+        push_c_function(&mut source, function, &program.structs);
         source.push('\n');
     }
 
     source.push_str("int main(void) {\n");
 
     for statement in &program.statements {
-        push_c_statement(&mut source, statement, 1);
+        push_c_statement(&mut source, statement, 1, &program.structs);
     }
 
     source.push_str("    return 0;\n}\n");
@@ -894,13 +894,27 @@ fn push_c_struct_runtime_helpers(source: &mut String, program: &LoweredProgram) 
         source.push_str("* ");
         push_c_struct_new_name(source, &struct_.name);
         source.push('(');
-        push_c_struct_name(source, &struct_.name);
-        source.push_str(" value) {\n    ");
+        for (index, field) in struct_.fields.iter().enumerate() {
+            if index > 0 {
+                source.push_str(", ");
+            }
+
+            push_c_type(source, &field.type_);
+            source.push(' ');
+            push_c_local_name(source, &field.name);
+        }
+        source.push_str(") {\n    ");
         push_c_struct_name(source, &struct_.name);
         source.push_str("* result = gust_rt_alloc(sizeof(");
         push_c_struct_name(source, &struct_.name);
         source.push_str("));\n");
-        source.push_str("    *result = value;\n");
+        for field in &struct_.fields {
+            source.push_str("    result->");
+            push_c_local_name(source, &field.name);
+            source.push_str(" = ");
+            push_c_local_name(source, &field.name);
+            source.push_str(";\n");
+        }
         source.push_str("    return result;\n");
         source.push_str("}\n\n");
 
@@ -1008,7 +1022,7 @@ fn push_c_enum(source: &mut String, enum_: &LoweredEnum) {
     source.push_str(";\n");
 }
 
-fn push_c_function(source: &mut String, function: &LoweredFunction) {
+fn push_c_function(source: &mut String, function: &LoweredFunction, structs: &[LoweredStruct]) {
     source.push_str("// Gust function: ");
     source.push_str(&function.name);
     source.push('\n');
@@ -1016,13 +1030,13 @@ fn push_c_function(source: &mut String, function: &LoweredFunction) {
     source.push_str(" {\n");
 
     for statement in &function.statements {
-        push_c_statement(source, statement, 1);
+        push_c_statement(source, statement, 1, structs);
     }
 
     if function.return_type != LoweredType::Void && function.return_value.type_ != LoweredType::Void
     {
         source.push_str("    return ");
-        push_c_value(source, &function.return_value);
+        push_c_value(source, &function.return_value, structs);
         source.push_str(";\n");
     }
 
@@ -1049,7 +1063,12 @@ fn push_c_function_signature(source: &mut String, function: &LoweredFunction) {
     source.push(')');
 }
 
-fn push_c_statement(source: &mut String, statement: &LoweredStatement, indent: usize) {
+fn push_c_statement(
+    source: &mut String,
+    statement: &LoweredStatement,
+    indent: usize,
+    structs: &[LoweredStruct],
+) {
     match statement {
         LoweredStatement::Local { name, value } => {
             push_c_indent(source, indent);
@@ -1057,14 +1076,14 @@ fn push_c_statement(source: &mut String, statement: &LoweredStatement, indent: u
             source.push(' ');
             push_c_local_name(source, name);
             source.push_str(" = ");
-            push_c_value(source, value);
+            push_c_value(source, value, structs);
             source.push_str(";\n");
         }
         LoweredStatement::Assignment { target, value } => {
             push_c_indent(source, indent);
-            push_c_value(source, target);
+            push_c_value(source, target, structs);
             source.push_str(" = ");
-            push_c_value(source, value);
+            push_c_value(source, value, structs);
             source.push_str(";\n");
         }
         LoweredStatement::Println(value) => match &value.kind {
@@ -1092,7 +1111,7 @@ fn push_c_statement(source: &mut String, statement: &LoweredStatement, indent: u
             | LoweredExprKind::Call { .. } => {
                 push_c_indent(source, indent);
                 source.push_str("gust_rt_io_println(");
-                push_c_value(source, value);
+                push_c_value(source, value, structs);
                 source.push_str(");\n");
             }
             LoweredExprKind::Void
@@ -1109,7 +1128,7 @@ fn push_c_statement(source: &mut String, statement: &LoweredStatement, indent: u
         },
         LoweredStatement::Expr(value) => {
             push_c_indent(source, indent);
-            push_c_value(source, value);
+            push_c_value(source, value, structs);
             source.push_str(";\n");
         }
         LoweredStatement::Return(value) => {
@@ -1118,7 +1137,7 @@ fn push_c_statement(source: &mut String, statement: &LoweredStatement, indent: u
 
             if let Some(value) = value {
                 source.push(' ');
-                push_c_value(source, value);
+                push_c_value(source, value, structs);
             }
 
             source.push_str(";\n");
@@ -1130,11 +1149,11 @@ fn push_c_statement(source: &mut String, statement: &LoweredStatement, indent: u
         } => {
             push_c_indent(source, indent);
             source.push_str("if (");
-            push_c_value(source, condition);
+            push_c_value(source, condition, structs);
             source.push_str(") {\n");
 
             for statement in then_branch {
-                push_c_statement(source, statement, indent + 1);
+                push_c_statement(source, statement, indent + 1, structs);
             }
 
             push_c_indent(source, indent);
@@ -1144,7 +1163,7 @@ fn push_c_statement(source: &mut String, statement: &LoweredStatement, indent: u
                 source.push_str(" else {\n");
 
                 for statement in else_branch {
-                    push_c_statement(source, statement, indent + 1);
+                    push_c_statement(source, statement, indent + 1, structs);
                 }
 
                 push_c_indent(source, indent);
@@ -1165,7 +1184,7 @@ fn push_c_statement(source: &mut String, statement: &LoweredStatement, indent: u
             source.push(' ');
             source.push_str(temp_name);
             source.push_str(" = ");
-            push_c_value(source, value);
+            push_c_value(source, value, structs);
             source.push_str(";\n");
 
             for (index, branch) in branches.iter().enumerate() {
@@ -1185,7 +1204,7 @@ fn push_c_statement(source: &mut String, statement: &LoweredStatement, indent: u
                 }
 
                 for statement in &branch.statements {
-                    push_c_statement(source, statement, indent + 2);
+                    push_c_statement(source, statement, indent + 2, structs);
                 }
 
                 push_c_indent(source, indent + 1);
@@ -1454,7 +1473,7 @@ fn push_c_u128_literal(source: &mut String, value: &str) {
     }
 }
 
-fn push_c_value(source: &mut String, value: &LoweredExpr) {
+fn push_c_value(source: &mut String, value: &LoweredExpr, structs: &[LoweredStruct]) {
     match &value.kind {
         LoweredExprKind::Void => {}
         LoweredExprKind::StringLiteral(value) => {
@@ -1475,19 +1494,19 @@ fn push_c_value(source: &mut String, value: &LoweredExpr) {
         LoweredExprKind::Local(name) => push_c_local_name(source, name),
         LoweredExprKind::PostfixIncrement(target) => {
             source.push('(');
-            push_c_value(source, target);
+            push_c_value(source, target, structs);
             source.push_str("++)");
         }
         LoweredExprKind::StringConcat(left, right) => {
             source.push_str("gust_rt_string_concat(");
-            push_c_value(source, left);
+            push_c_value(source, left, structs);
             source.push_str(", ");
-            push_c_value(source, right);
+            push_c_value(source, right, structs);
             source.push(')');
         }
         LoweredExprKind::Not(operand) => {
             source.push_str("(!");
-            push_c_value(source, operand);
+            push_c_value(source, operand, structs);
             source.push(')');
         }
         LoweredExprKind::Negate(operand) => {
@@ -1503,7 +1522,7 @@ fn push_c_value(source: &mut String, value: &LoweredExpr) {
             }
 
             source.push_str("(-");
-            push_c_value(source, operand);
+            push_c_value(source, operand, structs);
             source.push(')');
         }
         LoweredExprKind::Arithmetic { left, op, right } => {
@@ -1518,28 +1537,28 @@ fn push_c_value(source: &mut String, value: &LoweredExpr) {
                 } else {
                     source.push_str("fmod(");
                 }
-                push_c_value(source, left);
+                push_c_value(source, left, structs);
                 source.push_str(", ");
-                push_c_value(source, right);
+                push_c_value(source, right, structs);
                 source.push(')');
                 return;
             }
 
             source.push('(');
-            push_c_value(source, left);
+            push_c_value(source, left, structs);
             source.push(' ');
             source.push_str(op.symbol());
             source.push(' ');
-            push_c_value(source, right);
+            push_c_value(source, right, structs);
             source.push(')');
         }
         LoweredExprKind::Logical { left, op, right } => {
             source.push('(');
-            push_c_value(source, left);
+            push_c_value(source, left, structs);
             source.push(' ');
             source.push_str(op.symbol());
             source.push(' ');
-            push_c_value(source, right);
+            push_c_value(source, right, structs);
             source.push(')');
         }
         LoweredExprKind::Comparison { left, op, right } => {
@@ -1549,44 +1568,41 @@ fn push_c_value(source: &mut String, value: &LoweredExpr) {
                 }
 
                 source.push_str("gust_rt_string_equal(");
-                push_c_value(source, left);
+                push_c_value(source, left, structs);
                 source.push_str(", ");
-                push_c_value(source, right);
+                push_c_value(source, right, structs);
                 source.push(')');
             } else {
                 source.push('(');
-                push_c_value(source, left);
+                push_c_value(source, left, structs);
                 source.push(' ');
                 source.push_str(op.symbol());
                 source.push(' ');
-                push_c_value(source, right);
+                push_c_value(source, right, structs);
                 source.push(')');
             }
         }
         LoweredExprKind::StructLiteral { name, fields } => {
             push_c_struct_new_name(source, name);
-            source.push_str("((");
-            push_c_struct_name(source, name);
-            source.push_str("){");
+            source.push('(');
+            let struct_ = structs
+                .iter()
+                .find(|struct_| struct_.name == *name)
+                .expect("lowered struct literal must reference a known struct");
 
-            for (index, field) in fields.iter().enumerate() {
+            for (index, field) in struct_.fields.iter().enumerate() {
                 if index > 0 {
                     source.push_str(", ");
-                } else {
-                    source.push(' ');
                 }
 
-                source.push('.');
-                push_c_local_name(source, &field.name);
-                source.push_str(" = ");
-                push_c_value(source, &field.value);
+                let value = fields
+                    .iter()
+                    .find(|value| value.name == field.name)
+                    .expect("lowered struct literal must contain every declared field");
+                push_c_value(source, &value.value, structs);
             }
 
-            if !fields.is_empty() {
-                source.push(' ');
-            }
-
-            source.push_str("})");
+            source.push(')');
         }
         LoweredExprKind::EnumLiteral {
             enum_name,
@@ -1602,13 +1618,13 @@ fn push_c_value(source: &mut String, value: &LoweredExpr) {
                 source.push_str(", .gust_payload.");
                 push_c_local_name(source, variant);
                 source.push_str(" = ");
-                push_c_value(source, payload);
+                push_c_value(source, payload, structs);
             }
 
             source.push_str(" }");
         }
         LoweredExprKind::EnumPayload { object, variant } => {
-            push_c_value(source, object);
+            push_c_value(source, object, structs);
             source.push_str(".gust_payload.");
             push_c_local_name(source, variant);
         }
@@ -1623,7 +1639,7 @@ fn push_c_value(source: &mut String, value: &LoweredExpr) {
             source.push(' ');
             source.push_str(temp_name);
             source.push_str(" = ");
-            push_c_value(source, value);
+            push_c_value(source, value, structs);
             source.push_str("; (");
 
             for (index, branch) in branches.iter().enumerate() {
@@ -1632,7 +1648,7 @@ fn push_c_value(source: &mut String, value: &LoweredExpr) {
                     source.push_str(" ? ");
                 }
 
-                push_c_value(source, &branch.value);
+                push_c_value(source, &branch.value, structs);
 
                 if index + 1 < branches.len() {
                     source.push_str(" : ");
@@ -1642,7 +1658,7 @@ fn push_c_value(source: &mut String, value: &LoweredExpr) {
             source.push_str("); })");
         }
         LoweredExprKind::FieldAccess { object, field } => {
-            push_c_value(source, object);
+            push_c_value(source, object, structs);
             source.push_str("->");
             push_c_local_name(source, field);
         }
@@ -1652,7 +1668,7 @@ fn push_c_value(source: &mut String, value: &LoweredExpr) {
             };
             push_c_struct_clone_name(source, name);
             source.push('(');
-            push_c_value(source, object);
+            push_c_value(source, object, structs);
             source.push(')');
         }
         LoweredExprKind::NumberToString(object) => {
@@ -1662,7 +1678,7 @@ fn push_c_value(source: &mut String, value: &LoweredExpr) {
             source.push_str("gust_rt_");
             source.push_str(type_.name());
             source.push_str("_to_string(");
-            push_c_value(source, object);
+            push_c_value(source, object, structs);
             source.push(')');
         }
         LoweredExprKind::Call { name, args } => {
@@ -1674,7 +1690,7 @@ fn push_c_value(source: &mut String, value: &LoweredExpr) {
                     source.push_str(", ");
                 }
 
-                push_c_value(source, arg);
+                push_c_value(source, arg, structs);
             }
 
             source.push(')');
