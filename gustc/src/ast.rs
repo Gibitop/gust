@@ -95,6 +95,7 @@ pub struct ExtensionDecl {
 #[derive(Debug, Clone)]
 pub struct FunctionDecl {
     pub name: Option<String>,
+    pub type_params: Vec<String>,
     pub params: Vec<Param>,
     pub return_type: Option<TypeRef>,
     pub body: FunctionBody,

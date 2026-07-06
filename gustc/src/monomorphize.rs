@@ -13,6 +13,7 @@ pub fn monomorphize(program: &Program) -> Result<Program, Vec<Diagnostic>> {
 struct Monomorphizer {
     struct_templates: HashMap<String, StructDecl>,
     enum_templates: HashMap<String, EnumDecl>,
+    function_templates: HashMap<String, FunctionDecl>,
     concrete_structs: HashSet<String>,
     concrete_enums: HashMap<String, EnumDecl>,
     pending: VecDeque<(GenericKind, String, Vec<TypeRef>)>,
@@ -25,6 +26,8 @@ struct Monomorphizer {
     member_returns: HashMap<(String, String, bool), TypeRef>,
     function_returns: HashMap<String, TypeRef>,
     function_params: HashMap<String, Vec<Option<TypeRef>>>,
+    generic_function_returns: HashMap<String, TypeRef>,
+    expected_expr_types: HashMap<crate::span::Span, TypeRef>,
     diagnostics: Vec<Diagnostic>,
 }
 
@@ -32,6 +35,7 @@ struct Monomorphizer {
 enum GenericKind {
     Struct,
     Enum,
+    Function,
 }
 
 impl Monomorphizer {
@@ -54,6 +58,18 @@ impl Monomorphizer {
                     return None;
                 };
                 (!item.type_params.is_empty()).then(|| (item.name.clone(), item.clone()))
+            })
+            .collect();
+        let function_templates: HashMap<String, FunctionDecl> = program
+            .items
+            .iter()
+            .filter_map(|item| {
+                let Item::Function(item) = item else {
+                    return None;
+                };
+                (!item.type_params.is_empty())
+                    .then(|| item.name.clone().map(|name| (name, item.clone())))
+                    .flatten()
             })
             .collect();
         let concrete_structs = program
@@ -85,6 +101,9 @@ impl Monomorphizer {
                 let Item::Function(function) = item else {
                     return None;
                 };
+                if !function.type_params.is_empty() {
+                    return None;
+                }
                 Some((
                     function.name.clone()?,
                     function.return_type.as_ref()?.clone(),
@@ -98,6 +117,9 @@ impl Monomorphizer {
                 let Item::Function(function) = item else {
                     return None;
                 };
+                if !function.type_params.is_empty() {
+                    return None;
+                }
                 Some((
                     function.name.clone()?,
                     function
@@ -108,10 +130,20 @@ impl Monomorphizer {
                 ))
             })
             .collect();
+        let generic_function_returns = function_templates
+            .iter()
+            .filter_map(|(name, function)| {
+                function
+                    .return_type
+                    .clone()
+                    .map(|return_type| (name.clone(), return_type))
+            })
+            .collect();
 
         Self {
             struct_templates,
             enum_templates,
+            function_templates,
             concrete_structs,
             concrete_enums,
             pending: VecDeque::new(),
@@ -124,17 +156,21 @@ impl Monomorphizer {
             member_returns: HashMap::new(),
             function_returns,
             function_params,
+            generic_function_returns,
+            expected_expr_types: HashMap::new(),
             diagnostics: Vec::new(),
         }
     }
 
     fn run(mut self, program: &Program) -> Result<Program, Vec<Diagnostic>> {
+        self.infer_generic_function_returns();
         self.validate_templates();
 
         let mut items = Vec::new();
         for item in &program.items {
             if matches!(item, Item::Struct(item) if !item.type_params.is_empty())
                 || matches!(item, Item::Enum(item) if !item.type_params.is_empty())
+                || matches!(item, Item::Function(item) if !item.type_params.is_empty())
             {
                 continue;
             }
@@ -206,6 +242,45 @@ impl Monomorphizer {
                         .insert(specialized.name.clone(), specialized.clone());
                     items.push(Item::Enum(specialized));
                 }
+                GenericKind::Function => {
+                    let Some(template) = self.function_templates.get(&name).cloned() else {
+                        continue;
+                    };
+                    let substitutions = template
+                        .type_params
+                        .iter()
+                        .cloned()
+                        .zip(args)
+                        .collect::<HashMap<_, _>>();
+                    let mut specialized = template;
+                    specialized.name = Some(specialized_name.clone());
+                    specialized.type_params.clear();
+                    for param in &mut specialized.params {
+                        if let Some(type_ref) = &mut param.type_ref {
+                            *type_ref = substitute_type(type_ref, &substitutions);
+                        }
+                    }
+                    if let Some(return_type) = &mut specialized.return_type {
+                        *return_type = substitute_type(return_type, &substitutions);
+                    } else if let Some(return_type) = self.generic_function_returns.get(&name) {
+                        specialized.return_type =
+                            Some(substitute_type(return_type, &substitutions));
+                    }
+                    if let Some(return_type) = &specialized.return_type {
+                        self.function_returns
+                            .insert(specialized_name.clone(), return_type.clone());
+                    }
+                    self.function_params.insert(
+                        specialized_name,
+                        specialized
+                            .params
+                            .iter()
+                            .map(|param| param.type_ref.clone())
+                            .collect(),
+                    );
+                    self.rewrite_function(&mut specialized, &substitutions);
+                    items.push(Item::Function(specialized));
+                }
             }
         }
 
@@ -245,6 +320,53 @@ impl Monomorphizer {
                         ),
                     ));
                 }
+            }
+        }
+        for template in self.function_templates.values() {
+            let function_name = template.name.as_deref().unwrap_or("<anonymous>");
+            let mut names = HashSet::new();
+            for name in &template.type_params {
+                if !names.insert(name) {
+                    self.diagnostics.push(Diagnostic::error(
+                        template.span,
+                        format!("duplicate type parameter `{name}` in function `{function_name}`"),
+                    ));
+                }
+            }
+            let used = template
+                .params
+                .iter()
+                .filter_map(|param| param.type_ref.as_ref())
+                .chain(self.generic_function_returns.get(function_name))
+                .flat_map(type_names)
+                .collect::<HashSet<_>>();
+            for name in &template.type_params {
+                if !used.contains(name.as_str()) {
+                    self.diagnostics.push(Diagnostic::error(
+                        template.span,
+                        format!("unused type parameter `{name}` in function `{function_name}`"),
+                    ));
+                }
+            }
+        }
+    }
+
+    fn infer_generic_function_returns(&mut self) {
+        for _ in 0..self.function_templates.len() {
+            let mut changed = false;
+            for (name, template) in self.function_templates.clone() {
+                if self.generic_function_returns.contains_key(&name) {
+                    continue;
+                }
+                let Some(return_type) = self.infer_rewritten_function_return(&template, "", false)
+                else {
+                    continue;
+                };
+                self.generic_function_returns.insert(name, return_type);
+                changed = true;
+            }
+            if !changed {
+                break;
             }
         }
     }
@@ -343,8 +465,8 @@ impl Monomorphizer {
         match &mut function.body {
             FunctionBody::Block(block) => self.rewrite_block(block, substitutions),
             FunctionBody::Expr(expr) => {
-                if let Some(return_type) = self.return_types.last() {
-                    self.apply_expr_context(expr, return_type);
+                if let Some(return_type) = self.return_types.last().cloned() {
+                    self.apply_expr_context(expr, &return_type);
                 }
                 self.rewrite_expr(expr, substitutions);
                 if infer_return
@@ -413,8 +535,8 @@ impl Monomorphizer {
             }
             StmtKind::Return { value } => {
                 if let Some(value) = value {
-                    if let Some(return_type) = self.return_types.last() {
-                        self.apply_expr_context(value, return_type);
+                    if let Some(return_type) = self.return_types.last().cloned() {
+                        self.apply_expr_context(value, &return_type);
                     }
                     self.rewrite_expr(value, substitutions);
                     if let Some(type_ref) = self.infer_expr_type(value)
@@ -449,6 +571,90 @@ impl Monomorphizer {
     }
 
     fn rewrite_expr(&mut self, expr: &mut Expr, substitutions: &HashMap<String, TypeRef>) {
+        let generic_function_call = match &expr.kind {
+            ExprKind::Call { callee, .. } => match &callee.kind {
+                ExprKind::Identifier(name) if self.function_templates.contains_key(name) => {
+                    Some((name.clone(), None))
+                }
+                ExprKind::GenericType { name, args }
+                    if self.function_templates.contains_key(name) =>
+                {
+                    Some((name.clone(), Some(args.clone())))
+                }
+                _ => None,
+            },
+            _ => None,
+        };
+        if let Some((function_name, explicit_args)) = generic_function_call {
+            let expected_return = self.expected_expr_types.remove(&expr.span);
+            let ExprKind::Call { callee, args } = &mut expr.kind else {
+                unreachable!("generic function call was matched above")
+            };
+            let mut args_rewritten = false;
+            let type_args = if let Some(mut type_args) = explicit_args {
+                for type_arg in &mut type_args {
+                    self.rewrite_type(type_arg, substitutions);
+                }
+                self.validate_function_type_arguments(&function_name, &type_args, expr.span)
+                    .then_some(type_args)
+            } else {
+                match self.infer_function_type_arguments(
+                    &function_name,
+                    args,
+                    expected_return.as_ref(),
+                ) {
+                    Ok(mut type_args) => {
+                        for type_arg in &mut type_args {
+                            self.rewrite_type(type_arg, substitutions);
+                        }
+                        Some(type_args)
+                    }
+                    Err(_) => {
+                        for arg in args.iter_mut() {
+                            self.rewrite_expr(arg, substitutions);
+                        }
+                        args_rewritten = true;
+                        match self.infer_function_type_arguments(
+                            &function_name,
+                            args,
+                            expected_return.as_ref(),
+                        ) {
+                            Ok(mut type_args) => {
+                                for type_arg in &mut type_args {
+                                    self.rewrite_type(type_arg, substitutions);
+                                }
+                                Some(type_args)
+                            }
+                            Err(message) => {
+                                self.diagnostics.push(Diagnostic::error(expr.span, message));
+                                None
+                            }
+                        }
+                    }
+                }
+            };
+            if let Some(type_args) = type_args {
+                self.apply_generic_function_argument_contexts(
+                    &function_name,
+                    &type_args,
+                    args,
+                    substitutions,
+                );
+                if !args_rewritten {
+                    for arg in args.iter_mut() {
+                        self.rewrite_expr(arg, substitutions);
+                    }
+                }
+                self.specialize_function(&function_name, &type_args);
+                callee.kind = ExprKind::Identifier(specialized_name(&function_name, &type_args));
+            } else if !args_rewritten {
+                for arg in args.iter_mut() {
+                    self.rewrite_expr(arg, substitutions);
+                }
+            }
+            return;
+        }
+
         if let ExprKind::GenericType { name, args } = &mut expr.kind {
             for arg in args.iter_mut() {
                 self.rewrite_type(arg, substitutions);
@@ -885,7 +1091,8 @@ impl Monomorphizer {
         return_types
     }
 
-    fn apply_expr_context(&self, expr: &mut Expr, expected: &TypeRef) {
+    fn apply_expr_context(&mut self, expr: &mut Expr, expected: &TypeRef) {
+        self.expected_expr_types.insert(expr.span, expected.clone());
         let Some((generic_name, concrete_args)) = self.specializations.get(&expected.name) else {
             return;
         };
@@ -1048,6 +1255,82 @@ impl Monomorphizer {
             })
     }
 
+    fn infer_function_type_arguments(
+        &self,
+        function_name: &str,
+        args: &[Expr],
+        expected_return: Option<&TypeRef>,
+    ) -> Result<Vec<TypeRef>, String> {
+        let template = &self.function_templates[function_name];
+        let mut constraints = template
+            .params
+            .iter()
+            .zip(args)
+            .filter_map(|(param, arg)| {
+                let expected = param.type_ref.as_ref()?;
+                self.infer_expr_type(arg)
+                    .map(|actual| (expected.clone(), actual))
+            })
+            .collect::<Vec<_>>();
+        let return_type = template
+            .return_type
+            .as_ref()
+            .or_else(|| self.generic_function_returns.get(function_name));
+        if let (Some(return_type), Some(expected_return)) = (return_type, expected_return) {
+            constraints.push((return_type.clone(), expected_return.clone()));
+        }
+        self.solve_type_arguments(function_name, &template.type_params, constraints)
+            .map_err(|reason| {
+                format!(
+                    "cannot infer type arguments for generic function `{function_name}`: {reason}; write `{function_name}<Type>(...)` or add a concrete expected type"
+                )
+            })
+    }
+
+    fn apply_generic_function_argument_contexts(
+        &mut self,
+        function_name: &str,
+        type_args: &[TypeRef],
+        args: &mut [Expr],
+        substitutions: &HashMap<String, TypeRef>,
+    ) {
+        let template = self.function_templates[function_name].clone();
+        let function_substitutions = template
+            .type_params
+            .iter()
+            .cloned()
+            .zip(type_args.iter().cloned())
+            .collect::<HashMap<_, _>>();
+        for (param, arg) in template.params.iter().zip(args) {
+            let Some(type_ref) = &param.type_ref else {
+                continue;
+            };
+            let mut expected = substitute_type(type_ref, &function_substitutions);
+            self.rewrite_type(&mut expected, substitutions);
+            self.apply_expr_context(arg, &expected);
+        }
+    }
+
+    fn validate_function_type_arguments(
+        &mut self,
+        function_name: &str,
+        args: &[TypeRef],
+        span: crate::span::Span,
+    ) -> bool {
+        let expected = self.function_templates[function_name].type_params.len();
+        if args.len() == expected {
+            return true;
+        }
+        self.diagnostics.push(Diagnostic::error(
+            span,
+            format!(
+                "generic function `{function_name}` expects {expected} type arguments, got {}",
+                args.len()
+            ),
+        ));
+        false
+    }
+
     fn solve_type_arguments(
         &self,
         _type_name: &str,
@@ -1131,7 +1414,36 @@ impl Monomorphizer {
             }
             ExprKind::String(_) => Some(inferred("String")),
             ExprKind::Bool(_) => Some(inferred("bool")),
-            ExprKind::StructInit { name, args, .. } | ExprKind::GenericType { name, args } => {
+            ExprKind::StructInit { name, args, fields } => {
+                if name == "Self"
+                    && args.is_empty()
+                    && let Some(type_ref) = self.lookup_local_type("Self")
+                {
+                    return Some(type_ref);
+                }
+                if self.struct_templates.contains_key(name) {
+                    let args = if args.is_empty() {
+                        self.infer_struct_type_arguments(name, fields).ok()?
+                    } else {
+                        args.clone()
+                    };
+                    return Some(TypeRef {
+                        name: name.clone(),
+                        args,
+                        span: expr.span,
+                    });
+                }
+                if args.is_empty() {
+                    Some(self.expanded_type(&inferred(name)))
+                } else {
+                    Some(TypeRef {
+                        name: name.clone(),
+                        args: args.clone(),
+                        span: expr.span,
+                    })
+                }
+            }
+            ExprKind::GenericType { name, args } => {
                 if name == "Self"
                     && args.is_empty()
                     && let Some(type_ref) = self.lookup_local_type("Self")
@@ -1149,6 +1461,22 @@ impl Monomorphizer {
                 }
             }
             ExprKind::Member { object, name } => {
+                if let ExprKind::GenericType {
+                    name: enum_name,
+                    args,
+                } = &object.kind
+                    && self.enum_templates.contains_key(enum_name)
+                    && self.enum_templates[enum_name]
+                        .variants
+                        .iter()
+                        .any(|variant| variant.name == *name)
+                {
+                    return Some(TypeRef {
+                        name: enum_name.clone(),
+                        args: args.clone(),
+                        span: expr.span,
+                    });
+                }
                 if let ExprKind::Identifier(enum_name) = &object.kind
                     && self.enum_variant_payload(enum_name, name).is_some()
                 {
@@ -1158,10 +1486,67 @@ impl Monomorphizer {
                 self.generic_member_type(&object_type, name, false)
             }
             ExprKind::Call { callee, .. } => {
-                if let ExprKind::Identifier(name) = &callee.kind
-                    && let Some(return_type) = self.function_returns.get(name)
+                if let ExprKind::Member { object, name } = &callee.kind {
+                    match &object.kind {
+                        ExprKind::Identifier(enum_name)
+                            if self.enum_templates.contains_key(enum_name)
+                                && self.lookup_local_type(enum_name).is_none() =>
+                        {
+                            let ExprKind::Call { args, .. } = &expr.kind else {
+                                unreachable!("call expression was matched above")
+                            };
+                            if let Ok(type_args) =
+                                self.infer_enum_type_arguments(enum_name, name, args)
+                            {
+                                return Some(TypeRef {
+                                    name: enum_name.clone(),
+                                    args: type_args,
+                                    span: expr.span,
+                                });
+                            }
+                        }
+                        ExprKind::GenericType {
+                            name: enum_name,
+                            args,
+                        } if self.enum_templates.contains_key(enum_name) => {
+                            return Some(TypeRef {
+                                name: enum_name.clone(),
+                                args: args.clone(),
+                                span: expr.span,
+                            });
+                        }
+                        _ => {}
+                    }
+                }
+                if let ExprKind::Identifier(name) = &callee.kind {
+                    if let Some(template_return) = self.generic_function_returns.get(name)
+                        && let ExprKind::Call { args, .. } = &expr.kind
+                        && let Ok(type_args) = self.infer_function_type_arguments(name, args, None)
+                    {
+                        let template = &self.function_templates[name];
+                        let substitutions = template
+                            .type_params
+                            .iter()
+                            .cloned()
+                            .zip(type_args)
+                            .collect::<HashMap<_, _>>();
+                        return Some(substitute_type(template_return, &substitutions));
+                    }
+                    if let Some(return_type) = self.function_returns.get(name) {
+                        return Some(return_type.clone());
+                    }
+                }
+                if let ExprKind::GenericType { name, args } = &callee.kind
+                    && let Some(template_return) = self.generic_function_returns.get(name)
                 {
-                    return Some(return_type.clone());
+                    let template = &self.function_templates[name];
+                    let substitutions = template
+                        .type_params
+                        .iter()
+                        .cloned()
+                        .zip(args.iter().cloned())
+                        .collect::<HashMap<_, _>>();
+                    return Some(substitute_type(template_return, &substitutions));
                 }
                 let ExprKind::Member { object, name } = &callee.kind else {
                     return None;
@@ -1332,6 +1717,44 @@ impl Monomorphizer {
             specialized_name(name, args),
             (name.to_string(), args.to_vec()),
         );
+    }
+
+    fn specialize_function(&mut self, name: &str, args: &[TypeRef]) {
+        let specialized_name = specialized_name(name, args);
+        if !self.function_params.contains_key(&specialized_name) {
+            let template = self.function_templates[name].clone();
+            let substitutions = template
+                .type_params
+                .iter()
+                .cloned()
+                .zip(args.iter().cloned())
+                .collect::<HashMap<_, _>>();
+            let params = template
+                .params
+                .iter()
+                .map(|param| {
+                    param
+                        .type_ref
+                        .as_ref()
+                        .map(|type_ref| substitute_type(type_ref, &substitutions))
+                })
+                .collect();
+            self.function_params
+                .insert(specialized_name.clone(), params);
+            if let Some(return_type) = &template.return_type {
+                self.function_returns.insert(
+                    specialized_name,
+                    substitute_type(return_type, &substitutions),
+                );
+            } else if let Some(return_type) = self.generic_function_returns.get(name) {
+                self.function_returns.insert(
+                    specialized_name,
+                    substitute_type(return_type, &substitutions),
+                );
+            }
+        }
+        self.pending
+            .push_back((GenericKind::Function, name.to_string(), args.to_vec()));
     }
 }
 
@@ -1752,6 +2175,14 @@ fn prune_unused_generic_methods(items: &mut [Item], generic_structs: &HashSet<St
 
 fn concrete_type_name(type_ref: &TypeRef) -> Option<String> {
     type_ref.args.is_empty().then(|| type_ref.name.clone())
+}
+
+fn type_names(type_ref: &TypeRef) -> Vec<&str> {
+    let mut names = vec![type_ref.name.as_str()];
+    for arg in &type_ref.args {
+        names.extend(type_names(arg));
+    }
+    names
 }
 
 fn consistent_type(types: &[TypeRef]) -> Option<TypeRef> {

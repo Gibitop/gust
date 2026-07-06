@@ -561,6 +561,8 @@ impl<'names, 'diagnostics> ModuleRewriter<'names, 'diagnostics> {
     }
 
     fn rewrite_function(&mut self, function: &mut FunctionDecl) {
+        self.scopes
+            .push(function.type_params.iter().cloned().collect());
         for param in &mut function.params {
             if let Some(type_ref) = &mut param.type_ref {
                 self.rewrite_type(type_ref);
@@ -581,6 +583,7 @@ impl<'names, 'diagnostics> ModuleRewriter<'names, 'diagnostics> {
             FunctionBody::Block(block) => self.rewrite_block(block),
             FunctionBody::Expr(expr) => self.rewrite_expr(expr),
         }
+        self.scopes.pop();
         self.scopes.pop();
     }
 

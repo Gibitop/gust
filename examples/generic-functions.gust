@@ -1,0 +1,47 @@
+enum Option<T> {
+    Some(T)
+    None
+}
+
+fn identity<T>(value: T) {
+    return value
+}
+
+fn some<T>(value: T) {
+    return Option.Some(value)
+}
+
+fn none<T>() {
+    return Option<T>.None
+}
+
+fn repeat<T>(value: T, count: i32) {
+    if count > 1 {
+        return repeat(value, count - 1)
+    }
+    return value
+}
+
+fn main() {
+    let inferred = identity("inferred")
+    let explicit = identity<i32>(42)
+    let nested = identity(identity("nested"))
+    let wrapped = some("wrapped")
+    let missing: Option<String> = none()
+
+    io.println(inferred)
+    io.println(explicit.toString())
+    io.println(nested)
+    io.println(repeat("recursive", 3))
+
+    let wrappedText = match wrapped {
+        Option.Some(value) => value,
+        Option.None => "missing",
+    }
+    let missingText = match missing {
+        Option.Some(value) => value,
+        Option.None => "missing",
+    }
+    io.println(wrappedText)
+    io.println(missingText)
+}

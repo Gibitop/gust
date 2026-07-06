@@ -3048,3 +3048,158 @@ fn main() {
             .contains("conflicting types `i32` and `String` were inferred for `T`")
     }));
 }
+
+#[test]
+fn generic_functions_infer_explicit_and_expected_type_arguments() {
+    let result = check_source(
+        r#"enum Option<T> {
+    Some(T)
+    None
+}
+
+struct Box<T> {
+    value: T
+}
+
+fn identity<T>(value: T) => value
+fn forward<T>(value: T) {
+    return identity(value)
+}
+fn some<T>(value: T) {
+    return Option.Some(value)
+}
+fn boxed<T>(value: T) {
+    return Box { value: value }
+}
+fn none<T>() => Option<T>.None
+
+fn main() {
+    let number = identity(42)
+    let nested = identity(identity(7))
+    let forwarded = forward("forwarded")
+    let text = identity<String>("Gust")
+    let wrapped = some("wrapped")
+    let box = boxed(9)
+    let missing: Option<String> = none()
+    if identity<bool>(true) {
+        io.println("explicit")
+    }
+    io.println(number.toString())
+    io.println(nested.toString())
+    io.println(forwarded)
+    io.println(text)
+    io.println(box.value.toString())
+    match wrapped {
+        Option.Some(value) => io.println(value),
+        Option.None => io.println("missing"),
+    }
+    match missing {
+        Option.Some(value) => io.println(value),
+        Option.None => io.println("missing"),
+    }
+}"#,
+    );
+
+    assert!(
+        !result.has_errors(),
+        "expected generic functions to validate, got {:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
+fn recursive_generic_functions_are_specialized_once() {
+    let result = check_source(
+        r#"fn recurse<T>(value: T) {
+    if false {
+        return recurse<T>(value)
+    }
+    return value
+}
+
+fn main() {
+    io.println(recurse("done"))
+}"#,
+    );
+
+    assert!(
+        !result.has_errors(),
+        "expected recursive generic function to validate, got {:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
+fn unused_generic_function_bodies_are_not_instantiated() {
+    let result = check_source(
+        r#"fn unused<T>(value: T): T => value.missing()
+
+fn main() {}"#,
+    );
+
+    assert!(
+        !result.has_errors(),
+        "expected unused generic function body to remain uninstantiated, got {:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
+fn generic_functions_report_inference_and_declaration_errors() {
+    let unresolved = check_source(
+        r#"fn make<T>(): T {
+    return make<T>()
+}
+
+fn main() {
+    let value = make()
+}"#,
+    );
+    assert!(unresolved.diagnostics.iter().any(|diagnostic| {
+        diagnostic
+            .message
+            .contains("cannot infer type arguments for generic function `make`")
+    }));
+
+    let conflicting = check_source(
+        r#"fn same<T>(first: T, second: T): T => first
+
+fn main() {
+    let value = same(1, "two")
+}"#,
+    );
+    assert!(conflicting.diagnostics.iter().any(|diagnostic| {
+        diagnostic
+            .message
+            .contains("conflicting types `i32` and `String` were inferred for `T`")
+    }));
+
+    let invalid_count = check_source(
+        r#"fn identity<T>(value: T): T => value
+
+fn main() {
+    let value = identity<i32, String>(1)
+}"#,
+    );
+    assert!(invalid_count.diagnostics.iter().any(|diagnostic| {
+        diagnostic
+            .message
+            .contains("generic function `identity` expects 1 type arguments, got 2")
+    }));
+
+    let declarations = check_source(
+        r#"fn invalid<T, T, U>(value: T): T => value
+
+fn main() {}"#,
+    );
+    assert!(declarations.diagnostics.iter().any(|diagnostic| {
+        diagnostic
+            .message
+            .contains("duplicate type parameter `T` in function `invalid`")
+    }));
+    assert!(declarations.diagnostics.iter().any(|diagnostic| {
+        diagnostic
+            .message
+            .contains("unused type parameter `U` in function `invalid`")
+    }));
+}
