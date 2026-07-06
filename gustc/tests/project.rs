@@ -365,6 +365,47 @@ fn main() {
     lower_program(&result.program).expect("imported generic struct should lower");
 }
 
+#[test]
+fn imported_generic_enums_are_monomorphized_after_module_linking() {
+    let project = TempProject::new();
+    project.write(
+        "main.gust",
+        r#"from ./option import { Option, none }
+
+fn main() {
+    let some = Option.Some("from module")
+    let missing = none()
+    let first = match some {
+        Option.Some(value) => value,
+        Option.None => "missing",
+    }
+    let second = match missing {
+        Option.Some(value) => value,
+        Option.None => "missing",
+    }
+    io.println(first + second)
+}"#,
+    );
+    project.write(
+        "option.gust",
+        r#"enum Option<T> {
+    Some(T)
+    None
+}
+
+fn none(): Option<String> => Option.None"#,
+    );
+
+    let result = check_project(&project.path("main.gust")).expect("project should load");
+    assert!(
+        result.diagnostics.is_empty(),
+        "expected imported generic enum to validate, got {:?}",
+        result.diagnostics
+    );
+
+    lower_program(&result.program).expect("imported generic enum should lower");
+}
+
 fn path_suffix(path: &str) -> &str {
     Path::new(path).to_str().expect("test path should be UTF-8")
 }

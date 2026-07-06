@@ -155,7 +155,7 @@ the extended type.
 `Self` refers to the enclosing or extended type inside both static and instance functions. Real
 static functions take precedence over static extension functions with the same name.
 
-## Generic structs
+## Generic structs and enums
 
 Structs may declare type parameters, such as `struct Box<T>`. Type parameters are available in
 fields and methods, and every concrete use is monomorphized before semantic analysis and executable
@@ -180,4 +180,14 @@ instantiated on demand using the same rules as instance methods.
 
 Inference reports an error when constraints conflict or leave a type parameter unresolved.
 
-Generic enums, generic top-level functions, and bounds are not implemented yet.
+Enums may declare type parameters, such as `enum Option<T>`. Concrete enum uses are monomorphized
+with payload type substitution and distinct executable layouts. Variant construction accepts
+explicit concrete types such as `Option<i32>.Some(1)` and infers type arguments from payloads when
+all parameters can be resolved. Expected local, return, function-argument, and enclosing payload
+types provide context for payload-free or otherwise ambiguous variants such as `Option.None`.
+
+Match patterns keep the generic source name, such as `Option.Some(value)`. The concrete matched
+enum determines the specialization and the substituted payload type of each binding. Nested
+generic enum payloads and generic enums imported from local modules use the same rules.
+
+Generic top-level functions and bounds are not implemented yet.

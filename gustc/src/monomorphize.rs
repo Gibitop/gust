@@ -1,8 +1,8 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 
 use crate::ast::{
-    Block, ElseBranch, Expr, ExprKind, FunctionBody, FunctionDecl, Item, MatchBranchBody, Program,
-    Stmt, StmtKind, StructDecl, StructMember, TypeRef,
+    Block, ElseBranch, EnumDecl, Expr, ExprKind, FunctionBody, FunctionDecl, Item, MatchBranchBody,
+    Pattern, Program, Stmt, StmtKind, StructDecl, StructMember, TypeRef,
 };
 use crate::diagnostic::Diagnostic;
 
@@ -11,9 +11,11 @@ pub fn monomorphize(program: &Program) -> Result<Program, Vec<Diagnostic>> {
 }
 
 struct Monomorphizer {
-    templates: HashMap<String, StructDecl>,
+    struct_templates: HashMap<String, StructDecl>,
+    enum_templates: HashMap<String, EnumDecl>,
     concrete_structs: HashSet<String>,
-    pending: VecDeque<(String, Vec<TypeRef>)>,
+    concrete_enums: HashMap<String, EnumDecl>,
+    pending: VecDeque<(GenericKind, String, Vec<TypeRef>)>,
     emitted: HashSet<String>,
     specializations: HashMap<String, (String, Vec<TypeRef>)>,
     scopes: Vec<HashMap<String, TypeRef>>,
@@ -21,16 +23,34 @@ struct Monomorphizer {
     self_types: Vec<TypeRef>,
     inferred_returns: Vec<Option<Vec<TypeRef>>>,
     member_returns: HashMap<(String, String, bool), TypeRef>,
+    function_returns: HashMap<String, TypeRef>,
+    function_params: HashMap<String, Vec<Option<TypeRef>>>,
     diagnostics: Vec<Diagnostic>,
+}
+
+#[derive(Clone, Copy)]
+enum GenericKind {
+    Struct,
+    Enum,
 }
 
 impl Monomorphizer {
     fn new(program: &Program) -> Self {
-        let templates = program
+        let struct_templates = program
             .items
             .iter()
             .filter_map(|item| {
                 let Item::Struct(item) = item else {
+                    return None;
+                };
+                (!item.type_params.is_empty()).then(|| (item.name.clone(), item.clone()))
+            })
+            .collect();
+        let enum_templates = program
+            .items
+            .iter()
+            .filter_map(|item| {
+                let Item::Enum(item) = item else {
                     return None;
                 };
                 (!item.type_params.is_empty()).then(|| (item.name.clone(), item.clone()))
@@ -46,10 +66,54 @@ impl Monomorphizer {
                 item.type_params.is_empty().then(|| item.name.clone())
             })
             .collect();
+        let concrete_enums = program
+            .items
+            .iter()
+            .filter_map(|item| {
+                let Item::Enum(item) = item else {
+                    return None;
+                };
+                item.type_params
+                    .is_empty()
+                    .then(|| (item.name.clone(), item.clone()))
+            })
+            .collect();
+        let function_returns = program
+            .items
+            .iter()
+            .filter_map(|item| {
+                let Item::Function(function) = item else {
+                    return None;
+                };
+                Some((
+                    function.name.clone()?,
+                    function.return_type.as_ref()?.clone(),
+                ))
+            })
+            .collect();
+        let function_params = program
+            .items
+            .iter()
+            .filter_map(|item| {
+                let Item::Function(function) = item else {
+                    return None;
+                };
+                Some((
+                    function.name.clone()?,
+                    function
+                        .params
+                        .iter()
+                        .map(|param| param.type_ref.clone())
+                        .collect(),
+                ))
+            })
+            .collect();
 
         Self {
-            templates,
+            struct_templates,
+            enum_templates,
             concrete_structs,
+            concrete_enums,
             pending: VecDeque::new(),
             emitted: HashSet::new(),
             specializations: HashMap::new(),
@@ -58,26 +122,20 @@ impl Monomorphizer {
             self_types: Vec::new(),
             inferred_returns: Vec::new(),
             member_returns: HashMap::new(),
+            function_returns,
+            function_params,
             diagnostics: Vec::new(),
         }
     }
 
     fn run(mut self, program: &Program) -> Result<Program, Vec<Diagnostic>> {
         self.validate_templates();
-        for item in &program.items {
-            if let Item::Enum(item) = item
-                && !item.type_params.is_empty()
-            {
-                self.diagnostics.push(Diagnostic::error(
-                    item.span,
-                    "generic enums are not implemented yet",
-                ));
-            }
-        }
 
         let mut items = Vec::new();
         for item in &program.items {
-            if matches!(item, Item::Struct(item) if !item.type_params.is_empty()) {
+            if matches!(item, Item::Struct(item) if !item.type_params.is_empty())
+                || matches!(item, Item::Enum(item) if !item.type_params.is_empty())
+            {
                 continue;
             }
 
@@ -86,42 +144,69 @@ impl Monomorphizer {
             items.push(item);
         }
 
-        while let Some((name, args)) = self.pending.pop_front() {
+        while let Some((kind, name, args)) = self.pending.pop_front() {
             let specialized_name = specialized_name(&name, &args);
             if !self.emitted.insert(specialized_name.clone()) {
                 continue;
             }
 
-            let Some(template) = self.templates.get(&name).cloned() else {
-                continue;
-            };
-            let substitutions = template
-                .type_params
-                .iter()
-                .cloned()
-                .zip(args)
-                .collect::<HashMap<_, _>>();
-            let mut specialized = template;
-            specialized.name = specialized_name;
-            specialized.type_params.clear();
-            self.self_types.push(TypeRef {
-                name: specialized.name.clone(),
-                args: Vec::new(),
-                span: specialized.span,
-            });
-            for member in &mut specialized.members {
-                match member {
-                    StructMember::Field(field) => {
-                        self.rewrite_type(&mut field.type_ref, &substitutions);
+            match kind {
+                GenericKind::Struct => {
+                    let Some(template) = self.struct_templates.get(&name).cloned() else {
+                        continue;
+                    };
+                    let substitutions = template
+                        .type_params
+                        .iter()
+                        .cloned()
+                        .zip(args)
+                        .collect::<HashMap<_, _>>();
+                    let mut specialized = template;
+                    specialized.name = specialized_name;
+                    specialized.type_params.clear();
+                    self.self_types.push(TypeRef {
+                        name: specialized.name.clone(),
+                        args: Vec::new(),
+                        span: specialized.span,
+                    });
+                    for member in &mut specialized.members {
+                        match member {
+                            StructMember::Field(field) => {
+                                self.rewrite_type(&mut field.type_ref, &substitutions);
+                            }
+                            StructMember::Method(function)
+                            | StructMember::StaticMethod(function) => {
+                                self.rewrite_function(function, &substitutions);
+                            }
+                        }
                     }
-                    StructMember::Method(function) | StructMember::StaticMethod(function) => {
-                        self.rewrite_function(function, &substitutions);
+                    self.infer_specialized_member_returns(&mut specialized);
+                    self.self_types.pop();
+                    items.push(Item::Struct(specialized));
+                }
+                GenericKind::Enum => {
+                    let Some(template) = self.enum_templates.get(&name).cloned() else {
+                        continue;
+                    };
+                    let substitutions = template
+                        .type_params
+                        .iter()
+                        .cloned()
+                        .zip(args)
+                        .collect::<HashMap<_, _>>();
+                    let mut specialized = template;
+                    specialized.name = specialized_name;
+                    specialized.type_params.clear();
+                    for variant in &mut specialized.variants {
+                        if let Some(payload) = &mut variant.payload {
+                            self.rewrite_type(payload, &substitutions);
+                        }
                     }
+                    self.concrete_enums
+                        .insert(specialized.name.clone(), specialized.clone());
+                    items.push(Item::Enum(specialized));
                 }
             }
-            self.infer_specialized_member_returns(&mut specialized);
-            self.self_types.pop();
-            items.push(Item::Struct(specialized));
         }
 
         prune_unused_generic_methods(&mut items, &self.emitted);
@@ -134,7 +219,7 @@ impl Monomorphizer {
     }
 
     fn validate_templates(&mut self) {
-        for template in self.templates.values() {
+        for template in self.struct_templates.values() {
             let mut names = HashSet::new();
             for name in &template.type_params {
                 if !names.insert(name) {
@@ -142,6 +227,20 @@ impl Monomorphizer {
                         template.span,
                         format!(
                             "duplicate type parameter `{name}` in struct `{}`",
+                            template.name
+                        ),
+                    ));
+                }
+            }
+        }
+        for template in self.enum_templates.values() {
+            let mut names = HashSet::new();
+            for name in &template.type_params {
+                if !names.insert(name) {
+                    self.diagnostics.push(Diagnostic::error(
+                        template.span,
+                        format!(
+                            "duplicate type parameter `{name}` in enum `{}`",
                             template.name
                         ),
                     ));
@@ -182,7 +281,23 @@ impl Monomorphizer {
                 self.rewrite_type(&mut item.type_ref, substitutions);
                 self.rewrite_function(&mut item.function, substitutions);
             }
-            Item::Function(function) => self.rewrite_function(function, substitutions),
+            Item::Function(function) => {
+                self.rewrite_function(function, substitutions);
+                if let (Some(name), Some(return_type)) = (&function.name, &function.return_type) {
+                    self.function_returns
+                        .insert(name.clone(), return_type.clone());
+                }
+                if let Some(name) = &function.name {
+                    self.function_params.insert(
+                        name.clone(),
+                        function
+                            .params
+                            .iter()
+                            .map(|param| param.type_ref.clone())
+                            .collect(),
+                    );
+                }
+            }
         }
     }
 
@@ -338,8 +453,12 @@ impl Monomorphizer {
             for arg in args.iter_mut() {
                 self.rewrite_type(arg, substitutions);
             }
-            if self.templates.contains_key(name) {
-                self.specialize(name, args, expr.span);
+            if self.struct_templates.contains_key(name) {
+                self.specialize_struct(name, args, expr.span);
+                *name = specialized_name(name, args);
+                expr.kind = ExprKind::Identifier(name.clone());
+            } else if self.enum_templates.contains_key(name) {
+                self.specialize_enum(name, args, expr.span);
                 *name = specialized_name(name, args);
                 expr.kind = ExprKind::Identifier(name.clone());
             } else if self.concrete_structs.contains(name) {
@@ -347,12 +466,71 @@ impl Monomorphizer {
                     expr.span,
                     format!("struct `{name}` does not accept type arguments"),
                 ));
+            } else if self.concrete_enums.contains_key(name) {
+                self.diagnostics.push(Diagnostic::error(
+                    expr.span,
+                    format!("enum `{name}` does not accept type arguments"),
+                ));
             } else {
                 self.diagnostics.push(Diagnostic::error(
                     expr.span,
-                    format!("unknown generic struct `{name}`"),
+                    format!("unknown generic type `{name}`"),
                 ));
             }
+            return;
+        }
+
+        let generic_variant_call = match &expr.kind {
+            ExprKind::Call { callee, .. } => {
+                let ExprKind::Member { object, name } = &callee.kind else {
+                    return self.rewrite_expr_children(expr, substitutions);
+                };
+                let ExprKind::Identifier(type_name) = &object.kind else {
+                    return self.rewrite_expr_children(expr, substitutions);
+                };
+                (self.enum_templates.contains_key(type_name)
+                    && self.lookup_local_type(type_name).is_none())
+                .then(|| (type_name.clone(), name.clone()))
+            }
+            _ => None,
+        };
+        if let Some((type_name, variant_name)) = generic_variant_call {
+            let ExprKind::Call { callee, args } = &mut expr.kind else {
+                unreachable!("generic variant call was matched above")
+            };
+            for arg in args.iter_mut() {
+                self.rewrite_expr(arg, substitutions);
+            }
+            match self.infer_enum_type_arguments(&type_name, &variant_name, args) {
+                Ok(mut type_args) => {
+                    for type_arg in &mut type_args {
+                        self.rewrite_type(type_arg, substitutions);
+                    }
+                    self.specialize_enum(&type_name, &type_args, expr.span);
+                    let ExprKind::Member { object, .. } = &mut callee.kind else {
+                        unreachable!("generic variant call requires a member callee")
+                    };
+                    object.kind = ExprKind::Identifier(specialized_name(&type_name, &type_args));
+                }
+                Err(message) => self.diagnostics.push(Diagnostic::error(expr.span, message)),
+            }
+            return;
+        }
+
+        if let ExprKind::Member { object, name } = &expr.kind
+            && let ExprKind::Identifier(type_name) = &object.kind
+            && self.enum_templates.contains_key(type_name)
+            && self.lookup_local_type(type_name).is_none()
+        {
+            let message = self
+                .infer_enum_type_arguments(type_name, name, &[])
+                .err()
+                .unwrap_or_else(|| {
+                    format!(
+                        "cannot infer type arguments for generic enum `{type_name}`; write `{type_name}<Type>.{name}` or add a concrete expected type"
+                    )
+                });
+            self.diagnostics.push(Diagnostic::error(expr.span, message));
             return;
         }
 
@@ -364,7 +542,7 @@ impl Monomorphizer {
                 let ExprKind::Identifier(type_name) = &object.kind else {
                     return self.rewrite_expr_children(expr, substitutions);
                 };
-                (self.templates.contains_key(type_name)
+                (self.struct_templates.contains_key(type_name)
                     && self.lookup_local_type(type_name).is_none())
                 .then(|| (type_name.clone(), name.clone()))
             }
@@ -382,7 +560,7 @@ impl Monomorphizer {
                     for type_arg in &mut type_args {
                         self.rewrite_type(type_arg, substitutions);
                     }
-                    self.specialize(&type_name, &type_args, expr.span);
+                    self.specialize_struct(&type_name, &type_args, expr.span);
                     let ExprKind::Member { object, .. } = &mut callee.kind else {
                         unreachable!("generic static call requires a member callee")
                     };
@@ -405,6 +583,31 @@ impl Monomorphizer {
             }
             ExprKind::Call { callee, args } => {
                 self.rewrite_expr(callee, substitutions);
+                let function_contexts = if let ExprKind::Identifier(name) = &callee.kind {
+                    self.function_params.get(name).cloned()
+                } else {
+                    None
+                };
+                let payload_context = if let ExprKind::Member { object, name } = &callee.kind
+                    && let ExprKind::Identifier(enum_name) = &object.kind
+                {
+                    self.enum_variant_payload(enum_name, name).flatten()
+                } else {
+                    None
+                };
+                if let (Some(mut expected), Some(arg)) = (payload_context, args.first_mut()) {
+                    self.rewrite_type(&mut expected, substitutions);
+                    self.apply_expr_context(arg, &expected);
+                }
+                if let Some(contexts) = function_contexts {
+                    for (arg, expected) in args.iter_mut().zip(contexts) {
+                        let Some(mut expected) = expected else {
+                            continue;
+                        };
+                        self.rewrite_type(&mut expected, substitutions);
+                        self.apply_expr_context(arg, &expected);
+                    }
+                }
                 for arg in args {
                     self.rewrite_expr(arg, substitutions);
                 }
@@ -414,13 +617,13 @@ impl Monomorphizer {
                 for arg in args.iter_mut() {
                     self.rewrite_type(arg, substitutions);
                 }
-                if self.templates.contains_key(name) && !args.is_empty() {
+                if self.struct_templates.contains_key(name) && !args.is_empty() {
                     self.apply_struct_field_contexts(name, args, fields, substitutions);
                 }
                 for field in fields.iter_mut() {
                     self.rewrite_expr(&mut field.value, substitutions);
                 }
-                if self.templates.contains_key(name) {
+                if self.struct_templates.contains_key(name) {
                     if args.is_empty() {
                         match self.infer_struct_type_arguments(name, fields) {
                             Ok(mut inferred_args) => {
@@ -435,7 +638,7 @@ impl Monomorphizer {
                         }
                     }
                     if !args.is_empty() {
-                        self.specialize(name, args, expr.span);
+                        self.specialize_struct(name, args, expr.span);
                         *name = specialized_name(name, args);
                         args.clear();
                     } else {
@@ -457,11 +660,47 @@ impl Monomorphizer {
             }
             ExprKind::Match { value, branches } => {
                 self.rewrite_expr(value, substitutions);
+                let mut value_type = self.infer_expr_type(value);
+                if let Some(type_ref) = &mut value_type
+                    && self.enum_templates.contains_key(&type_ref.name)
+                    && !type_ref.args.is_empty()
+                {
+                    let name = type_ref.name.clone();
+                    self.specialize_enum(&name, &type_ref.args, type_ref.span);
+                    type_ref.name = specialized_name(&name, &type_ref.args);
+                    type_ref.args.clear();
+                }
                 for branch in branches {
+                    let mut scope = HashMap::new();
+                    if let Pattern::Variant {
+                        enum_name,
+                        variant,
+                        binding,
+                        ..
+                    } = &mut branch.pattern
+                    {
+                        if let Some(value_type) = &value_type
+                            && let Some((generic_name, _)) =
+                                self.specializations.get(&value_type.name)
+                            && enum_name == generic_name
+                            && self.enum_templates.contains_key(generic_name)
+                        {
+                            *enum_name = value_type.name.clone();
+                        }
+                        if let Some(binding) = binding
+                            && binding != "_"
+                            && let Some(Some(payload)) =
+                                self.enum_variant_payload(enum_name, variant)
+                        {
+                            scope.insert(binding.clone(), payload);
+                        }
+                    }
+                    self.scopes.push(scope);
                     match &mut branch.body {
                         MatchBranchBody::Expr(expr) => self.rewrite_expr(expr, substitutions),
                         MatchBranchBody::Block(block) => self.rewrite_block(block, substitutions),
                     }
+                    self.scopes.pop();
                 }
             }
             ExprKind::Lambda(function) => self.rewrite_function(function, substitutions),
@@ -488,15 +727,25 @@ impl Monomorphizer {
             self.rewrite_type(arg, substitutions);
         }
 
-        if self.templates.contains_key(&type_ref.name) {
+        if self.struct_templates.contains_key(&type_ref.name) {
             let name = type_ref.name.clone();
-            self.specialize(&name, &type_ref.args, type_ref.span);
+            self.specialize_struct(&name, &type_ref.args, type_ref.span);
+            type_ref.name = specialized_name(&name, &type_ref.args);
+            type_ref.args.clear();
+        } else if self.enum_templates.contains_key(&type_ref.name) {
+            let name = type_ref.name.clone();
+            self.specialize_enum(&name, &type_ref.args, type_ref.span);
             type_ref.name = specialized_name(&name, &type_ref.args);
             type_ref.args.clear();
         } else if self.concrete_structs.contains(&type_ref.name) && !type_ref.args.is_empty() {
             self.diagnostics.push(Diagnostic::error(
                 type_ref.span,
                 format!("struct `{}` does not accept type arguments", type_ref.name),
+            ));
+        } else if self.concrete_enums.contains_key(&type_ref.name) && !type_ref.args.is_empty() {
+            self.diagnostics.push(Diagnostic::error(
+                type_ref.span,
+                format!("enum `{}` does not accept type arguments", type_ref.name),
             ));
         }
     }
@@ -644,6 +893,16 @@ impl Monomorphizer {
             ExprKind::StructInit { name, args, .. } if args.is_empty() && name == generic_name => {
                 *args = concrete_args.clone();
             }
+            ExprKind::Member { object, .. } => {
+                if let ExprKind::Identifier(name) = &object.kind
+                    && name == generic_name
+                {
+                    object.kind = ExprKind::GenericType {
+                        name: name.clone(),
+                        args: concrete_args.clone(),
+                    };
+                }
+            }
             ExprKind::Call { callee, .. } => {
                 if let ExprKind::Member { object, .. } = &mut callee.kind
                     && let ExprKind::Identifier(name) = &object.kind
@@ -666,7 +925,7 @@ impl Monomorphizer {
         fields: &mut [crate::ast::StructInitField],
         substitutions: &HashMap<String, TypeRef>,
     ) {
-        let template = self.templates[name].clone();
+        let template = self.struct_templates[name].clone();
         let field_substitutions = template
             .type_params
             .iter()
@@ -693,7 +952,7 @@ impl Monomorphizer {
         name: &str,
         fields: &[crate::ast::StructInitField],
     ) -> Result<Vec<TypeRef>, String> {
-        let template = &self.templates[name];
+        let template = &self.struct_templates[name];
         let mut constraints = Vec::new();
         for field in fields {
             let Some(expected) = template.members.iter().find_map(|member| {
@@ -722,7 +981,7 @@ impl Monomorphizer {
         method_name: &str,
         args: &[Expr],
     ) -> Result<Vec<TypeRef>, String> {
-        let template = &self.templates[type_name];
+        let template = &self.struct_templates[type_name];
         let Some(function) = template.members.iter().find_map(|member| {
             let StructMember::StaticMethod(function) = member else {
                 return None;
@@ -747,6 +1006,44 @@ impl Monomorphizer {
             .map_err(|reason| {
                 format!(
                     "cannot infer type arguments for generic static call `{type_name}.{method_name}`: {reason}; write `{type_name}<Type>.{method_name}(...)` or add a concrete expected type"
+                )
+            })
+    }
+
+    fn infer_enum_type_arguments(
+        &self,
+        type_name: &str,
+        variant_name: &str,
+        args: &[Expr],
+    ) -> Result<Vec<TypeRef>, String> {
+        let template = &self.enum_templates[type_name];
+        let Some(variant) = template
+            .variants
+            .iter()
+            .find(|variant| variant.name == variant_name)
+        else {
+            return Err(format!("unknown variant `{type_name}.{variant_name}`"));
+        };
+        let expected_count = usize::from(variant.payload.is_some());
+        if args.len() != expected_count {
+            return Err(format!(
+                "enum variant `{type_name}.{variant_name}` expects {expected_count} arguments, got {}",
+                args.len()
+            ));
+        }
+        let constraints = variant
+            .payload
+            .iter()
+            .zip(args)
+            .filter_map(|(expected, arg)| {
+                self.infer_expr_type(arg)
+                    .map(|actual| (expected.clone(), actual))
+            })
+            .collect();
+        self.solve_type_arguments(type_name, &template.type_params, constraints)
+            .map_err(|reason| {
+                format!(
+                    "cannot infer type arguments for generic enum `{type_name}`: {reason}; write `{type_name}<Type>.{variant_name}(...)` or add a concrete expected type"
                 )
             })
     }
@@ -852,10 +1149,20 @@ impl Monomorphizer {
                 }
             }
             ExprKind::Member { object, name } => {
+                if let ExprKind::Identifier(enum_name) = &object.kind
+                    && self.enum_variant_payload(enum_name, name).is_some()
+                {
+                    return Some(inferred(enum_name));
+                }
                 let object_type = self.infer_expr_type(object)?;
                 self.generic_member_type(&object_type, name, false)
             }
             ExprKind::Call { callee, .. } => {
+                if let ExprKind::Identifier(name) = &callee.kind
+                    && let Some(return_type) = self.function_returns.get(name)
+                {
+                    return Some(return_type.clone());
+                }
                 let ExprKind::Member { object, name } = &callee.kind else {
                     return None;
                 };
@@ -863,6 +1170,9 @@ impl Monomorphizer {
                     return self.infer_expr_type(object);
                 }
                 if let ExprKind::Identifier(type_name) = &object.kind {
+                    if self.enum_variant_payload(type_name, name).is_some() {
+                        return Some(inferred(type_name));
+                    }
                     let type_ref = if type_name == "Self" {
                         self.lookup_local_type("Self")
                     } else {
@@ -908,7 +1218,7 @@ impl Monomorphizer {
             return Some(return_type.clone());
         }
         let receiver = self.expanded_type(receiver);
-        let template = self.templates.get(&receiver.name)?;
+        let template = self.struct_templates.get(&receiver.name)?;
         let substitutions = template
             .type_params
             .iter()
@@ -947,6 +1257,34 @@ impl Monomorphizer {
         type_ref.clone()
     }
 
+    fn enum_variant_payload(&self, enum_name: &str, variant_name: &str) -> Option<Option<TypeRef>> {
+        if let Some(enum_) = self.concrete_enums.get(enum_name) {
+            return enum_
+                .variants
+                .iter()
+                .find(|variant| variant.name == variant_name)
+                .map(|variant| variant.payload.clone());
+        }
+        let (generic_name, args) = self.specializations.get(enum_name)?;
+        let template = self.enum_templates.get(generic_name)?;
+        let substitutions = template
+            .type_params
+            .iter()
+            .cloned()
+            .zip(args.iter().cloned())
+            .collect::<HashMap<_, _>>();
+        template
+            .variants
+            .iter()
+            .find(|variant| variant.name == variant_name)
+            .map(|variant| {
+                variant
+                    .payload
+                    .as_ref()
+                    .map(|payload| substitute_type(payload, &substitutions))
+            })
+    }
+
     fn lookup_local_type(&self, name: &str) -> Option<TypeRef> {
         self.scopes
             .iter()
@@ -954,8 +1292,8 @@ impl Monomorphizer {
             .find_map(|scope| scope.get(name).cloned())
     }
 
-    fn specialize(&mut self, name: &str, args: &[TypeRef], span: crate::span::Span) {
-        let expected = self.templates[name].type_params.len();
+    fn specialize_struct(&mut self, name: &str, args: &[TypeRef], span: crate::span::Span) {
+        let expected = self.struct_templates[name].type_params.len();
         if args.len() != expected {
             self.diagnostics.push(Diagnostic::error(
                 span,
@@ -967,7 +1305,29 @@ impl Monomorphizer {
             return;
         }
 
-        self.pending.push_back((name.to_string(), args.to_vec()));
+        self.pending
+            .push_back((GenericKind::Struct, name.to_string(), args.to_vec()));
+        self.specializations.insert(
+            specialized_name(name, args),
+            (name.to_string(), args.to_vec()),
+        );
+    }
+
+    fn specialize_enum(&mut self, name: &str, args: &[TypeRef], span: crate::span::Span) {
+        let expected = self.enum_templates[name].type_params.len();
+        if args.len() != expected {
+            self.diagnostics.push(Diagnostic::error(
+                span,
+                format!(
+                    "generic enum `{name}` expects {expected} type arguments, got {}",
+                    args.len()
+                ),
+            ));
+            return;
+        }
+
+        self.pending
+            .push_back((GenericKind::Enum, name.to_string(), args.to_vec()));
         self.specializations.insert(
             specialized_name(name, args),
             (name.to_string(), args.to_vec()),

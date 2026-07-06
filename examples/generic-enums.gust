@@ -1,0 +1,30 @@
+enum Option<T> {
+    Some(T)
+    None
+}
+
+fn describe(value: Option<String>): String {
+    return match value {
+        Option.Some(text) => "Value: " + text,
+        Option.None => "No value",
+    }
+}
+
+fn unwrapOr(value: Option<i32>, fallback: i32): i32 {
+    return match value {
+        Option.Some(number) => number,
+        Option.None => fallback,
+    }
+}
+
+fn main() {
+    let inferred = Option.Some("Gust")
+    let contextual: Option<String> = Option.None
+    let explicit = Option<i32>.Some(42)
+    let explicit2 = Option<i32>.None
+
+    io.println(describe(inferred))
+    io.println(describe(contextual))
+    io.println(unwrapOr(explicit, 0).toString())
+    io.println(unwrapOr(explicit2, 0).toString())
+}

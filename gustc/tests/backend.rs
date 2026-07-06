@@ -2110,3 +2110,56 @@ fn main() {
     assert!(!source.contains(".unused"));
     assert!(!source.contains("// Gust function: Box<String>.replace"));
 }
+
+#[test]
+fn generic_enum_specializations_emit_distinct_c_types_and_match_payloads() {
+    let result = check_source(
+        r#"enum Option<T> {
+    Some(T)
+    None
+}
+
+enum Wrapper<T> {
+    Value(T)
+}
+
+fn optionText(value: Option<String>): String {
+    return match value {
+        Option.Some(inner) => inner,
+        Option.None => "missing",
+    }
+}
+
+fn nestedNumber(value: Wrapper<Option<i32>>): i32 {
+    return match value {
+        Wrapper.Value(option) => match option {
+            Option.Some(inner) => inner,
+            Option.None => 0,
+        },
+    }
+}
+
+fn main() {
+    let number = Option.Some(42)
+    let text = Option<String>.Some("Gust")
+    let nested = Wrapper.Value(number)
+    io.println(optionText(text))
+    io.println(nestedNumber(nested).toString())
+}"#,
+    );
+
+    assert!(
+        !result.has_errors(),
+        "expected no frontend errors, got {:?}",
+        result.diagnostics
+    );
+
+    let lowered = lower_program(&result.program).expect("generic enums should lower");
+    let source = emit_c(&lowered);
+
+    assert!(source.contains("// Gust enum: Option<String>"));
+    assert!(source.contains("// Gust enum: Option<i32>"));
+    assert!(source.contains("// Gust enum: Wrapper<Option<i32>>"));
+    assert!(source.contains(".gust_payload."));
+    assert!(source.contains(".gust_tag =="));
+}
