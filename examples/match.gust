@@ -1,19 +1,23 @@
 fn main() {
     let mut extractedName = ""
-    match constructBeing("person") {
+    let val = match constructBeing("person") {
         Being.Person(person) => {
             let name = person.name
             extractedName = name
+            return "AAA"
         },
         Being.Dog(dog) => {
             let name = dog.name
             extractedName = name
+            return "BBB"
         },
         Being.Unknown => {
             extractedName = "stranger"
+            return "CCC"
         },
     }
     io.println("Hello, " + extractedName)
+    io.println(val)
 }
 
 struct Person {

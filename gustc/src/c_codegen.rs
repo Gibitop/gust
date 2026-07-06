@@ -224,9 +224,13 @@ fn expr_uses_type(expr: &LoweredExpr, type_: BasicType) -> bool {
                 value, branches, ..
             } => {
                 expr_uses_type(value, type_)
-                    || branches
-                        .iter()
-                        .any(|branch| expr_uses_type(&branch.value, type_))
+                    || branches.iter().any(|branch| {
+                        branch
+                            .statements
+                            .iter()
+                            .any(|statement| statement_uses_type(statement, type_))
+                            || expr_uses_type(&branch.value, type_)
+                    })
             }
             LoweredExprKind::FieldAccess { object, .. }
             | LoweredExprKind::Clone(object)
@@ -361,9 +365,13 @@ fn expr_uses_number_to_string(expr: &LoweredExpr, type_: BasicType) -> bool {
             value, branches, ..
         } => {
             expr_uses_number_to_string(value, type_)
-                || branches
-                    .iter()
-                    .any(|branch| expr_uses_number_to_string(&branch.value, type_))
+                || branches.iter().any(|branch| {
+                    branch
+                        .statements
+                        .iter()
+                        .any(|statement| statement_uses_number_to_string(statement, type_))
+                        || expr_uses_number_to_string(&branch.value, type_)
+                })
         }
         LoweredExprKind::Call { args, .. } => args
             .iter()
@@ -461,6 +469,7 @@ fn expr_uses_string_equality(expr: &LoweredExpr) -> bool {
             expr_uses_string_equality(value)
                 || branches.iter().any(|branch| {
                     matches!(branch.pattern, LoweredPattern::String(_))
+                        || branch.statements.iter().any(statement_uses_string_equality)
                         || expr_uses_string_equality(&branch.value)
                 })
         }
@@ -535,9 +544,10 @@ fn expr_uses_string_concat(expr: &LoweredExpr) -> bool {
             value, branches, ..
         } => {
             expr_uses_string_concat(value)
-                || branches
-                    .iter()
-                    .any(|branch| expr_uses_string_concat(&branch.value))
+                || branches.iter().any(|branch| {
+                    branch.statements.iter().any(statement_uses_string_concat)
+                        || expr_uses_string_concat(&branch.value)
+                })
         }
         LoweredExprKind::FieldAccess { object, .. }
         | LoweredExprKind::Clone(object)
@@ -556,22 +566,75 @@ fn statement_uses_println(statement: &LoweredStatement) -> bool {
     match statement {
         LoweredStatement::Println(_) => true,
         LoweredStatement::If {
+            condition,
             then_branch,
             else_branch,
-            ..
         } => {
-            then_branch.iter().any(statement_uses_println)
+            expr_uses_println(condition)
+                || then_branch.iter().any(statement_uses_println)
                 || else_branch
                     .as_ref()
                     .is_some_and(|statements| statements.iter().any(statement_uses_println))
         }
-        LoweredStatement::Match { branches, .. } => branches
-            .iter()
-            .any(|branch| branch.statements.iter().any(statement_uses_println)),
-        LoweredStatement::Local { .. }
-        | LoweredStatement::Assignment { .. }
-        | LoweredStatement::Expr(_)
-        | LoweredStatement::Return(_) => false,
+        LoweredStatement::Match {
+            value, branches, ..
+        } => {
+            expr_uses_println(value)
+                || branches
+                    .iter()
+                    .any(|branch| branch.statements.iter().any(statement_uses_println))
+        }
+        LoweredStatement::Local { value, .. } | LoweredStatement::Expr(value) => {
+            expr_uses_println(value)
+        }
+        LoweredStatement::Assignment { target, value } => {
+            expr_uses_println(target) || expr_uses_println(value)
+        }
+        LoweredStatement::Return(value) => value.as_ref().is_some_and(expr_uses_println),
+    }
+}
+
+fn expr_uses_println(expr: &LoweredExpr) -> bool {
+    match &expr.kind {
+        LoweredExprKind::StringConcat(left, right)
+        | LoweredExprKind::Logical { left, right, .. }
+        | LoweredExprKind::Arithmetic { left, right, .. }
+        | LoweredExprKind::Comparison { left, right, .. } => {
+            expr_uses_println(left) || expr_uses_println(right)
+        }
+        LoweredExprKind::PostfixIncrement(operand)
+        | LoweredExprKind::Not(operand)
+        | LoweredExprKind::Negate(operand)
+        | LoweredExprKind::EnumPayload {
+            object: operand, ..
+        }
+        | LoweredExprKind::FieldAccess {
+            object: operand, ..
+        }
+        | LoweredExprKind::Clone(operand)
+        | LoweredExprKind::NumberToString(operand) => expr_uses_println(operand),
+        LoweredExprKind::StructLiteral { fields, .. } => {
+            fields.iter().any(|field| expr_uses_println(&field.value))
+        }
+        LoweredExprKind::EnumLiteral { payload, .. } => payload
+            .as_ref()
+            .is_some_and(|payload| expr_uses_println(payload)),
+        LoweredExprKind::Match {
+            value, branches, ..
+        } => {
+            expr_uses_println(value)
+                || branches.iter().any(|branch| {
+                    branch.statements.iter().any(statement_uses_println)
+                        || expr_uses_println(&branch.value)
+                })
+        }
+        LoweredExprKind::Call { args, .. } => args.iter().any(expr_uses_println),
+        LoweredExprKind::Void
+        | LoweredExprKind::StringLiteral(_)
+        | LoweredExprKind::BoolLiteral(_)
+        | LoweredExprKind::NumberLiteral(_)
+        | LoweredExprKind::Local(_)
+        | LoweredExprKind::MatchValue(_) => false,
     }
 }
 
@@ -681,9 +744,13 @@ fn expr_calls_name(expr: &LoweredExpr, name: &str) -> bool {
             value, branches, ..
         } => {
             expr_calls_name(value, name)
-                || branches
-                    .iter()
-                    .any(|branch| expr_calls_name(&branch.value, name))
+                || branches.iter().any(|branch| {
+                    branch
+                        .statements
+                        .iter()
+                        .any(|statement| statement_calls_name(statement, name))
+                        || expr_calls_name(&branch.value, name)
+                })
         }
         LoweredExprKind::FieldAccess { object, .. }
         | LoweredExprKind::Clone(object)
@@ -1630,32 +1697,56 @@ fn push_c_value(source: &mut String, value: &LoweredExpr, structs: &[LoweredStru
         }
         LoweredExprKind::MatchValue(name) => source.push_str(name),
         LoweredExprKind::Match {
-            value,
+            value: matched_value,
             temp_name,
             branches,
         } => {
-            source.push_str("({ ");
-            push_c_type(source, &value.type_);
+            let result_name = format!("{temp_name}_result");
+
+            source.push_str("({\n    ");
+            push_c_type(source, &matched_value.type_);
             source.push(' ');
             source.push_str(temp_name);
             source.push_str(" = ");
-            push_c_value(source, value, structs);
-            source.push_str("; (");
+            push_c_value(source, matched_value, structs);
+            source.push_str(";\n    ");
+            push_c_type(source, &value.type_);
+            source.push(' ');
+            source.push_str(&result_name);
+            source.push_str(";\n");
 
             for (index, branch) in branches.iter().enumerate() {
+                source.push_str("    ");
                 if index + 1 < branches.len() {
+                    if index > 0 {
+                        source.push_str("else ");
+                    }
+                    source.push_str("if (");
                     push_c_match_condition(source, temp_name, &branch.pattern);
-                    source.push_str(" ? ");
+                    source.push_str(") {\n");
+                } else {
+                    if index > 0 {
+                        source.push_str("else ");
+                    }
+                    source.push_str("{\n");
                 }
 
+                for statement in &branch.statements {
+                    push_c_statement(source, statement, 2, structs);
+                }
+
+                push_c_indent(source, 2);
+                source.push_str(&result_name);
+                source.push_str(" = ");
                 push_c_value(source, &branch.value, structs);
+                source.push_str(";\n");
 
-                if index + 1 < branches.len() {
-                    source.push_str(" : ");
-                }
+                source.push_str("    }\n");
             }
 
-            source.push_str("); })");
+            source.push_str("    ");
+            source.push_str(&result_name);
+            source.push_str(";\n})");
         }
         LoweredExprKind::FieldAccess { object, field } => {
             push_c_value(source, object, structs);
