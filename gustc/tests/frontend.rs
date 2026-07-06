@@ -2772,6 +2772,152 @@ fn main() {
 }
 
 #[test]
+fn generic_enums_infer_and_validate_concrete_specializations() {
+    let result = check_source(
+        r#"enum Option<T> {
+    Some(T)
+    None
+}
+
+fn unwrapOr(value: Option<i32>, fallback: i32): i32 {
+    return match value {
+        Option.Some(inner) => inner,
+        Option.None => fallback,
+    }
+}
+
+fn makeNone(): Option<String> {
+    return Option.None
+}
+
+fn main() {
+    let inferred = Option.Some(42)
+    let explicit = Option<String>.Some("Gust")
+    let contextual: Option<i32> = Option.None
+    let text = makeNone()
+    io.println(unwrapOr(inferred, 0).toString())
+    io.println(unwrapOr(contextual, 7).toString())
+    match explicit {
+        Option.Some(inner) => io.println(inner),
+        Option.None => io.println("missing"),
+    }
+    match text {
+        Option.Some(inner) => io.println(inner),
+        Option.None => io.println("missing"),
+    }
+}"#,
+    );
+
+    assert!(
+        !result.has_errors(),
+        "expected generic enums to validate, got {:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
+fn generic_enum_expected_types_flow_into_calls_and_nested_payloads() {
+    let result = check_source(
+        r#"enum Option<T> {
+    Some(T)
+    None
+}
+
+enum Holder<T> {
+    Item(T)
+}
+
+fn consume(value: Option<i32>) {}
+
+fn main() {
+    consume(Option.None)
+    let nested: Holder<Option<i32>> = Holder.Item(Option.None)
+    match nested {
+        Holder.Item(option) => match option {
+            Option.Some(value) => io.println(value.toString()),
+            Option.None => io.println("missing"),
+        },
+    }
+}"#,
+    );
+
+    assert!(
+        !result.has_errors(),
+        "expected generic enum contexts to validate, got {:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
+fn generic_enums_report_unresolved_and_invalid_type_arguments() {
+    let unresolved = check_source(
+        r#"enum Option<T> {
+    Some(T)
+    None
+}
+
+fn main() {
+    let value = Option.None
+}"#,
+    );
+    assert!(unresolved.diagnostics.iter().any(|diagnostic| {
+        diagnostic
+            .message
+            .contains("cannot infer type arguments for generic enum `Option`")
+    }));
+
+    let wrong_count = check_source(
+        r#"enum Option<T> {
+    Some(T)
+}
+
+fn main() {
+    let value = Option<i32, String>.Some(1)
+}"#,
+    );
+    assert!(wrong_count.diagnostics.iter().any(|diagnostic| {
+        diagnostic
+            .message
+            .contains("generic enum `Option` expects 1 type arguments, got 2")
+    }));
+
+    let duplicate = check_source(
+        r#"enum Result<T, T> {
+    Ok(T)
+}
+
+fn main() {
+    let value = Result<i32, i32>.Ok(1)
+}"#,
+    );
+    assert!(duplicate.diagnostics.iter().any(|diagnostic| {
+        diagnostic
+            .message
+            .contains("duplicate type parameter `T` in enum `Result`")
+    }));
+
+    let conflicting = check_source(
+        r#"struct Pair<First, Second> {
+    first: First
+    second: Second
+}
+
+enum Same<T> {
+    Value(Pair<T, T>)
+}
+
+fn main() {
+    let value = Same.Value(Pair { first: 1, second: "two" })
+}"#,
+    );
+    assert!(conflicting.diagnostics.iter().any(|diagnostic| {
+        diagnostic
+            .message
+            .contains("conflicting types `i32` and `String` were inferred for `T`")
+    }));
+}
+
+#[test]
 fn generic_structs_require_the_declared_type_argument_count() {
     let missing = check_source(
         r#"struct Box<T> {

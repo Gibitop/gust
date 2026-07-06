@@ -339,7 +339,7 @@ fn lower_monomorphized_program(program: &Program) -> Result<LoweredProgram, Vec<
 
     for item in &program.items {
         if let Item::Enum(item) = item
-            && let Some(enum_) = lower_enum_definition(item, &structs, &mut diagnostics)
+            && let Some(enum_) = lower_enum_definition(item, &structs, &enums, &mut diagnostics)
         {
             enums.insert(item.name.clone(), enum_);
         }
@@ -601,6 +601,7 @@ fn lower_monomorphized_program(program: &Program) -> Result<LoweredProgram, Vec<
 fn lower_enum_definition(
     item: &crate::ast::EnumDecl,
     structs: &HashMap<String, LoweredStruct>,
+    enums: &HashMap<String, LoweredEnum>,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> Option<LoweredEnum> {
     let mut variants = Vec::new();
@@ -634,9 +635,9 @@ fn lower_enum_definition(
             lower_value_type_ref(
                 type_ref,
                 structs,
-                &HashMap::new(),
+                enums,
                 diagnostics,
-                "enum payloads only support basic and known struct types in executable builds",
+                "enum payloads only support basic and known struct or enum types in executable builds",
             )
         });
 
