@@ -406,6 +406,29 @@ fn none(): Option<String> => Option.None"#,
     lower_program(&result.program).expect("imported generic enum should lower");
 }
 
+#[test]
+fn imported_generic_functions_are_monomorphized_after_module_linking() {
+    let project = TempProject::new();
+    project.write(
+        "main.gust",
+        r#"from ./identity import { identity }
+
+fn main() {
+    io.println(identity("from module"))
+}"#,
+    );
+    project.write("identity.gust", r#"fn identity<T>(value: T): T => value"#);
+
+    let result = check_project(&project.path("main.gust")).expect("project should load");
+    assert!(
+        result.diagnostics.is_empty(),
+        "expected imported generic function to validate, got {:?}",
+        result.diagnostics
+    );
+
+    lower_program(&result.program).expect("imported generic function should lower");
+}
+
 fn path_suffix(path: &str) -> &str {
     Path::new(path).to_str().expect("test path should be UTF-8")
 }

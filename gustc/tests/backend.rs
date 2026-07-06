@@ -2163,3 +2163,27 @@ fn main() {
     assert!(source.contains(".gust_payload."));
     assert!(source.contains(".gust_tag =="));
 }
+
+#[test]
+fn generic_function_specializations_emit_distinct_c_functions() {
+    let result = check_source(
+        r#"fn identity<T>(value: T) => value
+
+fn main() {
+    let number = identity(42)
+    let text = identity("Gust")
+    io.println(number.toString())
+    io.println(text)
+}"#,
+    );
+    assert!(
+        !result.has_errors(),
+        "expected generic functions to validate, got {:?}",
+        result.diagnostics
+    );
+
+    let lowered = lower_program(&result.program).expect("generic functions should lower");
+    let c = emit_c(&lowered);
+    assert!(c.contains("identity<i32>"));
+    assert!(c.contains("identity<String>"));
+}

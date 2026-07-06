@@ -190,4 +190,18 @@ Match patterns keep the generic source name, such as `Option.Some(value)`. The c
 enum determines the specialization and the substituted payload type of each binding. Nested
 generic enum payloads and generic enums imported from local modules use the same rules.
 
-Generic top-level functions and bounds are not implemented yet.
+Top-level functions may declare type parameters, such as `fn identity<T>(value: T): T`. Calls infer
+concrete arguments from parameter types and the expected return type, or accept explicit arguments
+such as `identity<i32>(1)`. Concrete functions are monomorphized on demand, including recursive
+calls, and unused generic function bodies are not emitted or validated. Function type parameters
+must be unique and appear in the function signature so every specialization can be selected at a
+call site.
+
+Omitted generic function return types are inferred symbolically before call-site inference and
+then substituted for each concrete specialization. This allows an inferred generic result to
+provide constraints to an enclosing generic call, such as `identity(identity("value"))`. Generic
+enum variant construction and generic struct literals participate in symbolic return inference,
+so functions returning `Option.Some(value)`, `Option<T>.None`, or `Box { value: value }` do not
+require annotations.
+
+Generic bounds are not implemented yet.

@@ -159,9 +159,11 @@ impl Parser {
                 let start = self.expect_keyword(Keyword::Static, "`static`").span;
                 self.expect_keyword(Keyword::Fn, "`fn`");
                 let name = self.expect_identifier("expected static function name");
-                members.push(StructMember::StaticMethod(
-                    self.parse_function_tail(start, Some(name)),
-                ));
+                members.push(StructMember::StaticMethod(self.parse_function_tail(
+                    start,
+                    Some(name),
+                    Vec::new(),
+                )));
             } else if self.current_keyword() == Some(Keyword::Fn) {
                 members.push(StructMember::Method(self.parse_function(true)));
             } else if self.check_identifier() {
@@ -223,7 +225,7 @@ impl Parser {
             None
         };
 
-        self.parse_function_tail(start, name)
+        self.parse_function_tail(start, name, Vec::new())
     }
 
     fn parse_top_level_function(&mut self) -> Item {
@@ -243,7 +245,7 @@ impl Parser {
 
         if self.match_kind(&TokenKind::Dot) {
             let function_name = self.expect_identifier("expected extension function name");
-            let function = self.parse_function_tail(start, Some(function_name));
+            let function = self.parse_function_tail(start, Some(function_name), Vec::new());
             let type_ref = TypeRef {
                 name: first_name,
                 args: Vec::new(),
@@ -260,11 +262,17 @@ impl Parser {
             if static_ {
                 self.error_here("static functions must be declared on a type");
             }
-            Item::Function(self.parse_function_tail(start, Some(first_name)))
+            let type_params = self.parse_type_params();
+            Item::Function(self.parse_function_tail(start, Some(first_name), type_params))
         }
     }
 
-    fn parse_function_tail(&mut self, start: Span, name: Option<String>) -> FunctionDecl {
+    fn parse_function_tail(
+        &mut self,
+        start: Span,
+        name: Option<String>,
+        type_params: Vec<String>,
+    ) -> FunctionDecl {
         self.expect_kind(&TokenKind::LeftParen, "`(`");
         let params = self.parse_params();
         self.expect_kind(&TokenKind::RightParen, "`)`");
@@ -288,6 +296,7 @@ impl Parser {
 
         FunctionDecl {
             name,
+            type_params,
             params,
             return_type,
             body,
@@ -569,8 +578,8 @@ impl Parser {
                     span: expr.span.join(self.previous_span()),
                     kind: ExprKind::PostfixIncrement(Box::new(expr)),
                 };
-            } else if self.allow_struct_init
-                && (self.check_kind(&TokenKind::LeftBrace) || self.check_kind(&TokenKind::Less))
+            } else if (self.allow_struct_init && self.check_kind(&TokenKind::LeftBrace))
+                || self.check_kind(&TokenKind::Less)
             {
                 if let Some(name) = expression_path(&expr) {
                     let position = self.position;
@@ -581,9 +590,12 @@ impl Parser {
                         Some(Vec::new())
                     };
                     if let Some(args) = args {
-                        if self.check_kind(&TokenKind::LeftBrace) {
+                        if self.allow_struct_init && self.check_kind(&TokenKind::LeftBrace) {
                             expr = self.parse_struct_init(name, args, expr.span);
-                        } else if self.check_kind(&TokenKind::Dot) && !args.is_empty() {
+                        } else if (self.check_kind(&TokenKind::Dot)
+                            || self.check_kind(&TokenKind::LeftParen))
+                            && !args.is_empty()
+                        {
                             expr = Expr {
                                 span: expr.span.join(self.previous_span()),
                                 kind: ExprKind::GenericType { name, args },
