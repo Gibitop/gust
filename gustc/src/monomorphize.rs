@@ -562,10 +562,15 @@ impl Monomorphizer {
                     }
                 }
             }
+            StmtKind::While { condition, body } => {
+                self.rewrite_expr(condition, substitutions);
+                self.rewrite_block(body, substitutions);
+            }
             StmtKind::For { iterable, body, .. } => {
                 self.rewrite_expr(iterable, substitutions);
                 self.rewrite_block(body, substitutions);
             }
+            StmtKind::Break | StmtKind::Continue => {}
             StmtKind::Expr(expr) => self.rewrite_expr(expr, substitutions),
         }
     }
@@ -1084,7 +1089,14 @@ impl Monomorphizer {
                 StmtKind::For { body, .. } => {
                     return_types.extend(self.infer_block_return_types(body));
                 }
-                StmtKind::Assign { .. } | StmtKind::Return { value: None } | StmtKind::Expr(_) => {}
+                StmtKind::While { body, .. } => {
+                    return_types.extend(self.infer_block_return_types(body));
+                }
+                StmtKind::Assign { .. }
+                | StmtKind::Return { value: None }
+                | StmtKind::Break
+                | StmtKind::Continue
+                | StmtKind::Expr(_) => {}
             }
         }
         self.scopes.pop();
@@ -2003,10 +2015,15 @@ impl<'items> MethodReachability<'items> {
                         }
                     }
                 }
+                StmtKind::While { condition, body } => {
+                    self.visit_expr(condition, locals);
+                    self.visit_block(body, &mut locals.clone());
+                }
                 StmtKind::For { iterable, body, .. } => {
                     self.visit_expr(iterable, locals);
                     self.visit_block(body, &mut locals.clone());
                 }
+                StmtKind::Break | StmtKind::Continue => {}
                 StmtKind::Expr(expr) => {
                     self.visit_expr(expr, locals);
                 }

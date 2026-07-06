@@ -266,6 +266,119 @@ fn main() {
 }
 
 #[test]
+fn while_statements_validate() {
+    let result = check_source(
+        r#"
+fn main() {
+    let mut index = 0
+
+    while index < 5 {
+        index += 1
+
+        if index == 2 {
+            continue
+        }
+
+        if index == 4 {
+            break
+        }
+    }
+}
+"#,
+    );
+
+    assert!(
+        !result.has_errors(),
+        "expected while statement to validate, got {:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
+fn while_condition_must_be_bool() {
+    let result = check_source(
+        r#"
+fn main() {
+    while "not a bool" {}
+}
+"#,
+    );
+
+    assert!(
+        result
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.severity == Severity::Error
+                && diagnostic
+                    .message
+                    .contains("expected value of type `bool`, got `String`")),
+        "expected bool condition error, got {:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
+fn while_branch_bindings_do_not_escape() {
+    let result = check_source(
+        r#"
+fn main() {
+    while true {
+        let message = "scoped"
+        break
+    }
+
+    io.println(message)
+}
+"#,
+    );
+
+    assert!(
+        result
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.severity == Severity::Error
+                && diagnostic.message.contains("unknown name `message`")),
+        "expected loop binding scope error, got {:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
+fn break_and_continue_require_loop() {
+    let result = check_source(
+        r#"
+fn main() {
+    break
+    continue
+}
+"#,
+    );
+
+    assert!(
+        result
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.severity == Severity::Error
+                && diagnostic
+                    .message
+                    .contains("`break` can only be used inside a loop")),
+        "expected break context error, got {:?}",
+        result.diagnostics
+    );
+    assert!(
+        result
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.severity == Severity::Error
+                && diagnostic
+                    .message
+                    .contains("`continue` can only be used inside a loop")),
+        "expected continue context error, got {:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
 fn returning_if_else_satisfies_explicit_return_type() {
     let result = check_source(
         r#"

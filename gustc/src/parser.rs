@@ -359,6 +359,9 @@ impl Parser {
             Some(Keyword::Let) => self.parse_let_statement(),
             Some(Keyword::Return) => self.parse_return_statement(),
             Some(Keyword::If) => self.parse_if_statement(),
+            Some(Keyword::While) => self.parse_while_statement(),
+            Some(Keyword::Break) => self.parse_break_statement(),
+            Some(Keyword::Continue) => self.parse_continue_statement(),
             Some(Keyword::For) => self.parse_for_statement(),
             _ => {
                 let target = self.parse_expression();
@@ -445,6 +448,36 @@ impl Parser {
                 body,
             },
             span,
+        }
+    }
+
+    fn parse_while_statement(&mut self) -> Stmt {
+        let start = self.expect_keyword(Keyword::While, "`while`").span;
+        let condition = self.parse_expression_without_struct_init();
+        let body = self.parse_block();
+        let span = start.join(body.span);
+
+        Stmt {
+            kind: StmtKind::While { condition, body },
+            span,
+        }
+    }
+
+    fn parse_break_statement(&mut self) -> Stmt {
+        let start = self.expect_keyword(Keyword::Break, "`break`").span;
+
+        Stmt {
+            kind: StmtKind::Break,
+            span: start,
+        }
+    }
+
+    fn parse_continue_statement(&mut self) -> Stmt {
+        let start = self.expect_keyword(Keyword::Continue, "`continue`").span;
+
+        Stmt {
+            kind: StmtKind::Continue,
+            span: start,
         }
     }
 

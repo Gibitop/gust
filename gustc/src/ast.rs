@@ -158,6 +158,12 @@ pub enum StmtKind {
         then_branch: Block,
         else_branch: Option<ElseBranch>,
     },
+    While {
+        condition: Expr,
+        body: Block,
+    },
+    Break,
+    Continue,
     For {
         name: String,
         iterable: Expr,

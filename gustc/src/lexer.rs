@@ -61,6 +61,8 @@ pub enum TokenKind {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Keyword {
     As,
+    Break,
+    Continue,
     Else,
     Enum,
     False,
@@ -77,6 +79,7 @@ pub enum Keyword {
     Static,
     Struct,
     True,
+    While,
 }
 
 pub struct Lexer<'source> {
@@ -347,6 +350,8 @@ impl<'source> Lexer<'source> {
         let lexeme = self.source[start..self.position].to_string();
         let kind = match lexeme.as_str() {
             "as" => TokenKind::Keyword(Keyword::As),
+            "break" => TokenKind::Keyword(Keyword::Break),
+            "continue" => TokenKind::Keyword(Keyword::Continue),
             "else" => TokenKind::Keyword(Keyword::Else),
             "enum" => TokenKind::Keyword(Keyword::Enum),
             "false" => TokenKind::Keyword(Keyword::False),
@@ -363,6 +368,7 @@ impl<'source> Lexer<'source> {
             "static" => TokenKind::Keyword(Keyword::Static),
             "struct" => TokenKind::Keyword(Keyword::Struct),
             "true" => TokenKind::Keyword(Keyword::True),
+            "while" => TokenKind::Keyword(Keyword::While),
             _ => TokenKind::Identifier(lexeme.clone()),
         };
 

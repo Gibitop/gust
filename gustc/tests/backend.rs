@@ -78,6 +78,50 @@ fn if_else_lowers_successfully() {
 }
 
 #[test]
+fn while_break_and_continue_lower_and_emit_c() {
+    let result = check_source(
+        r#"fn main() {
+    let mut index = 0
+
+    while index < 5 {
+        index += 1
+
+        if index == 2 {
+            continue
+        }
+
+        if index == 4 {
+            break
+        }
+
+        io.println(index.toString())
+    }
+}"#,
+    );
+
+    assert!(
+        !result.has_errors(),
+        "expected no frontend errors, got {:?}",
+        result.diagnostics
+    );
+
+    let lowered = lower_program(&result.program).expect("while should lower");
+
+    assert!(
+        matches!(lowered.statements[1], LoweredStatement::While { .. }),
+        "expected second statement to be lowered while, got {:?}",
+        lowered.statements
+    );
+
+    let source = emit_c(&lowered);
+
+    assert!(source.contains("while ("));
+    assert!(source.contains("continue;\n"));
+    assert!(source.contains("break;\n"));
+    assert!(source.contains("gust_rt_io_println(gust_rt_i32_to_string(gust_index));"));
+}
+
+#[test]
 fn inferred_returning_if_else_emits_c() {
     let result = check_source(
         r#"fn choose(enabled: bool) {

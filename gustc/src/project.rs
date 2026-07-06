@@ -634,6 +634,10 @@ impl<'names, 'diagnostics> ModuleRewriter<'names, 'diagnostics> {
                     }
                 }
             }
+            StmtKind::While { condition, body } => {
+                self.rewrite_expr(condition);
+                self.rewrite_block(body);
+            }
             StmtKind::For {
                 name,
                 iterable,
@@ -646,6 +650,7 @@ impl<'names, 'diagnostics> ModuleRewriter<'names, 'diagnostics> {
                 }
                 self.scopes.pop();
             }
+            StmtKind::Break | StmtKind::Continue => {}
             StmtKind::Expr(expr) => self.rewrite_expr(expr),
         }
     }
@@ -941,10 +946,15 @@ fn shift_statement(statement: &mut Stmt, offset: usize) {
                 }
             }
         }
+        StmtKind::While { condition, body } => {
+            shift_expr(condition, offset);
+            shift_block(body, offset);
+        }
         StmtKind::For { iterable, body, .. } => {
             shift_expr(iterable, offset);
             shift_block(body, offset);
         }
+        StmtKind::Break | StmtKind::Continue => {}
         StmtKind::Expr(expr) => shift_expr(expr, offset),
     }
 }

@@ -75,6 +75,14 @@ Struct and enum equality will be introduced with trait-based equality rather tha
 
 `&&` and `||` evaluate left to right and short-circuit the right operand.
 
+## While loops
+
+`while` conditions must be boolean. A `while` body has block scope, so bindings declared inside
+the body do not escape. `break` and `continue` are statements and may only be used inside loop
+bodies. Executable builds lower `while`, `break`, and `continue` directly to C control flow.
+Iterable `for` loops remain separate and will be implemented once collection and iterator
+semantics are available.
+
 ## Numeric literals
 
 Integer literals default to `i32`. Decimal and exponent-form literals default to `f64`.

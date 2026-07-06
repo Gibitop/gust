@@ -41,6 +41,7 @@ struct Analyzer {
     scopes: Vec<HashMap<String, Binding>>,
     return_types: Vec<Type>,
     self_types: Vec<Type>,
+    loop_depth: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -125,6 +126,7 @@ impl Analyzer {
             scopes: Vec::new(),
             return_types: Vec::new(),
             self_types: Vec::new(),
+            loop_depth: 0,
         }
     }
 
@@ -719,6 +721,34 @@ impl Analyzer {
                     }
                 }
             }
+            StmtKind::While { condition, body } => {
+                let condition_type =
+                    self.validate_expr_with_context(condition, Some(Type::Basic(BasicType::Bool)));
+                self.report_type_mismatch(
+                    condition.span,
+                    Type::Basic(BasicType::Bool),
+                    condition_type,
+                );
+                self.loop_depth += 1;
+                self.validate_block(body);
+                self.loop_depth -= 1;
+            }
+            StmtKind::Break => {
+                if self.loop_depth == 0 {
+                    self.diagnostics.push(Diagnostic::error(
+                        statement.span,
+                        "`break` can only be used inside a loop",
+                    ));
+                }
+            }
+            StmtKind::Continue => {
+                if self.loop_depth == 0 {
+                    self.diagnostics.push(Diagnostic::error(
+                        statement.span,
+                        "`continue` can only be used inside a loop",
+                    ));
+                }
+            }
             StmtKind::For {
                 name,
                 iterable,
@@ -729,6 +759,7 @@ impl Analyzer {
                     "for loops are parsed but iteration lowering is not implemented yet",
                 );
                 self.validate_expr(iterable);
+                self.loop_depth += 1;
                 self.push_scope();
                 self.define(name, false, Type::Unknown);
 
@@ -737,6 +768,7 @@ impl Analyzer {
                 }
 
                 self.pop_scope();
+                self.loop_depth -= 1;
             }
             StmtKind::Expr(expr) => {
                 self.validate_expr(expr);
@@ -2263,6 +2295,9 @@ fn statement_always_returns_value(statement: &Stmt) -> bool {
         StmtKind::Let { .. }
         | StmtKind::Assign { .. }
         | StmtKind::Return { value: None }
+        | StmtKind::While { .. }
+        | StmtKind::Break
+        | StmtKind::Continue
         | StmtKind::If {
             else_branch: None, ..
         }

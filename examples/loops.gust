@@ -1,0 +1,17 @@
+fn main() {
+    let mut count = 0
+
+    while count < 24 {
+        count++
+
+        if count == 2 {
+            continue
+        }
+
+        if count == 6 {
+            break
+        }
+
+        io.println(count.toString())
+    }
+}
