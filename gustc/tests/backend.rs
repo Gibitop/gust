@@ -807,8 +807,8 @@ fn basic_struct_c_output_contains_typedef_literal_and_field_access() {
 
 fn main() {
     let person = Person {
-        name: "Gust",
         age: 1,
+        name: "Gust",
     }
     io.println(person.name)
 }"#,
@@ -822,9 +822,11 @@ fn main() {
     assert!(source.contains("_Person {"));
     assert!(source.contains("const char* gust_name;"));
     assert!(source.contains("uint32_t gust_age;"));
+    assert!(source.contains("const char* gust_name, uint32_t gust_age)"));
+    assert!(source.contains("result->gust_name = gust_name;"));
+    assert!(source.contains("result->gust_age = gust_age;"));
     assert!(source.contains("gust_person = gust_rt_new_gust_struct_"));
-    assert!(source.contains(".gust_name = \"Gust\""));
-    assert!(source.contains(".gust_age = 1"));
+    assert!(source.contains("_Person(\"Gust\", 1);"));
     assert!(source.contains("gust_rt_io_println(gust_person->gust_name);"));
 }
 
