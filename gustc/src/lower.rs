@@ -73,6 +73,12 @@ pub enum LoweredStatement {
         then_branch: Vec<LoweredStatement>,
         else_branch: Option<Vec<LoweredStatement>>,
     },
+    While {
+        condition: LoweredExpr,
+        body: Vec<LoweredStatement>,
+    },
+    Break,
+    Continue,
     Match {
         value: LoweredExpr,
         temp_name: String,
@@ -972,7 +978,22 @@ fn infer_block_return_types(
                     }
                 }
             }
-            StmtKind::Assign { .. } | StmtKind::For { .. } | StmtKind::Expr(_) => {}
+            StmtKind::While { body, .. } => {
+                infer_block_return_types(
+                    body,
+                    locals,
+                    signatures,
+                    structs,
+                    enums,
+                    return_type,
+                    has_unresolved_value_return,
+                )?;
+            }
+            StmtKind::Assign { .. }
+            | StmtKind::Break
+            | StmtKind::Continue
+            | StmtKind::For { .. }
+            | StmtKind::Expr(_) => {}
         }
     }
 
@@ -1457,6 +1478,21 @@ fn lower_function(
                             statements.push(statement);
                         }
                     }
+                    StmtKind::While { .. } => {
+                        if let Some(statement) = lower_while_statement(
+                            statement,
+                            &locals,
+                            signatures,
+                            structs,
+                            enums,
+                            diagnostics,
+                            Some(&signature.return_type),
+                        ) {
+                            statements.push(statement);
+                        }
+                    }
+                    StmtKind::Break => statements.push(LoweredStatement::Break),
+                    StmtKind::Continue => statements.push(LoweredStatement::Continue),
                     StmtKind::For { .. } => diagnostics.push(Diagnostic::error(
                         statement.span,
                         "for loops are not supported in executable builds",
@@ -1573,6 +1609,21 @@ fn lower_main(
                             statements.push(statement);
                         }
                     }
+                    StmtKind::While { .. } => {
+                        if let Some(statement) = lower_while_statement(
+                            statement,
+                            &locals,
+                            signatures,
+                            structs,
+                            enums,
+                            diagnostics,
+                            None,
+                        ) {
+                            statements.push(statement);
+                        }
+                    }
+                    StmtKind::Break => statements.push(LoweredStatement::Break),
+                    StmtKind::Continue => statements.push(LoweredStatement::Continue),
                     StmtKind::For { .. } => {
                         diagnostics.push(Diagnostic::error(
                             statement.span,
@@ -1662,6 +1713,42 @@ fn lower_if_statement(
     })
 }
 
+fn lower_while_statement(
+    statement: &Stmt,
+    locals: &HashMap<String, LoweringLocal>,
+    signatures: &HashMap<String, FunctionSignature>,
+    structs: &HashMap<String, LoweredStruct>,
+    enums: &HashMap<String, LoweredEnum>,
+    diagnostics: &mut Vec<Diagnostic>,
+    return_type: Option<&LoweredType>,
+) -> Option<LoweredStatement> {
+    let StmtKind::While { condition, body } = &statement.kind else {
+        return None;
+    };
+
+    let condition = lower_expr(
+        condition,
+        locals,
+        signatures,
+        structs,
+        enums,
+        diagnostics,
+        Some(LoweredType::Basic(BasicType::Bool)),
+        "expected supported `while` condition in executable builds",
+    )?;
+    let body = lower_conditional_block(
+        body,
+        &mut locals.clone(),
+        signatures,
+        structs,
+        enums,
+        diagnostics,
+        return_type,
+    );
+
+    Some(LoweredStatement::While { condition, body })
+}
+
 fn lower_conditional_block(
     block: &Block,
     locals: &mut HashMap<String, LoweringLocal>,
@@ -1738,6 +1825,21 @@ fn lower_conditional_block(
                 statement.span,
                 "for loops are not supported in executable builds",
             )),
+            StmtKind::While { .. } => {
+                if let Some(statement) = lower_while_statement(
+                    statement,
+                    locals,
+                    signatures,
+                    structs,
+                    enums,
+                    diagnostics,
+                    return_type,
+                ) {
+                    statements.push(statement);
+                }
+            }
+            StmtKind::Break => statements.push(LoweredStatement::Break),
+            StmtKind::Continue => statements.push(LoweredStatement::Continue),
             StmtKind::Expr(expr) => {
                 if let Some(statement) = lower_expression_statement(
                     expr,
@@ -1777,6 +1879,9 @@ fn lowered_statement_always_returns_value(statement: &LoweredStatement) -> bool 
         | LoweredStatement::Println(_)
         | LoweredStatement::Expr(_)
         | LoweredStatement::Return(None)
+        | LoweredStatement::While { .. }
+        | LoweredStatement::Break
+        | LoweredStatement::Continue
         | LoweredStatement::Match { .. }
         | LoweredStatement::If {
             else_branch: None, ..
@@ -2029,6 +2134,19 @@ fn lower_match_expression_branch_block(
                     statements.push(statement);
                 }
             }
+            StmtKind::While { .. } => {
+                if let Some(statement) = lower_while_statement(
+                    statement,
+                    locals,
+                    signatures,
+                    structs,
+                    enums,
+                    diagnostics,
+                    None,
+                ) {
+                    statements.push(statement);
+                }
+            }
             StmtKind::Expr(expr) => {
                 if let Some(statement) = lower_expression_statement(
                     expr,
@@ -2048,6 +2166,8 @@ fn lower_match_expression_branch_block(
                     "return statements are only supported as the final value of block-bodied match expression branches",
                 ));
             }
+            StmtKind::Break => statements.push(LoweredStatement::Break),
+            StmtKind::Continue => statements.push(LoweredStatement::Continue),
             StmtKind::For { .. } => diagnostics.push(Diagnostic::error(
                 statement.span,
                 "for loops are not supported in executable builds",

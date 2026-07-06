@@ -185,6 +185,13 @@ fn statement_uses_type(statement: &LoweredStatement, type_: BasicType) -> bool {
                         .any(|statement| statement_uses_type(statement, type_))
                 })
         }
+        LoweredStatement::While { condition, body } => {
+            expr_uses_type(condition, type_)
+                || body
+                    .iter()
+                    .any(|statement| statement_uses_type(statement, type_))
+        }
+        LoweredStatement::Break | LoweredStatement::Continue => false,
         LoweredStatement::Match {
             value, branches, ..
         } => {
@@ -320,6 +327,13 @@ fn statement_uses_number_to_string(statement: &LoweredStatement, type_: BasicTyp
                         .any(|statement| statement_uses_number_to_string(statement, type_))
                 })
         }
+        LoweredStatement::While { condition, body } => {
+            expr_uses_number_to_string(condition, type_)
+                || body
+                    .iter()
+                    .any(|statement| statement_uses_number_to_string(statement, type_))
+        }
+        LoweredStatement::Break | LoweredStatement::Continue => false,
         LoweredStatement::Match {
             value, branches, ..
         } => {
@@ -426,6 +440,10 @@ fn statement_uses_string_equality(statement: &LoweredStatement) -> bool {
                     .as_ref()
                     .is_some_and(|statements| statements.iter().any(statement_uses_string_equality))
         }
+        LoweredStatement::While { condition, body } => {
+            expr_uses_string_equality(condition) || body.iter().any(statement_uses_string_equality)
+        }
+        LoweredStatement::Break | LoweredStatement::Continue => false,
         LoweredStatement::Match {
             value, branches, ..
         } => {
@@ -511,6 +529,10 @@ fn statement_uses_string_concat(statement: &LoweredStatement) -> bool {
                     .as_ref()
                     .is_some_and(|statements| statements.iter().any(statement_uses_string_concat))
         }
+        LoweredStatement::While { condition, body } => {
+            expr_uses_string_concat(condition) || body.iter().any(statement_uses_string_concat)
+        }
+        LoweredStatement::Break | LoweredStatement::Continue => false,
         LoweredStatement::Match {
             value, branches, ..
         } => {
@@ -584,6 +606,9 @@ fn statement_uses_println(statement: &LoweredStatement) -> bool {
                     .iter()
                     .any(|branch| branch.statements.iter().any(statement_uses_println))
         }
+        LoweredStatement::While { condition, body } => {
+            expr_uses_println(condition) || body.iter().any(statement_uses_println)
+        }
         LoweredStatement::Local { value, .. } | LoweredStatement::Expr(value) => {
             expr_uses_println(value)
         }
@@ -591,6 +616,7 @@ fn statement_uses_println(statement: &LoweredStatement) -> bool {
             expr_uses_println(target) || expr_uses_println(value)
         }
         LoweredStatement::Return(value) => value.as_ref().is_some_and(expr_uses_println),
+        LoweredStatement::Break | LoweredStatement::Continue => false,
     }
 }
 
@@ -706,6 +732,13 @@ fn statement_calls_name(statement: &LoweredStatement, name: &str) -> bool {
                         .any(|statement| statement_calls_name(statement, name))
                 })
         }
+        LoweredStatement::While { condition, body } => {
+            expr_calls_name(condition, name)
+                || body
+                    .iter()
+                    .any(|statement| statement_calls_name(statement, name))
+        }
+        LoweredStatement::Break | LoweredStatement::Continue => false,
         LoweredStatement::Match {
             value, branches, ..
         } => {
@@ -1238,6 +1271,27 @@ fn push_c_statement(
             }
 
             source.push('\n');
+        }
+        LoweredStatement::While { condition, body } => {
+            push_c_indent(source, indent);
+            source.push_str("while (");
+            push_c_value(source, condition, structs);
+            source.push_str(") {\n");
+
+            for statement in body {
+                push_c_statement(source, statement, indent + 1, structs);
+            }
+
+            push_c_indent(source, indent);
+            source.push_str("}\n");
+        }
+        LoweredStatement::Break => {
+            push_c_indent(source, indent);
+            source.push_str("break;\n");
+        }
+        LoweredStatement::Continue => {
+            push_c_indent(source, indent);
+            source.push_str("continue;\n");
         }
         LoweredStatement::Match {
             value,
