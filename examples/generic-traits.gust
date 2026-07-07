@@ -2,8 +2,24 @@ impl Named<String> for Person {
     fn name() => self.name
 }
 
+impl<T> Named<T> for Box<T> {
+    fn name() => self.value
+}
+
+impl<T> Labeled for Box<T> {
+    fn label() => "box"
+}
+
 trait Named<T> {
     fn name(): T
+}
+
+trait Labeled {
+    fn label(): String
+}
+
+struct Box<T> {
+    value: T
 }
 
 struct Person {
@@ -14,11 +30,21 @@ fn printName(value: Named<String>) {
     io.println(value.name())
 }
 
+fn printLabeledName<T: Named<String> + Labeled>(value: T) {
+    io.println(value.label())
+    io.println(value.name())
+}
+
 fn main() {
     let person = Person { name: "Gust" }
     let named: Named<String> = person
+    let boxed = Box<String> { value: "Boxed Gust" }
+    let boxedNamed: Named<String> = boxed
 
     io.println(person.name())
     printName(person)
     io.println(named.name())
+    printName(boxed)
+    io.println(boxedNamed.name())
+    printLabeledName(boxed)
 }

@@ -2168,6 +2168,7 @@ fn collect_lambda_block_captures(
     let function = FunctionDecl {
         name: None,
         type_params: Vec::new(),
+        type_param_bounds: Vec::new(),
         params: Vec::new(),
         return_type: None,
         body: FunctionBody::Block(block.clone()),

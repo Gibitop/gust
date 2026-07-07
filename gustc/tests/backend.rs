@@ -2597,3 +2597,50 @@ fn main() {
     assert!(c.contains("gust_trait_thunk_"));
     assert!(c.contains("Named_String"));
 }
+
+#[test]
+fn generic_trait_impl_templates_lower_to_dynamic_dispatch() {
+    let result = check_source(
+        r#"struct Box<T> {
+    value: T
+}
+
+trait Named<T> {
+    fn name(): T
+}
+
+impl<T> Named<T> for Box<T> {
+    fn name() => self.value
+}
+
+fn main() {
+    let value = Box<String> { value: "Gust" }
+    let named: Named<String> = value
+    io.println(named.name())
+}"#,
+    );
+    assert!(
+        !result.has_errors(),
+        "expected generic trait impl template program to validate, got {:?}",
+        result.diagnostics
+    );
+
+    let lowered = lower_program(&result.program).expect("generic trait impl template should lower");
+
+    assert!(
+        matches!(
+            lowered.statements[1],
+            LoweredStatement::Local {
+                ref value,
+                ..
+            } if matches!(&value.kind, LoweredExprKind::TraitObject { trait_name, .. } if trait_name == "Named<String>")
+        ),
+        "expected generic trait impl template local to lower as trait object, got {:?}",
+        lowered.statements
+    );
+
+    let c = emit_c(&lowered);
+    assert!(c.contains("// Gust function: trait Box<String>.name"));
+    assert!(c.contains("gust_trait_thunk_"));
+    assert!(c.contains("Named_String"));
+}

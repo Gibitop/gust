@@ -3,7 +3,7 @@ use crate::ast::{
     FunctionBody, FunctionDecl, FunctionTypeParam, FunctionTypeRef, ImplDecl, ImplMember,
     ImportDecl, ImportName, ImportNamespace, Item, MatchBranch, MatchBranchBody, Param, Pattern,
     Program, Stmt, StmtKind, StructDecl, StructInitField, StructMember, TraitDecl, TraitMethodDecl,
-    TypeRef, UnaryOp,
+    TypeParamBound, TypeRef, UnaryOp,
 };
 use crate::diagnostic::Diagnostic;
 use crate::lexer::{Keyword, Token, TokenKind};
@@ -114,7 +114,7 @@ impl Parser {
     fn parse_enum(&mut self) -> EnumDecl {
         let start = self.expect_keyword(Keyword::Enum, "`enum`").span;
         let name = self.expect_identifier("expected enum name");
-        let type_params = self.parse_type_params();
+        let (type_params, type_param_bounds) = self.parse_type_params();
         self.expect_kind(&TokenKind::LeftBrace, "`{`");
 
         let mut variants = Vec::new();
@@ -143,6 +143,7 @@ impl Parser {
         EnumDecl {
             name,
             type_params,
+            type_param_bounds,
             variants,
             span: start.join(end),
         }
@@ -151,7 +152,7 @@ impl Parser {
     fn parse_struct(&mut self) -> StructDecl {
         let start = self.expect_keyword(Keyword::Struct, "`struct`").span;
         let name = self.expect_identifier("expected struct name");
-        let type_params = self.parse_type_params();
+        let (type_params, type_param_bounds) = self.parse_type_params();
         self.expect_kind(&TokenKind::LeftBrace, "`{`");
 
         let mut members = Vec::new();
@@ -162,11 +163,12 @@ impl Parser {
                 let start = self.expect_keyword(Keyword::Static, "`static`").span;
                 self.expect_keyword(Keyword::Fn, "`fn`");
                 let name = self.expect_identifier("expected static function name");
-                let type_params = self.parse_type_params();
+                let (type_params, type_param_bounds) = self.parse_type_params();
                 members.push(StructMember::StaticMethod(self.parse_function_tail(
                     start,
                     Some(name),
                     type_params,
+                    type_param_bounds,
                 )));
             } else if self.current_keyword() == Some(Keyword::Fn) {
                 members.push(StructMember::Method(self.parse_function(true)));
@@ -199,6 +201,7 @@ impl Parser {
         StructDecl {
             name,
             type_params,
+            type_param_bounds,
             members,
             span: start.join(end),
         }
@@ -207,7 +210,7 @@ impl Parser {
     fn parse_trait(&mut self) -> TraitDecl {
         let start = self.expect_keyword(Keyword::Trait, "`trait`").span;
         let name = self.expect_identifier("expected trait name");
-        let type_params = self.parse_type_params();
+        let (type_params, type_param_bounds) = self.parse_type_params();
         self.expect_kind(&TokenKind::LeftBrace, "`{`");
 
         let mut methods = Vec::new();
@@ -226,6 +229,7 @@ impl Parser {
         TraitDecl {
             name,
             type_params,
+            type_param_bounds,
             methods,
             span: start.join(end),
         }
@@ -261,6 +265,7 @@ impl Parser {
 
     fn parse_impl(&mut self) -> ImplDecl {
         let start = self.expect_keyword(Keyword::Impl, "`impl`").span;
+        let (type_params, type_param_bounds) = self.parse_type_params();
         let trait_ref = self
             .parse_type()
             .unwrap_or_else(|| self.missing_type(self.current().span));
@@ -278,7 +283,7 @@ impl Parser {
                     self.expect_keyword(Keyword::Fn, "`fn`");
                     let name = self.expect_identifier("expected impl method name");
                     (
-                        self.parse_function_tail(start, Some(name), Vec::new()),
+                        self.parse_function_tail(start, Some(name), Vec::new(), Vec::new()),
                         true,
                     )
                 } else {
@@ -300,6 +305,8 @@ impl Parser {
         let end = self.previous_span();
 
         ImplDecl {
+            type_params,
+            type_param_bounds,
             trait_ref,
             type_ref,
             methods,
@@ -307,21 +314,39 @@ impl Parser {
         }
     }
 
-    fn parse_type_params(&mut self) -> Vec<String> {
+    fn parse_type_params(&mut self) -> (Vec<String>, Vec<TypeParamBound>) {
         let mut params = Vec::new();
+        let mut bounds = Vec::new();
         if !self.match_kind(&TokenKind::Less) {
-            return params;
+            return (params, bounds);
         }
 
         while !self.at_eof() && !self.check_type_greater() {
-            params.push(self.expect_identifier("expected type parameter name"));
+            let start = self.current().span;
+            let param = self.expect_identifier("expected type parameter name");
+            params.push(param.clone());
+            if self.match_kind(&TokenKind::Colon) {
+                loop {
+                    let trait_ref = self
+                        .parse_type()
+                        .unwrap_or_else(|| self.missing_type(self.current().span));
+                    bounds.push(TypeParamBound {
+                        param: param.clone(),
+                        span: start.join(trait_ref.span),
+                        trait_ref,
+                    });
+                    if !self.match_kind(&TokenKind::Plus) {
+                        break;
+                    }
+                }
+            }
             if !self.match_kind(&TokenKind::Comma) {
                 break;
             }
         }
 
         self.expect_type_greater();
-        params
+        (params, bounds)
     }
 
     fn parse_function(&mut self, named: bool) -> FunctionDecl {
@@ -331,13 +356,13 @@ impl Parser {
         } else {
             None
         };
-        let type_params = if named {
+        let (type_params, type_param_bounds) = if named {
             self.parse_type_params()
         } else {
-            Vec::new()
+            (Vec::new(), Vec::new())
         };
 
-        self.parse_function_tail(start, name, type_params)
+        self.parse_function_tail(start, name, type_params, type_param_bounds)
     }
 
     fn parse_top_level_function(&mut self) -> Item {
@@ -357,7 +382,8 @@ impl Parser {
 
         if self.match_kind(&TokenKind::Dot) {
             let function_name = self.expect_identifier("expected extension function name");
-            let function = self.parse_function_tail(start, Some(function_name), Vec::new());
+            let function =
+                self.parse_function_tail(start, Some(function_name), Vec::new(), Vec::new());
             let type_ref = TypeRef {
                 name: first_name,
                 args: Vec::new(),
@@ -375,8 +401,13 @@ impl Parser {
             if static_ {
                 self.error_here("static functions must be declared on a type");
             }
-            let type_params = self.parse_type_params();
-            Item::Function(self.parse_function_tail(start, Some(first_name), type_params))
+            let (type_params, type_param_bounds) = self.parse_type_params();
+            Item::Function(self.parse_function_tail(
+                start,
+                Some(first_name),
+                type_params,
+                type_param_bounds,
+            ))
         }
     }
 
@@ -385,6 +416,7 @@ impl Parser {
         start: Span,
         name: Option<String>,
         type_params: Vec<String>,
+        type_param_bounds: Vec<TypeParamBound>,
     ) -> FunctionDecl {
         self.expect_kind(&TokenKind::LeftParen, "`(`");
         let params = self.parse_params();
@@ -410,6 +442,7 @@ impl Parser {
         FunctionDecl {
             name,
             type_params,
+            type_param_bounds,
             params,
             return_type,
             body,

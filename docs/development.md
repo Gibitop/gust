@@ -171,7 +171,7 @@ Real type members take precedence over extension functions, and extension functi
 precedence over trait impl methods with the same receiver and method name. Static functions follow
 the same precedence: real static functions, then static extensions, then static trait impl methods.
 
-Generic traits and generic bounds are not implemented yet.
+Generic trait declarations and impls may use type parameters and bounds.
 
 ## Trait-typed values and dynamic dispatch
 
@@ -253,8 +253,13 @@ including `impl Named<String> for Person` and trait-typed values like `let value
 are monomorphized before semantic analysis and executable lowering. Each concrete specialization
 has its own trait object type and dynamic-dispatch vtable.
 
-Generic impl templates such as `impl<T> Named<T> for Box<T>` and generic bounds are not implemented
-yet.
+Generic impl templates such as `impl<T> Named<T> for Box<T>` are monomorphized when their receiver
+type and trait can be resolved to concrete types. The generated concrete impl is validated like an
+ordinary impl and participates in static trait-method dispatch and dynamic trait-object dispatch.
+
+Bounds are written inside type parameter lists, such as `fn getName<T: Named>(value: T): String`,
+`struct Box<T: Clone>`, or `impl<T: Named<String>> Display for Box<T>`. Multiple bounds use `+`.
+Concrete specializations must satisfy their bounds through an available concrete or generated impl.
 
 ## First-class functions
 

@@ -474,6 +474,46 @@ impl Named<String> for Person {
     lower_program(&result.program).expect("imported generic trait should lower");
 }
 
+#[test]
+fn imported_generic_trait_impl_templates_are_monomorphized_after_module_linking() {
+    let project = TempProject::new();
+    project.write(
+        "main.gust",
+        r#"from ./named import { Named, Box }
+
+fn main() {
+    let value = Box.new("from module")
+    let named: Named<String> = value
+    io.println(named.name())
+}"#,
+    );
+    project.write(
+        "named.gust",
+        r#"trait Named<T> {
+    fn name(): T
+}
+
+struct Box<T> {
+    value: T
+
+    static fn new(value: T): Self => Self { value: value }
+}
+
+impl<T> Named<T> for Box<T> {
+    fn name() => self.value
+}"#,
+    );
+
+    let result = check_project(&project.path("main.gust")).expect("project should load");
+    assert!(
+        result.diagnostics.is_empty(),
+        "expected imported generic trait impl template to validate, got {:?}",
+        result.diagnostics
+    );
+
+    lower_program(&result.program).expect("imported generic trait impl template should lower");
+}
+
 fn path_suffix(path: &str) -> &str {
     Path::new(path).to_str().expect("test path should be UTF-8")
 }

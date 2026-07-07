@@ -514,6 +514,9 @@ impl<'names, 'diagnostics> ModuleRewriter<'names, 'diagnostics> {
             Item::Enum(item) => {
                 self.rewrite_declared_name(&mut item.name);
                 self.scopes.push(item.type_params.iter().cloned().collect());
+                for bound in &mut item.type_param_bounds {
+                    self.rewrite_type(&mut bound.trait_ref);
+                }
                 for variant in &mut item.variants {
                     if let Some(type_ref) = &mut variant.payload {
                         self.rewrite_type(type_ref);
@@ -524,6 +527,9 @@ impl<'names, 'diagnostics> ModuleRewriter<'names, 'diagnostics> {
             Item::Struct(item) => {
                 self.rewrite_declared_name(&mut item.name);
                 self.scopes.push(item.type_params.iter().cloned().collect());
+                for bound in &mut item.type_param_bounds {
+                    self.rewrite_type(&mut bound.trait_ref);
+                }
                 for member in &mut item.members {
                     match member {
                         StructMember::Field(field) => self.rewrite_type(&mut field.type_ref),
@@ -537,6 +543,9 @@ impl<'names, 'diagnostics> ModuleRewriter<'names, 'diagnostics> {
             Item::Trait(item) => {
                 self.rewrite_declared_name(&mut item.name);
                 self.scopes.push(item.type_params.iter().cloned().collect());
+                for bound in &mut item.type_param_bounds {
+                    self.rewrite_type(&mut bound.trait_ref);
+                }
                 for method in &mut item.methods {
                     for param in &mut method.params {
                         if let Some(type_ref) = &mut param.type_ref {
@@ -550,11 +559,16 @@ impl<'names, 'diagnostics> ModuleRewriter<'names, 'diagnostics> {
                 self.scopes.pop();
             }
             Item::Impl(item) => {
+                self.scopes.push(item.type_params.iter().cloned().collect());
+                for bound in &mut item.type_param_bounds {
+                    self.rewrite_type(&mut bound.trait_ref);
+                }
                 self.rewrite_type(&mut item.trait_ref);
                 self.rewrite_type(&mut item.type_ref);
                 for member in &mut item.methods {
                     self.rewrite_function(&mut member.function);
                 }
+                self.scopes.pop();
             }
             Item::Function(function) => {
                 if let Some(name) = &mut function.name
@@ -586,6 +600,9 @@ impl<'names, 'diagnostics> ModuleRewriter<'names, 'diagnostics> {
     fn rewrite_function(&mut self, function: &mut FunctionDecl) {
         self.scopes
             .push(function.type_params.iter().cloned().collect());
+        for bound in &mut function.type_param_bounds {
+            self.rewrite_type(&mut bound.trait_ref);
+        }
         for param in &mut function.params {
             if let Some(type_ref) = &mut param.type_ref {
                 self.rewrite_type(type_ref);
