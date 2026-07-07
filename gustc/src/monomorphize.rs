@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 
 use crate::ast::{
     Block, ElseBranch, EnumDecl, Expr, ExprKind, FunctionBody, FunctionDecl, Item, MatchBranchBody,
-    Pattern, Program, Stmt, StmtKind, StructDecl, StructMember, TypeRef,
+    Pattern, Program, Stmt, StmtKind, StructDecl, StructMember, TraitDecl, TypeRef,
 };
 use crate::diagnostic::Diagnostic;
 
@@ -13,10 +13,12 @@ pub fn monomorphize(program: &Program) -> Result<Program, Vec<Diagnostic>> {
 struct Monomorphizer {
     struct_templates: HashMap<String, StructDecl>,
     enum_templates: HashMap<String, EnumDecl>,
+    trait_templates: HashMap<String, TraitDecl>,
     function_templates: HashMap<String, FunctionDecl>,
     concrete_structs: HashSet<String>,
     concrete_struct_defs: HashMap<String, StructDecl>,
     concrete_enums: HashMap<String, EnumDecl>,
+    concrete_traits: HashSet<String>,
     pending: VecDeque<PendingSpecialization>,
     emitted: HashSet<String>,
     specializations: HashMap<String, (String, Vec<TypeRef>)>,
@@ -36,6 +38,7 @@ struct Monomorphizer {
 enum PendingSpecialization {
     Struct(String, Vec<TypeRef>),
     Enum(String, Vec<TypeRef>),
+    Trait(String, Vec<TypeRef>),
     Function(String, Vec<TypeRef>),
     Method {
         receiver: String,
@@ -79,6 +82,16 @@ impl Monomorphizer {
                     .flatten()
             })
             .collect();
+        let trait_templates = program
+            .items
+            .iter()
+            .filter_map(|item| {
+                let Item::Trait(item) = item else {
+                    return None;
+                };
+                (!item.type_params.is_empty()).then(|| (item.name.clone(), item.clone()))
+            })
+            .collect();
         let concrete_structs = program
             .items
             .iter()
@@ -111,6 +124,16 @@ impl Monomorphizer {
                 item.type_params
                     .is_empty()
                     .then(|| (item.name.clone(), item.clone()))
+            })
+            .collect();
+        let concrete_traits = program
+            .items
+            .iter()
+            .filter_map(|item| {
+                let Item::Trait(item) = item else {
+                    return None;
+                };
+                item.type_params.is_empty().then(|| item.name.clone())
             })
             .collect();
         let function_returns = program
@@ -162,10 +185,12 @@ impl Monomorphizer {
         Self {
             struct_templates,
             enum_templates,
+            trait_templates,
             function_templates,
             concrete_structs,
             concrete_struct_defs,
             concrete_enums,
+            concrete_traits,
             pending: VecDeque::new(),
             emitted: HashSet::new(),
             specializations: HashMap::new(),
@@ -192,6 +217,7 @@ impl Monomorphizer {
         for item in &program.items {
             if matches!(item, Item::Struct(item) if !item.type_params.is_empty())
                 || matches!(item, Item::Enum(item) if !item.type_params.is_empty())
+                || matches!(item, Item::Trait(item) if !item.type_params.is_empty())
                 || matches!(item, Item::Function(item) if !item.type_params.is_empty())
             {
                 continue;
@@ -269,6 +295,35 @@ impl Monomorphizer {
                     self.concrete_enums
                         .insert(specialized.name.clone(), specialized.clone());
                     items.push(Item::Enum(specialized));
+                }
+                PendingSpecialization::Trait(name, args) => {
+                    let specialized_name = specialized_name(&name, &args);
+                    if !self.emitted.insert(specialized_name.clone()) {
+                        continue;
+                    }
+                    let Some(template) = self.trait_templates.get(&name).cloned() else {
+                        continue;
+                    };
+                    let substitutions = template
+                        .type_params
+                        .iter()
+                        .cloned()
+                        .zip(args)
+                        .collect::<HashMap<_, _>>();
+                    let mut specialized = template;
+                    specialized.name = specialized_name;
+                    specialized.type_params.clear();
+                    for method in &mut specialized.methods {
+                        for param in &mut method.params {
+                            if let Some(type_ref) = &mut param.type_ref {
+                                self.rewrite_type(type_ref, &substitutions);
+                            }
+                        }
+                        if let Some(return_type) = &mut method.return_type {
+                            self.rewrite_type(return_type, &substitutions);
+                        }
+                    }
+                    items.push(Item::Trait(specialized));
                 }
                 PendingSpecialization::Function(name, args) => {
                     let specialized_name = specialized_name(&name, &args);
@@ -371,6 +426,43 @@ impl Monomorphizer {
                         template.span,
                         format!(
                             "duplicate type parameter `{name}` in enum `{}`",
+                            template.name
+                        ),
+                    ));
+                }
+            }
+        }
+        for template in self.trait_templates.values() {
+            let mut names = HashSet::new();
+            for name in &template.type_params {
+                if !names.insert(name) {
+                    self.diagnostics.push(Diagnostic::error(
+                        template.span,
+                        format!(
+                            "duplicate type parameter `{name}` in trait `{}`",
+                            template.name
+                        ),
+                    ));
+                }
+            }
+            let used = template
+                .methods
+                .iter()
+                .flat_map(|method| {
+                    method
+                        .params
+                        .iter()
+                        .filter_map(|param| param.type_ref.as_ref())
+                        .chain(method.return_type.as_ref())
+                })
+                .flat_map(type_names)
+                .collect::<HashSet<_>>();
+            for name in &template.type_params {
+                if !used.contains(name.as_str()) {
+                    self.diagnostics.push(Diagnostic::error(
+                        template.span,
+                        format!(
+                            "unused type parameter `{name}` in trait `{}`",
                             template.name
                         ),
                     ));
@@ -1304,6 +1396,11 @@ impl Monomorphizer {
             self.specialize_enum(&name, &type_ref.args, type_ref.span);
             type_ref.name = specialized_name(&name, &type_ref.args);
             type_ref.args.clear();
+        } else if self.trait_templates.contains_key(&type_ref.name) {
+            let name = type_ref.name.clone();
+            self.specialize_trait(&name, &type_ref.args, type_ref.span);
+            type_ref.name = specialized_name(&name, &type_ref.args);
+            type_ref.args.clear();
         } else if self.concrete_structs.contains(&type_ref.name) && !type_ref.args.is_empty() {
             self.diagnostics.push(Diagnostic::error(
                 type_ref.span,
@@ -1313,6 +1410,11 @@ impl Monomorphizer {
             self.diagnostics.push(Diagnostic::error(
                 type_ref.span,
                 format!("enum `{}` does not accept type arguments", type_ref.name),
+            ));
+        } else if self.concrete_traits.contains(&type_ref.name) && !type_ref.args.is_empty() {
+            self.diagnostics.push(Diagnostic::error(
+                type_ref.span,
+                format!("trait `{}` does not accept type arguments", type_ref.name),
             ));
         }
     }
@@ -2483,6 +2585,29 @@ impl Monomorphizer {
 
         self.pending
             .push_back(PendingSpecialization::Enum(name.to_string(), args.to_vec()));
+        self.specializations.insert(
+            specialized_name(name, args),
+            (name.to_string(), args.to_vec()),
+        );
+    }
+
+    fn specialize_trait(&mut self, name: &str, args: &[TypeRef], span: crate::span::Span) {
+        let expected = self.trait_templates[name].type_params.len();
+        if args.len() != expected {
+            self.diagnostics.push(Diagnostic::error(
+                span,
+                format!(
+                    "generic trait `{name}` expects {expected} type arguments, got {}",
+                    args.len()
+                ),
+            ));
+            return;
+        }
+
+        self.pending.push_back(PendingSpecialization::Trait(
+            name.to_string(),
+            args.to_vec(),
+        ));
         self.specializations.insert(
             specialized_name(name, args),
             (name.to_string(), args.to_vec()),

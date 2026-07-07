@@ -1,0 +1,24 @@
+impl Named<String> for Person {
+    fn name() => self.name
+}
+
+trait Named<T> {
+    fn name(): T
+}
+
+struct Person {
+    name: String
+}
+
+fn printName(value: Named<String>) {
+    io.println(value.name())
+}
+
+fn main() {
+    let person = Person { name: "Gust" }
+    let named: Named<String> = person
+
+    io.println(person.name())
+    printName(person)
+    io.println(named.name())
+}

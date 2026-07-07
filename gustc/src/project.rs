@@ -536,6 +536,7 @@ impl<'names, 'diagnostics> ModuleRewriter<'names, 'diagnostics> {
             }
             Item::Trait(item) => {
                 self.rewrite_declared_name(&mut item.name);
+                self.scopes.push(item.type_params.iter().cloned().collect());
                 for method in &mut item.methods {
                     for param in &mut method.params {
                         if let Some(type_ref) = &mut param.type_ref {
@@ -546,6 +547,7 @@ impl<'names, 'diagnostics> ModuleRewriter<'names, 'diagnostics> {
                         self.rewrite_type(return_type);
                     }
                 }
+                self.scopes.pop();
             }
             Item::Impl(item) => {
                 self.rewrite_type(&mut item.trait_ref);

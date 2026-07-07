@@ -429,6 +429,51 @@ fn main() {
     lower_program(&result.program).expect("imported generic function should lower");
 }
 
+#[test]
+fn imported_generic_traits_are_monomorphized_after_module_linking() {
+    let project = TempProject::new();
+    project.write(
+        "main.gust",
+        r#"from ./named import { Named, Person }
+
+fn printName(value: Named<String>) {
+    io.println(value.name())
+}
+
+fn main() {
+    let person = Person.new("from module")
+    let named: Named<String> = person
+    printName(person)
+    io.println(named.name())
+}"#,
+    );
+    project.write(
+        "named.gust",
+        r#"trait Named<T> {
+    fn name(): T
+}
+
+struct Person {
+    name: String
+
+    static fn new(name: String): Self => Self { name: name }
+}
+
+impl Named<String> for Person {
+    fn name() => self.name
+}"#,
+    );
+
+    let result = check_project(&project.path("main.gust")).expect("project should load");
+    assert!(
+        result.diagnostics.is_empty(),
+        "expected imported generic trait to validate, got {:?}",
+        result.diagnostics
+    );
+
+    lower_program(&result.program).expect("imported generic trait should lower");
+}
+
 fn path_suffix(path: &str) -> &str {
     Path::new(path).to_str().expect("test path should be UTF-8")
 }

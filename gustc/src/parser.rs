@@ -207,6 +207,7 @@ impl Parser {
     fn parse_trait(&mut self) -> TraitDecl {
         let start = self.expect_keyword(Keyword::Trait, "`trait`").span;
         let name = self.expect_identifier("expected trait name");
+        let type_params = self.parse_type_params();
         self.expect_kind(&TokenKind::LeftBrace, "`{`");
 
         let mut methods = Vec::new();
@@ -224,6 +225,7 @@ impl Parser {
 
         TraitDecl {
             name,
+            type_params,
             methods,
             span: start.join(end),
         }
