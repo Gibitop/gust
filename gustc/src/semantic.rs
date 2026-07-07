@@ -79,6 +79,8 @@ struct StructDefinition {
 #[derive(Debug, Clone)]
 struct EnumDefinition {
     variants: HashMap<String, Option<Type>>,
+    methods: HashMap<String, FunctionSignature>,
+    static_methods: HashMap<String, FunctionSignature>,
 }
 
 #[derive(Debug, Clone)]
@@ -208,6 +210,8 @@ impl Analyzer {
                         item.name.clone(),
                         EnumDefinition {
                             variants: HashMap::new(),
+                            methods: HashMap::new(),
+                            static_methods: HashMap::new(),
                         },
                     );
                     self.insert_top_level(&mut names, &item.name, item.span);
@@ -425,6 +429,9 @@ impl Analyzer {
 
     fn collect_enum_definition(&mut self, item: &crate::ast::EnumDecl) {
         let mut variants = HashMap::new();
+        let mut methods = HashMap::new();
+        let mut static_methods = HashMap::new();
+        let self_type = Type::Enum(item.name.clone());
 
         for variant in &item.variants {
             let payload = variant
@@ -446,8 +453,101 @@ impl Analyzer {
             }
         }
 
-        self.enums
-            .insert(item.name.clone(), EnumDefinition { variants });
+        for member in &item.members {
+            match member {
+                StructMember::Method(method) => {
+                    let Some(name) = &method.name else {
+                        continue;
+                    };
+
+                    if name == "clone" {
+                        self.diagnostics.push(Diagnostic::error(
+                            method.span,
+                            "method name `clone` is reserved for the built-in deep clone operation",
+                        ));
+                    }
+
+                    if methods
+                        .insert(
+                            name.clone(),
+                            FunctionSignature {
+                                params: method
+                                    .params
+                                    .iter()
+                                    .filter(|param| !is_self_param(param))
+                                    .map(|param| ParamSignature {
+                                        type_: self.type_ref_in_context(
+                                            param.type_ref.as_ref(),
+                                            &self_type,
+                                        ),
+                                        mutable: param.mutable,
+                                    })
+                                    .collect(),
+                                return_type: self
+                                    .type_ref_in_context(method.return_type.as_ref(), &self_type),
+                                mutable_self: has_mutable_receiver(method),
+                            },
+                        )
+                        .is_some()
+                    {
+                        self.diagnostics.push(Diagnostic::error(
+                            method.span,
+                            format!("duplicate method `{name}` in enum `{}`", item.name),
+                        ));
+                    }
+                }
+                StructMember::StaticMethod(method) => {
+                    let Some(name) = &method.name else {
+                        continue;
+                    };
+
+                    if name == "clone" {
+                        self.diagnostics.push(Diagnostic::error(
+                            method.span,
+                            "static function name `clone` is reserved for the built-in deep clone operation",
+                        ));
+                    }
+
+                    if static_methods
+                        .insert(
+                            name.clone(),
+                            FunctionSignature {
+                                params: method
+                                    .params
+                                    .iter()
+                                    .map(|param| ParamSignature {
+                                        type_: self.type_ref_in_context(
+                                            param.type_ref.as_ref(),
+                                            &self_type,
+                                        ),
+                                        mutable: param.mutable,
+                                    })
+                                    .collect(),
+                                return_type: self
+                                    .type_ref_in_context(method.return_type.as_ref(), &self_type),
+                                mutable_self: false,
+                            },
+                        )
+                        .is_some()
+                    {
+                        self.diagnostics.push(Diagnostic::error(
+                            method.span,
+                            format!("duplicate static function `{name}` in enum `{}`", item.name),
+                        ));
+                    }
+                }
+                StructMember::Field(_) => {}
+            }
+        }
+
+        self.enums.insert(
+            item.name.clone(),
+            EnumDefinition {
+                variants,
+                methods,
+                static_methods,
+            },
+        );
     }
 
     fn collect_trait_definition(&mut self, item: &TraitDecl) {
@@ -770,6 +870,24 @@ impl Analyzer {
                     for variant in &item.variants {
                         if let Some(type_ref) = &variant.payload {
                             self.validate_type(type_ref);
+                        }
+                    }
+
+                    for member in &item.members {
+                        match member {
+                            StructMember::Method(method) => {
+                                self.validate_function(
+                                    method,
+                                    Some(Type::Enum(item.name.clone())),
+                                    true,
+                                );
+                            }
+                            StructMember::StaticMethod(method) => self.validate_function(
+                                method,
+                                Some(Type::Enum(item.name.clone())),
+                                false,
+                            ),
+                            StructMember::Field(_) => {}
                         }
                     }
                 }
@@ -1278,7 +1396,10 @@ impl Analyzer {
                 }
                 if let ExprKind::Member { object, name } = &callee.kind
                     && let ExprKind::Identifier(enum_name) = &object.kind
-                    && self.enums.contains_key(enum_name)
+                    && self
+                        .enums
+                        .get(enum_name)
+                        .is_some_and(|enum_| enum_.variants.contains_key(name))
                 {
                     return self.validate_variant_call(expr, enum_name, name, args);
                 }
@@ -2048,13 +2169,18 @@ impl Analyzer {
         args: &[Expr],
     ) -> Type {
         let source_name = source_callable_name(name);
-        let intrinsic = if let Type::Struct(struct_name) = &type_ {
-            self.structs
+        let intrinsic = match &type_ {
+            Type::Struct(struct_name) => self
+                .structs
                 .get(struct_name)
                 .and_then(|struct_| struct_.static_methods.get(source_name))
-                .cloned()
-        } else {
-            None
+                .cloned(),
+            Type::Enum(enum_name) => self
+                .enums
+                .get(enum_name)
+                .and_then(|enum_| enum_.static_methods.get(source_name))
+                .cloned(),
+            _ => None,
         };
         let signature = intrinsic
             .or_else(|| {
@@ -2147,6 +2273,11 @@ impl Analyzer {
                 .get(struct_name)
                 .and_then(|struct_| struct_.methods.get(source_name))
                 .cloned(),
+            Type::Enum(enum_name) => self
+                .enums
+                .get(enum_name)
+                .and_then(|enum_| enum_.methods.get(source_name))
+                .cloned(),
             Type::Trait(trait_name) => self
                 .traits
                 .get(trait_name)
@@ -2175,6 +2306,7 @@ impl Analyzer {
             } else {
                 let target = match &object_type {
                     Type::Struct(name) => format!("struct `{name}`"),
+                    Type::Enum(name) => format!("enum `{name}`"),
                     Type::Trait(name) => format!("trait `{name}`"),
                     _ => format!("type `{}`", object_type.name()),
                 };
@@ -2913,6 +3045,18 @@ impl Analyzer {
                                     .structs
                                     .get(struct_name)
                                     .and_then(|struct_| struct_.static_methods.get(name))
+                                    .or_else(|| {
+                                        self.static_extensions
+                                            .get(&extension_name(&type_.name(), name))
+                                    })
+                                    .or_else(|| {
+                                        self.static_trait_methods
+                                            .get(&static_trait_method_name(&type_.name(), name))
+                                    }),
+                                Type::Enum(enum_name) => self
+                                    .enums
+                                    .get(enum_name)
+                                    .and_then(|enum_| enum_.static_methods.get(name))
                                     .or_else(|| {
                                         self.static_extensions
                                             .get(&extension_name(&type_.name(), name))

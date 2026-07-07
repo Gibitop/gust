@@ -102,6 +102,40 @@ fn directory_entry_uses_main_gust() {
 }
 
 #[test]
+fn enum_methods_survive_project_linking() {
+    let project = TempProject::new();
+    project.write(
+        "main.gust",
+        r#"enum Option<T> {
+    Some(T)
+    None
+
+    fn unwrapOr(fallback: T): T {
+        return match self {
+            Option.Some(value) => value,
+            Option.None => fallback,
+        }
+    }
+}
+
+fn main() {
+    let present = Option.Some(42)
+    io.println(present.unwrapOr(0).toString())
+}
+"#,
+    );
+
+    let result = check_project(&project.path("main.gust")).expect("project should load");
+    assert!(
+        result.diagnostics.is_empty(),
+        "expected enum methods to validate after linking, got {:?}",
+        result.diagnostics
+    );
+
+    lower_program(&result.program).expect("linked enum methods should lower");
+}
+
+#[test]
 fn unimported_names_are_not_visible() {
     let project = TempProject::new();
     project.write(

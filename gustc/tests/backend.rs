@@ -2438,6 +2438,59 @@ fn main() {
 }
 
 #[test]
+fn generic_enum_methods_lower_with_self_receivers() {
+    let result = check_source(
+        r#"enum Option<T> {
+    Some(T)
+    None
+
+    fn unwrapOr(fallback: T): T {
+        return match self {
+            Option.Some(value) => value,
+            Option.None => fallback,
+        }
+    }
+}
+
+fn main() {
+    let present = Option.Some(42)
+    let absent: Option<i32> = Option.None
+    io.println(present.unwrapOr(0).toString())
+    io.println(absent.unwrapOr(7).toString())
+}"#,
+    );
+    assert!(
+        !result.has_errors(),
+        "expected generic enum methods to validate, got {:?}",
+        result.diagnostics
+    );
+
+    let lowered = lower_program(&result.program).expect("generic enum methods should lower");
+    let method = lowered
+        .functions
+        .iter()
+        .find(|function| function.name == "Option<i32>.unwrapOr")
+        .expect("enum method should lower as a function");
+    assert_eq!(
+        method.params,
+        vec![
+            LoweredParam {
+                name: "self".to_string(),
+                type_: LoweredType::Enum("Option<i32>".to_string()),
+            },
+            LoweredParam {
+                name: "fallback".to_string(),
+                type_: basic(BasicType::I32),
+            },
+        ]
+    );
+
+    let c = emit_c(&lowered);
+    assert!(c.contains("// Gust function: Option<i32>.unwrapOr"));
+    assert!(c.contains(".gust_tag =="));
+}
+
+#[test]
 fn trait_impl_methods_lower_to_static_calls() {
     let result = check_source(
         r#"impl Describe for Person {

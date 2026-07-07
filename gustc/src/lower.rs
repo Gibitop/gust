@@ -374,11 +374,14 @@ fn callable_method_name(
     name: &str,
     signatures: &HashMap<String, FunctionSignature>,
 ) -> Option<String> {
-    if let LoweredType::Struct(struct_name) = type_ {
-        let name = method_name(struct_name, source_callable_name(name));
-        if signatures.contains_key(&name) {
-            return Some(name);
+    match type_ {
+        LoweredType::Struct(type_name) | LoweredType::Enum(type_name) => {
+            let name = method_name(type_name, source_callable_name(name));
+            if signatures.contains_key(&name) {
+                return Some(name);
+            }
         }
+        _ => {}
     }
 
     let extension = extension_name(&type_.name(), name);
@@ -514,6 +517,55 @@ fn lower_monomorphized_program(program: &Program) -> Result<LoweredProgram, Vec<
 
     for item in &program.items {
         match item {
+            Item::Enum(enum_) => {
+                for member in &enum_.members {
+                    let (function, lowered_name, has_self) = match member {
+                        StructMember::Method(function) => (
+                            function,
+                            method_name(
+                                &enum_.name,
+                                function.name.as_deref().unwrap_or("<missing>"),
+                            ),
+                            true,
+                        ),
+                        StructMember::StaticMethod(function) => (
+                            function,
+                            static_method_name(
+                                &enum_.name,
+                                function.name.as_deref().unwrap_or("<missing>"),
+                            ),
+                            false,
+                        ),
+                        StructMember::Field(_) => continue,
+                    };
+                    if function.name.is_none() {
+                        continue;
+                    }
+                    let self_type = LoweredType::Enum(enum_.name.clone());
+                    let Some(mut signature) = lower_function_signature(
+                        function,
+                        Some(&self_type),
+                        has_self,
+                        &structs,
+                        &enums,
+                        &traits,
+                        &mut diagnostics,
+                    ) else {
+                        continue;
+                    };
+                    if has_self {
+                        signature.params.insert(
+                            0,
+                            LoweredParamSignature {
+                                type_: self_type.clone(),
+                                mutable: false,
+                            },
+                        );
+                    }
+                    signatures.insert(lowered_name.clone(), signature);
+                    functions_to_lower.push((lowered_name, function, Some(self_type), has_self));
+                }
+            }
             Item::Struct(struct_) => {
                 for member in &struct_.members {
                     let (function, lowered_name, has_self) = match member {
@@ -700,7 +752,7 @@ fn lower_monomorphized_program(program: &Program) -> Result<LoweredProgram, Vec<
                     functions_to_lower.push((name.clone(), function, None, false));
                 }
             }
-            Item::Import(_) | Item::Enum(_) | Item::Trait(_) => {}
+            Item::Import(_) | Item::Trait(_) => {}
         }
     }
 
