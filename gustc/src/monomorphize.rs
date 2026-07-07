@@ -1,8 +1,9 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 
 use crate::ast::{
-    Block, ElseBranch, EnumDecl, Expr, ExprKind, FunctionBody, FunctionDecl, Item, MatchBranchBody,
-    Pattern, Program, Stmt, StmtKind, StructDecl, StructMember, TraitDecl, TypeRef,
+    Block, ElseBranch, EnumDecl, Expr, ExprKind, FunctionBody, FunctionDecl, ImplDecl, Item,
+    MatchBranchBody, Pattern, Program, Stmt, StmtKind, StructDecl, StructMember, TraitDecl,
+    TypeParamBound, TypeRef,
 };
 use crate::diagnostic::Diagnostic;
 
@@ -14,6 +15,7 @@ struct Monomorphizer {
     struct_templates: HashMap<String, StructDecl>,
     enum_templates: HashMap<String, EnumDecl>,
     trait_templates: HashMap<String, TraitDecl>,
+    impl_templates: Vec<ImplDecl>,
     function_templates: HashMap<String, FunctionDecl>,
     concrete_structs: HashSet<String>,
     concrete_struct_defs: HashMap<String, StructDecl>,
@@ -32,7 +34,15 @@ struct Monomorphizer {
     generic_function_returns: HashMap<String, TypeRef>,
     generic_method_returns: HashMap<(String, String, bool), TypeRef>,
     expected_expr_types: HashMap<crate::span::Span, TypeRef>,
+    bound_checks: Vec<BoundCheck>,
     diagnostics: Vec<Diagnostic>,
+}
+
+struct BoundCheck {
+    owner: String,
+    type_ref: TypeRef,
+    trait_ref: TypeRef,
+    span: crate::span::Span,
 }
 
 enum PendingSpecialization {
@@ -90,6 +100,16 @@ impl Monomorphizer {
                     return None;
                 };
                 (!item.type_params.is_empty()).then(|| (item.name.clone(), item.clone()))
+            })
+            .collect();
+        let impl_templates = program
+            .items
+            .iter()
+            .filter_map(|item| {
+                let Item::Impl(item) = item else {
+                    return None;
+                };
+                (!item.type_params.is_empty()).then(|| item.clone())
             })
             .collect();
         let concrete_structs = program
@@ -186,6 +206,7 @@ impl Monomorphizer {
             struct_templates,
             enum_templates,
             trait_templates,
+            impl_templates,
             function_templates,
             concrete_structs,
             concrete_struct_defs,
@@ -204,6 +225,7 @@ impl Monomorphizer {
             generic_function_returns,
             generic_method_returns: HashMap::new(),
             expected_expr_types: HashMap::new(),
+            bound_checks: Vec::new(),
             diagnostics: Vec::new(),
         }
     }
@@ -219,6 +241,7 @@ impl Monomorphizer {
                 || matches!(item, Item::Enum(item) if !item.type_params.is_empty())
                 || matches!(item, Item::Trait(item) if !item.type_params.is_empty())
                 || matches!(item, Item::Function(item) if !item.type_params.is_empty())
+                || matches!(item, Item::Impl(item) if !item.type_params.is_empty())
             {
                 continue;
             }
@@ -228,6 +251,25 @@ impl Monomorphizer {
             items.push(item);
         }
 
+        loop {
+            self.drain_pending(&mut items);
+            if !self.instantiate_generic_impl_templates(&mut items) {
+                break;
+            }
+        }
+        self.validate_bound_checks(&items);
+
+        prune_unused_generic_methods(&mut items, &self.emitted);
+        prune_generic_method_templates(&mut items);
+
+        if self.diagnostics.is_empty() {
+            Ok(Program { items })
+        } else {
+            Err(self.diagnostics)
+        }
+    }
+
+    fn drain_pending(&mut self, items: &mut Vec<Item>) {
         while let Some(pending) = self.pending.pop_front() {
             match pending {
                 PendingSpecialization::Struct(name, args) => {
@@ -247,6 +289,7 @@ impl Monomorphizer {
                     let mut specialized = template;
                     specialized.name = specialized_name;
                     specialized.type_params.clear();
+                    specialized.type_param_bounds.clear();
                     self.self_types.push(TypeRef {
                         name: specialized.name.clone(),
                         args: Vec::new(),
@@ -287,6 +330,7 @@ impl Monomorphizer {
                     let mut specialized = template;
                     specialized.name = specialized_name;
                     specialized.type_params.clear();
+                    specialized.type_param_bounds.clear();
                     for variant in &mut specialized.variants {
                         if let Some(payload) = &mut variant.payload {
                             self.rewrite_type(payload, &substitutions);
@@ -313,6 +357,7 @@ impl Monomorphizer {
                     let mut specialized = template;
                     specialized.name = specialized_name;
                     specialized.type_params.clear();
+                    specialized.type_param_bounds.clear();
                     for method in &mut specialized.methods {
                         for param in &mut method.params {
                             if let Some(type_ref) = &mut param.type_ref {
@@ -342,6 +387,7 @@ impl Monomorphizer {
                     let mut specialized = template;
                     specialized.name = Some(specialized_name.clone());
                     specialized.type_params.clear();
+                    specialized.type_param_bounds.clear();
                     for param in &mut specialized.params {
                         if let Some(type_ref) = &mut param.type_ref {
                             *type_ref = substitute_type(type_ref, &substitutions);
@@ -379,18 +425,163 @@ impl Monomorphizer {
                     if !self.emitted.insert(emitted_name) {
                         continue;
                     }
-                    self.emit_method_specialization(&mut items, &receiver, &name, static_, &args);
+                    self.emit_method_specialization(items, &receiver, &name, static_, &args);
+                }
+            }
+        }
+    }
+
+    fn instantiate_generic_impl_templates(&mut self, items: &mut Vec<Item>) -> bool {
+        let concrete_types = concrete_type_refs(items);
+        let concrete_traits = concrete_trait_refs(items);
+        let mut changed = false;
+
+        for template in self.impl_templates.clone() {
+            for concrete_type in &concrete_types {
+                let mut type_args = Vec::new();
+                if let Ok(args) = self.solve_type_arguments(
+                    "impl",
+                    &template.type_params,
+                    vec![(template.type_ref.clone(), concrete_type.clone())],
+                ) {
+                    type_args.push(args);
+                }
+
+                for concrete_trait in &concrete_traits {
+                    if let Ok(args) = self.solve_type_arguments(
+                        "impl",
+                        &template.type_params,
+                        vec![
+                            (template.type_ref.clone(), concrete_type.clone()),
+                            (template.trait_ref.clone(), concrete_trait.clone()),
+                        ],
+                    ) {
+                        type_args.push(args);
+                    }
+                }
+
+                for args in type_args {
+                    let substitutions = template
+                        .type_params
+                        .iter()
+                        .cloned()
+                        .zip(args)
+                        .collect::<HashMap<_, _>>();
+                    if !self.type_param_bounds_satisfied(
+                        &template.type_param_bounds,
+                        &substitutions,
+                        items,
+                    ) {
+                        continue;
+                    }
+
+                    let mut specialized = template.clone();
+                    specialized.type_params.clear();
+                    specialized.type_param_bounds.clear();
+                    specialized.trait_ref = substitute_type(&template.trait_ref, &substitutions);
+                    specialized.type_ref = substitute_type(&template.type_ref, &substitutions);
+                    self.rewrite_type(&mut specialized.trait_ref, &HashMap::new());
+                    self.rewrite_type(&mut specialized.type_ref, &HashMap::new());
+
+                    let key = format!(
+                        "impl {} for {}",
+                        type_name(&specialized.trait_ref),
+                        type_name(&specialized.type_ref)
+                    );
+                    if !self.emitted.insert(key) {
+                        continue;
+                    }
+                    if concrete_impl_exists(items, &specialized.trait_ref, &specialized.type_ref) {
+                        continue;
+                    }
+
+                    self.self_types.push(specialized.type_ref.clone());
+                    for member in &mut specialized.methods {
+                        self.rewrite_function(&mut member.function, &substitutions);
+                    }
+                    self.self_types.pop();
+
+                    items.push(Item::Impl(specialized));
+                    changed = true;
                 }
             }
         }
 
-        prune_unused_generic_methods(&mut items, &self.emitted);
-        prune_generic_method_templates(&mut items);
+        changed
+    }
 
-        if self.diagnostics.is_empty() {
-            Ok(Program { items })
-        } else {
-            Err(self.diagnostics)
+    fn type_param_bounds_satisfied(
+        &mut self,
+        bounds: &[TypeParamBound],
+        substitutions: &HashMap<String, TypeRef>,
+        items: &[Item],
+    ) -> bool {
+        bounds.iter().all(|bound| {
+            let Some(type_ref) = substitutions.get(&bound.param) else {
+                return true;
+            };
+            let mut trait_ref = substitute_type(&bound.trait_ref, substitutions);
+            self.rewrite_type(&mut trait_ref, &HashMap::new());
+            concrete_impl_exists(items, &trait_ref, type_ref)
+        })
+    }
+
+    fn record_type_param_bound_checks(
+        &mut self,
+        owner: String,
+        params: &[String],
+        bounds: &[TypeParamBound],
+        args: &[TypeRef],
+        span: crate::span::Span,
+    ) {
+        if bounds.is_empty() {
+            return;
+        }
+        let substitutions = params
+            .iter()
+            .cloned()
+            .zip(args.iter().cloned())
+            .collect::<HashMap<_, _>>();
+        for bound in bounds {
+            let Some(type_ref) = substitutions.get(&bound.param).cloned() else {
+                continue;
+            };
+            let mut trait_ref = substitute_type(&bound.trait_ref, &substitutions);
+            self.rewrite_type(&mut trait_ref, &HashMap::new());
+            self.bound_checks.push(BoundCheck {
+                owner: owner.clone(),
+                type_ref,
+                trait_ref,
+                span,
+            });
+        }
+    }
+
+    fn validate_bound_checks(&mut self, items: &[Item]) {
+        let mut reported = HashSet::new();
+        for check in &self.bound_checks {
+            if concrete_impl_exists(items, &check.trait_ref, &check.type_ref) {
+                continue;
+            }
+            let key = (
+                check.owner.clone(),
+                type_name(&check.type_ref),
+                type_name(&check.trait_ref),
+                check.span,
+            );
+            if !reported.insert(key) {
+                continue;
+            }
+            self.diagnostics.push(Diagnostic::error(
+                check.span,
+                format!(
+                    "type `{}` does not satisfy bound `{}: {}` required by {}",
+                    type_name(&check.type_ref),
+                    type_name(&check.type_ref),
+                    type_name(&check.trait_ref),
+                    check.owner
+                ),
+            ));
         }
     }
 
@@ -492,6 +683,34 @@ impl Monomorphizer {
                     self.diagnostics.push(Diagnostic::error(
                         template.span,
                         format!("unused type parameter `{name}` in function `{function_name}`"),
+                    ));
+                }
+            }
+        }
+        for template in &self.impl_templates {
+            let impl_name = format!(
+                "{} for {}",
+                type_name(&template.trait_ref),
+                type_name(&template.type_ref)
+            );
+            let mut names = HashSet::new();
+            for name in &template.type_params {
+                if !names.insert(name) {
+                    self.diagnostics.push(Diagnostic::error(
+                        template.span,
+                        format!("duplicate type parameter `{name}` in impl `{impl_name}`"),
+                    ));
+                }
+            }
+            let used = type_names(&template.trait_ref)
+                .into_iter()
+                .chain(type_names(&template.type_ref))
+                .collect::<HashSet<_>>();
+            for name in &template.type_params {
+                if !used.contains(name.as_str()) {
+                    self.diagnostics.push(Diagnostic::error(
+                        template.span,
+                        format!("unused type parameter `{name}` in impl `{impl_name}`"),
                     ));
                 }
             }
@@ -645,6 +864,9 @@ impl Monomorphizer {
         match item {
             Item::Import(_) => {}
             Item::Enum(item) => {
+                for bound in &mut item.type_param_bounds {
+                    self.rewrite_type(&mut bound.trait_ref, substitutions);
+                }
                 for variant in &mut item.variants {
                     if let Some(payload) = &mut variant.payload {
                         self.rewrite_type(payload, substitutions);
@@ -652,6 +874,9 @@ impl Monomorphizer {
                 }
             }
             Item::Struct(item) => {
+                for bound in &mut item.type_param_bounds {
+                    self.rewrite_type(&mut bound.trait_ref, substitutions);
+                }
                 self.self_types.push(TypeRef {
                     name: item.name.clone(),
                     args: Vec::new(),
@@ -673,6 +898,9 @@ impl Monomorphizer {
                 self.self_types.pop();
             }
             Item::Trait(item) => {
+                for bound in &mut item.type_param_bounds {
+                    self.rewrite_type(&mut bound.trait_ref, substitutions);
+                }
                 for method in &mut item.methods {
                     for param in &mut method.params {
                         if let Some(type_ref) = &mut param.type_ref {
@@ -685,6 +913,9 @@ impl Monomorphizer {
                 }
             }
             Item::Impl(item) => {
+                for bound in &mut item.type_param_bounds {
+                    self.rewrite_type(&mut bound.trait_ref, substitutions);
+                }
                 self.rewrite_type(&mut item.trait_ref, substitutions);
                 self.rewrite_type(&mut item.type_ref, substitutions);
                 self.self_types.push(item.type_ref.clone());
@@ -722,6 +953,9 @@ impl Monomorphizer {
         function: &mut FunctionDecl,
         substitutions: &HashMap<String, TypeRef>,
     ) {
+        for bound in &mut function.type_param_bounds {
+            self.rewrite_type(&mut bound.trait_ref, substitutions);
+        }
         for param in &mut function.params {
             if let Some(type_ref) = &mut param.type_ref {
                 self.rewrite_type(type_ref, substitutions);
@@ -2014,15 +2248,24 @@ impl Monomorphizer {
     ) {
         let specialized_method = specialized_name(method_name, args);
         let key = (receiver.to_string(), specialized_method.clone(), static_);
+        let receiver_type = TypeRef {
+            name: receiver.to_string(),
+            args: Vec::new(),
+            function: None,
+            span: args
+                .first()
+                .map_or_else(|| crate::span::Span::new(0, 0), |arg| arg.span),
+        };
+        if let Some((_, _, function)) = self.method_template(&receiver_type, method_name, static_) {
+            self.record_type_param_bound_checks(
+                format!("generic method `{receiver}.{method_name}`"),
+                &function.type_params,
+                &function.type_param_bounds,
+                args,
+                receiver_type.span,
+            );
+        }
         if !self.member_returns.contains_key(&key) {
-            let receiver_type = TypeRef {
-                name: receiver.to_string(),
-                args: Vec::new(),
-                function: None,
-                span: args
-                    .first()
-                    .map_or_else(|| crate::span::Span::new(0, 0), |arg| arg.span),
-            };
             if let Some((_, mut substitutions, function)) =
                 self.method_template(&receiver_type, method_name, static_)
             {
@@ -2079,6 +2322,7 @@ impl Monomorphizer {
         );
         function.name = Some(specialized_name(method_name, args));
         function.type_params.clear();
+        function.type_param_bounds.clear();
         self.self_types.push(receiver_type.clone());
         self.rewrite_function(&mut function, &substitutions);
         self.self_types.pop();
@@ -2560,6 +2804,15 @@ impl Monomorphizer {
             return;
         }
 
+        let template = self.struct_templates[name].clone();
+        self.record_type_param_bound_checks(
+            format!("generic struct `{name}`"),
+            &template.type_params,
+            &template.type_param_bounds,
+            args,
+            span,
+        );
+
         self.pending.push_back(PendingSpecialization::Struct(
             name.to_string(),
             args.to_vec(),
@@ -2583,6 +2836,15 @@ impl Monomorphizer {
             return;
         }
 
+        let template = self.enum_templates[name].clone();
+        self.record_type_param_bound_checks(
+            format!("generic enum `{name}`"),
+            &template.type_params,
+            &template.type_param_bounds,
+            args,
+            span,
+        );
+
         self.pending
             .push_back(PendingSpecialization::Enum(name.to_string(), args.to_vec()));
         self.specializations.insert(
@@ -2604,6 +2866,15 @@ impl Monomorphizer {
             return;
         }
 
+        let template = self.trait_templates[name].clone();
+        self.record_type_param_bound_checks(
+            format!("generic trait `{name}`"),
+            &template.type_params,
+            &template.type_param_bounds,
+            args,
+            span,
+        );
+
         self.pending.push_back(PendingSpecialization::Trait(
             name.to_string(),
             args.to_vec(),
@@ -2616,8 +2887,16 @@ impl Monomorphizer {
 
     fn specialize_function(&mut self, name: &str, args: &[TypeRef]) {
         let specialized_name = specialized_name(name, args);
+        let template = self.function_templates[name].clone();
+        self.record_type_param_bound_checks(
+            format!("generic function `{name}`"),
+            &template.type_params,
+            &template.type_param_bounds,
+            args,
+            args.first()
+                .map_or_else(|| crate::span::Span::new(0, 0), |arg| arg.span),
+        );
         if !self.function_params.contains_key(&specialized_name) {
-            let template = self.function_templates[name].clone();
             let substitutions = template
                 .type_params
                 .iter()
@@ -3105,6 +3384,54 @@ fn prune_generic_method_templates(items: &mut [Item]) {
 
 fn concrete_type_name(type_ref: &TypeRef) -> Option<String> {
     type_ref.args.is_empty().then(|| type_ref.name.clone())
+}
+
+fn concrete_type_refs(items: &[Item]) -> Vec<TypeRef> {
+    items
+        .iter()
+        .filter_map(|item| {
+            let (name, span) = match item {
+                Item::Struct(item) => (&item.name, item.span),
+                Item::Enum(item) => (&item.name, item.span),
+                _ => return None,
+            };
+            Some(TypeRef {
+                name: name.clone(),
+                args: Vec::new(),
+                function: None,
+                span,
+            })
+        })
+        .collect()
+}
+
+fn concrete_trait_refs(items: &[Item]) -> Vec<TypeRef> {
+    items
+        .iter()
+        .filter_map(|item| {
+            let Item::Trait(item) = item else {
+                return None;
+            };
+            Some(TypeRef {
+                name: item.name.clone(),
+                args: Vec::new(),
+                function: None,
+                span: item.span,
+            })
+        })
+        .collect()
+}
+
+fn concrete_impl_exists(items: &[Item], trait_ref: &TypeRef, type_ref: &TypeRef) -> bool {
+    let trait_name = type_name(trait_ref);
+    let self_type_name = type_name(type_ref);
+    items.iter().any(|item| {
+        matches!(
+            item,
+            Item::Impl(item)
+                if type_name(&item.trait_ref) == trait_name && type_name(&item.type_ref) == self_type_name
+        )
+    })
 }
 
 fn type_names(type_ref: &TypeRef) -> Vec<&str> {

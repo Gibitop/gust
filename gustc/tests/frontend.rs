@@ -3561,6 +3561,117 @@ fn main() {
 }
 
 #[test]
+fn generic_trait_impl_templates_validate_concrete_specializations() {
+    let result = check_source(
+        r#"struct Box<T> {
+    value: T
+}
+
+trait Named<T> {
+    fn name(): T
+}
+
+impl<T> Named<T> for Box<T> {
+    fn name() => self.value
+}
+
+fn printName(value: Named<String>) {
+    io.println(value.name())
+}
+
+fn main() {
+    let value = Box<String> { value: "Gust" }
+    let named: Named<String> = value
+    printName(value)
+    io.println(named.name())
+}"#,
+    );
+
+    assert!(
+        !result.has_errors(),
+        "expected generic trait impl template to validate, got {:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
+fn generic_bounds_are_checked_at_concrete_use_sites() {
+    let result = check_source(
+        r#"struct Person {
+    name: String
+}
+
+struct Number {
+    value: i32
+}
+
+trait Named {
+    fn name(): String
+}
+
+trait Labeled {
+    fn label(): String
+}
+
+impl Named for Person {
+    fn name() => self.name
+}
+
+impl Labeled for Person {
+    fn label() => "person"
+}
+
+fn getName<T: Named + Labeled>(value: T): String {
+    value.label()
+    return value.name()
+}
+
+fn main() {
+    let number = Number { value: 1 }
+    io.println(getName(number))
+}"#,
+    );
+
+    assert!(result.diagnostics.iter().any(|diagnostic| {
+        diagnostic
+            .message
+            .contains("type `Number` does not satisfy bound `Number: Named`")
+    }));
+}
+
+#[test]
+fn generic_bounds_allow_member_resolution_after_specialization() {
+    let result = check_source(
+        r#"struct Person {
+    name: String
+}
+
+trait Named {
+    fn name(): String
+}
+
+impl Named for Person {
+    fn name() => self.name
+}
+
+fn getName<T: Named>(value: T): String {
+    return value.name()
+}
+
+fn main() {
+    let person = Person { name: "Gust" }
+    io.println(getName(person))
+}"#,
+    );
+
+    assert!(
+        !result.has_errors(),
+        "expected bounded generic function to validate, got {:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
 fn generic_traits_report_invalid_declarations_and_arguments() {
     let invalid = check_source(
         r#"trait Named<T, T, U> {
@@ -3599,6 +3710,32 @@ fn main() {}"#,
         diagnostic
             .message
             .contains("generic trait `Named` expects 1 type arguments, got 2")
+    }));
+
+    let invalid_impl = check_source(
+        r#"trait Named<T> {
+    fn name(): T
+}
+
+struct Person {
+    name: String
+}
+
+impl<T, T, U> Named<T> for Person {
+    fn name() => self.name
+}
+
+fn main() {}"#,
+    );
+    assert!(invalid_impl.diagnostics.iter().any(|diagnostic| {
+        diagnostic
+            .message
+            .contains("duplicate type parameter `T` in impl `Named<T> for Person`")
+    }));
+    assert!(invalid_impl.diagnostics.iter().any(|diagnostic| {
+        diagnostic
+            .message
+            .contains("unused type parameter `U` in impl `Named<T> for Person`")
     }));
 }
 
