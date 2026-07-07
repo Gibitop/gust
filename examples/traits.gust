@@ -22,8 +22,20 @@ struct Person {
     name: String
 }
 
+fn printDescription(value: Describe) {
+    io.println(value.describe())
+}
+
 fn main() {
     let mut person = Person.new("Gust")
     person.update("John")
     io.println(person.describe())
+
+    let described: Describe = person
+    printDescription(person)
+    io.println(described.describe())
+
+    let mut updatable: Update = person
+    updatable.update("Jane")
+    io.println(described.describe())
 }

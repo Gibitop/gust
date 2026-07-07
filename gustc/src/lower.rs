@@ -4,7 +4,7 @@ use std::collections::{HashMap, HashSet};
 use crate::ast::{
     BasicType, BinaryOp, Block, ElseBranch, Expr, ExprKind, FunctionBody, FunctionDecl, Item,
     MatchBranchBody, Pattern, Program, Stmt, StmtKind, StructDecl, StructInitField, StructMember,
-    TypeRef, UnaryOp, number_literal_is_float,
+    TraitDecl, TraitMethodDecl, TypeRef, UnaryOp, number_literal_is_float,
 };
 use crate::diagnostic::Diagnostic;
 use crate::span::Span;
@@ -13,6 +13,7 @@ use crate::span::Span;
 pub struct LoweredProgram {
     pub structs: Vec<LoweredStruct>,
     pub enums: Vec<LoweredEnum>,
+    pub traits: Vec<LoweredTrait>,
     pub functions: Vec<LoweredFunction>,
     pub closure_functions: Vec<LoweredClosureFunction>,
     pub statements: Vec<LoweredStatement>,
@@ -40,6 +41,33 @@ pub struct LoweredEnum {
 pub struct LoweredVariant {
     pub name: String,
     pub payload: Option<LoweredType>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LoweredTrait {
+    pub name: String,
+    pub methods: Vec<LoweredTraitMethod>,
+    pub impls: Vec<LoweredTraitImpl>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LoweredTraitMethod {
+    pub name: String,
+    pub params: Vec<LoweredParamSignature>,
+    pub return_type: LoweredType,
+    pub mutable_self: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LoweredTraitImpl {
+    pub self_type: LoweredType,
+    pub methods: Vec<LoweredTraitImplMethod>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LoweredTraitImplMethod {
+    pub name: String,
+    pub function_name: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -119,6 +147,7 @@ pub enum LoweredType {
     Basic(BasicType),
     Struct(String),
     Enum(String),
+    Trait(String),
     Function {
         params: Vec<LoweredFunctionTypeParam>,
         return_type: Box<LoweredType>,
@@ -133,11 +162,12 @@ pub struct LoweredFunctionTypeParam {
 }
 
 impl LoweredType {
-    fn name(&self) -> String {
+    pub fn name(&self) -> String {
         match self {
             LoweredType::Basic(type_) => type_.name().to_string(),
             LoweredType::Struct(name) => name.clone(),
             LoweredType::Enum(name) => name.clone(),
+            LoweredType::Trait(name) => name.clone(),
             LoweredType::Function {
                 params,
                 return_type,
@@ -220,6 +250,16 @@ pub enum LoweredExprKind {
         name: String,
         args: Vec<LoweredExpr>,
     },
+    TraitObject {
+        trait_name: String,
+        self_type: LoweredType,
+        value: Box<LoweredExpr>,
+    },
+    DynamicCall {
+        object: Box<LoweredExpr>,
+        method: String,
+        args: Vec<LoweredExpr>,
+    },
     Closure {
         name: String,
         captures: Vec<LoweredClosureCapture>,
@@ -265,9 +305,9 @@ struct FunctionSignature {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct LoweredParamSignature {
-    type_: LoweredType,
-    mutable: bool,
+pub struct LoweredParamSignature {
+    pub type_: LoweredType,
+    pub mutable: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -381,6 +421,7 @@ fn lower_monomorphized_program(program: &Program) -> Result<LoweredProgram, Vec<
     let mut main = None;
     let mut structs = HashMap::new();
     let mut enums = HashMap::new();
+    let mut traits = HashMap::new();
     let mut signatures = HashMap::new();
 
     let mut has_return_type_conflict = false;
@@ -406,11 +447,17 @@ fn lower_monomorphized_program(program: &Program) -> Result<LoweredProgram, Vec<
                     },
                 );
             }
-            Item::Import(_)
-            | Item::Trait(_)
-            | Item::Impl(_)
-            | Item::Extension(_)
-            | Item::Function(_) => {}
+            Item::Trait(item) => {
+                traits.insert(
+                    item.name.clone(),
+                    LoweredTrait {
+                        name: item.name.clone(),
+                        methods: Vec::new(),
+                        impls: Vec::new(),
+                    },
+                );
+            }
+            Item::Import(_) | Item::Impl(_) | Item::Extension(_) | Item::Function(_) => {}
         }
     }
 
@@ -418,7 +465,7 @@ fn lower_monomorphized_program(program: &Program) -> Result<LoweredProgram, Vec<
         match item {
             Item::Struct(item) => {
                 if let Some(struct_) =
-                    lower_struct_definition(item, &structs, &enums, &mut diagnostics)
+                    lower_struct_definition(item, &structs, &enums, &traits, &mut diagnostics)
                 {
                     structs.insert(item.name.clone(), struct_);
                 }
@@ -447,9 +494,19 @@ fn lower_monomorphized_program(program: &Program) -> Result<LoweredProgram, Vec<
 
     for item in &program.items {
         if let Item::Enum(item) = item
-            && let Some(enum_) = lower_enum_definition(item, &structs, &enums, &mut diagnostics)
+            && let Some(enum_) =
+                lower_enum_definition(item, &structs, &enums, &traits, &mut diagnostics)
         {
             enums.insert(item.name.clone(), enum_);
+        }
+    }
+
+    for item in &program.items {
+        if let Item::Trait(item) = item
+            && let Some(trait_) =
+                lower_trait_definition(item, &structs, &enums, &traits, &mut diagnostics)
+        {
+            traits.insert(item.name.clone(), trait_);
         }
     }
 
@@ -488,6 +545,7 @@ fn lower_monomorphized_program(program: &Program) -> Result<LoweredProgram, Vec<
                         has_self,
                         &structs,
                         &enums,
+                        &traits,
                         &mut diagnostics,
                     ) else {
                         continue;
@@ -513,6 +571,7 @@ fn lower_monomorphized_program(program: &Program) -> Result<LoweredProgram, Vec<
                     &extension.type_ref,
                     &structs,
                     &enums,
+                    &traits,
                     &mut diagnostics,
                     "extension functions require a supported receiver type in executable builds",
                 ) else {
@@ -529,6 +588,7 @@ fn lower_monomorphized_program(program: &Program) -> Result<LoweredProgram, Vec<
                     !extension.static_,
                     &structs,
                     &enums,
+                    &traits,
                     &mut diagnostics,
                 ) else {
                     continue;
@@ -555,11 +615,14 @@ fn lower_monomorphized_program(program: &Program) -> Result<LoweredProgram, Vec<
                     &item.type_ref,
                     &structs,
                     &enums,
+                    &traits,
                     &mut diagnostics,
                     "trait impls require a supported receiver type in executable builds",
                 ) else {
                     continue;
                 };
+                let mut trait_impl_methods = Vec::new();
+
                 for member in &item.methods {
                     let function = &member.function;
                     let Some(name) = &function.name else {
@@ -576,6 +639,7 @@ fn lower_monomorphized_program(program: &Program) -> Result<LoweredProgram, Vec<
                         !member.static_,
                         &structs,
                         &enums,
+                        &traits,
                         &mut diagnostics,
                     ) else {
                         continue;
@@ -596,6 +660,22 @@ fn lower_monomorphized_program(program: &Program) -> Result<LoweredProgram, Vec<
                         Some(self_type.clone()),
                         !member.static_,
                     ));
+
+                    if !member.static_ {
+                        trait_impl_methods.push(LoweredTraitImplMethod {
+                            name: name.clone(),
+                            function_name: trait_method_name(&self_type.name(), name),
+                        });
+                    }
+                }
+
+                if let LoweredType::Struct(_) = &self_type
+                    && let Some(trait_) = traits.get_mut(&item.trait_ref.name)
+                {
+                    trait_.impls.push(LoweredTraitImpl {
+                        self_type,
+                        methods: trait_impl_methods,
+                    });
                 }
             }
             Item::Function(function) => {
@@ -613,6 +693,7 @@ fn lower_monomorphized_program(program: &Program) -> Result<LoweredProgram, Vec<
                     false,
                     &structs,
                     &enums,
+                    &traits,
                     &mut diagnostics,
                 ) {
                     signatures.insert(name.clone(), signature);
@@ -638,6 +719,7 @@ fn lower_monomorphized_program(program: &Program) -> Result<LoweredProgram, Vec<
                 &signatures,
                 &structs,
                 &enums,
+                &traits,
             ) else {
                 continue;
             };
@@ -678,6 +760,7 @@ fn lower_monomorphized_program(program: &Program) -> Result<LoweredProgram, Vec<
             &signatures,
             &structs,
             &enums,
+            &traits,
         ) {
             has_return_type_conflict = true;
             diagnostics.push(Diagnostic::error(
@@ -729,13 +812,21 @@ fn lower_monomorphized_program(program: &Program) -> Result<LoweredProgram, Vec<
             &signatures,
             &structs,
             &enums,
+            &traits,
             &mut diagnostics,
         ) {
             functions.push(function);
         }
     }
 
-    let statements = lower_main(main, &signatures, &structs, &enums, &mut diagnostics);
+    let statements = lower_main(
+        main,
+        &signatures,
+        &structs,
+        &enums,
+        &traits,
+        &mut diagnostics,
+    );
     let (closure_functions, closure_diagnostics) = CLOSURE_LOWERING.with(|state| {
         let mut state = state.borrow_mut();
         (
@@ -751,9 +842,13 @@ fn lower_monomorphized_program(program: &Program) -> Result<LoweredProgram, Vec<
         let mut enums = enums.into_values().collect::<Vec<_>>();
         enums.sort_by(|left, right| left.name.cmp(&right.name));
 
+        let mut traits = traits.into_values().collect::<Vec<_>>();
+        traits.sort_by(|left, right| left.name.cmp(&right.name));
+
         Ok(LoweredProgram {
             structs,
             enums,
+            traits,
             functions,
             closure_functions,
             statements,
@@ -763,10 +858,127 @@ fn lower_monomorphized_program(program: &Program) -> Result<LoweredProgram, Vec<
     }
 }
 
+fn lower_trait_definition(
+    item: &TraitDecl,
+    structs: &HashMap<String, LoweredStruct>,
+    enums: &HashMap<String, LoweredEnum>,
+    traits: &HashMap<String, LoweredTrait>,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> Option<LoweredTrait> {
+    let mut methods = Vec::new();
+    let mut can_lower = true;
+
+    for method in &item.methods {
+        if method.static_ {
+            continue;
+        }
+
+        let Some(method) =
+            lower_trait_method_definition(method, structs, enums, traits, diagnostics)
+        else {
+            can_lower = false;
+            continue;
+        };
+        methods.push(method);
+    }
+
+    can_lower.then(|| LoweredTrait {
+        name: item.name.clone(),
+        methods,
+        impls: Vec::new(),
+    })
+}
+
+fn lower_trait_method_definition(
+    method: &TraitMethodDecl,
+    structs: &HashMap<String, LoweredStruct>,
+    enums: &HashMap<String, LoweredEnum>,
+    traits: &HashMap<String, LoweredTrait>,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> Option<LoweredTraitMethod> {
+    let mut params = Vec::new();
+    let mut can_lower = true;
+
+    for param in method.params.iter().filter(|param| !is_self_param(param)) {
+        let Some(type_ref) = &param.type_ref else {
+            diagnostics.push(Diagnostic::error(
+                param.span,
+                "trait method parameters must include type annotations in executable builds",
+            ));
+            can_lower = false;
+            continue;
+        };
+
+        let Some(type_) = lower_trait_object_type_ref(
+            type_ref,
+            structs,
+            enums,
+            traits,
+            diagnostics,
+            "trait object methods only support basic, known struct, enum, trait, and function parameter types in executable builds",
+        ) else {
+            can_lower = false;
+            continue;
+        };
+
+        params.push(LoweredParamSignature {
+            type_,
+            mutable: param.mutable,
+        });
+    }
+
+    let Some(return_type) = method.return_type.as_ref().and_then(|return_type| {
+        lower_trait_object_type_ref(
+            return_type,
+            structs,
+            enums,
+            traits,
+            diagnostics,
+            "trait object methods only support basic, known struct, enum, trait, and function return types in executable builds",
+        )
+    }) else {
+        return None;
+    };
+
+    can_lower.then(|| LoweredTraitMethod {
+        name: method.name.clone(),
+        params,
+        return_type,
+        mutable_self: has_trait_mutable_receiver(method),
+    })
+}
+
+fn lower_trait_object_type_ref(
+    type_ref: &TypeRef,
+    structs: &HashMap<String, LoweredStruct>,
+    enums: &HashMap<String, LoweredEnum>,
+    traits: &HashMap<String, LoweredTrait>,
+    diagnostics: &mut Vec<Diagnostic>,
+    message: &str,
+) -> Option<LoweredType> {
+    if type_ref.name == "Self" && type_ref.args.is_empty() {
+        diagnostics.push(Diagnostic::error(
+            type_ref.span,
+            "`Self` is not supported in dynamically dispatched trait method signatures yet",
+        ));
+        return None;
+    }
+
+    lower_value_type_ref(type_ref, structs, enums, traits, diagnostics, message)
+}
+
+fn has_trait_mutable_receiver(method: &TraitMethodDecl) -> bool {
+    method
+        .params
+        .iter()
+        .any(|param| is_self_param(param) && param.mutable && param.type_ref.is_none())
+}
+
 fn lower_enum_definition(
     item: &crate::ast::EnumDecl,
     structs: &HashMap<String, LoweredStruct>,
     enums: &HashMap<String, LoweredEnum>,
+    traits: &HashMap<String, LoweredTrait>,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> Option<LoweredEnum> {
     let mut variants = Vec::new();
@@ -801,6 +1013,7 @@ fn lower_enum_definition(
                 type_ref,
                 structs,
                 enums,
+                traits,
                 diagnostics,
                 "enum payloads only support basic and known struct or enum types in executable builds",
             )
@@ -826,6 +1039,7 @@ fn lower_struct_definition(
     item: &StructDecl,
     structs: &HashMap<String, LoweredStruct>,
     enums: &HashMap<String, LoweredEnum>,
+    traits: &HashMap<String, LoweredTrait>,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> Option<LoweredStruct> {
     let mut fields = Vec::new();
@@ -847,8 +1061,9 @@ fn lower_struct_definition(
                     &field.type_ref,
                     structs,
                     enums,
+                    traits,
                     diagnostics,
-                    "struct fields only support basic and known struct or enum types in executable builds",
+                    "struct fields only support basic, known struct, enum, trait, and function types in executable builds",
                 ) else {
                     can_lower = false;
                     continue;
@@ -879,6 +1094,7 @@ fn lower_function_signature(
     has_self: bool,
     structs: &HashMap<String, LoweredStruct>,
     enums: &HashMap<String, LoweredEnum>,
+    traits: &HashMap<String, LoweredTrait>,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> Option<FunctionSignature> {
     let mut params = Vec::new();
@@ -903,8 +1119,9 @@ fn lower_function_signature(
             self_type,
             structs,
             enums,
+            traits,
             diagnostics,
-            "only basic, known struct, and known enum parameter types are supported in executable builds",
+            "only basic, known struct, enum, trait, and function parameter types are supported in executable builds",
         ) else {
             can_lower = false;
             continue;
@@ -922,8 +1139,9 @@ fn lower_function_signature(
             self_type,
             structs,
             enums,
+            traits,
             diagnostics,
-            "only basic, known struct, and known enum return types are supported in executable builds",
+            "only basic, known struct, enum, trait, and function return types are supported in executable builds",
         ) else {
             return None;
         };
@@ -949,6 +1167,7 @@ fn lower_value_type_ref_in_context(
     self_type: Option<&LoweredType>,
     structs: &HashMap<String, LoweredStruct>,
     enums: &HashMap<String, LoweredEnum>,
+    traits: &HashMap<String, LoweredTrait>,
     diagnostics: &mut Vec<Diagnostic>,
     message: &str,
 ) -> Option<LoweredType> {
@@ -961,6 +1180,7 @@ fn lower_value_type_ref_in_context(
                 self_type,
                 structs,
                 enums,
+                traits,
                 diagnostics,
                 message,
             ) else {
@@ -977,6 +1197,7 @@ fn lower_value_type_ref_in_context(
             self_type,
             structs,
             enums,
+            traits,
             diagnostics,
             message,
         );
@@ -1000,13 +1221,14 @@ fn lower_value_type_ref_in_context(
         });
     }
 
-    lower_value_type_ref(type_ref, structs, enums, diagnostics, message)
+    lower_value_type_ref(type_ref, structs, enums, traits, diagnostics, message)
 }
 
 fn lower_value_type_ref(
     type_ref: &TypeRef,
     structs: &HashMap<String, LoweredStruct>,
     enums: &HashMap<String, LoweredEnum>,
+    traits: &HashMap<String, LoweredTrait>,
     diagnostics: &mut Vec<Diagnostic>,
     message: &str,
 ) -> Option<LoweredType> {
@@ -1014,9 +1236,14 @@ fn lower_value_type_ref(
         let mut params = Vec::new();
         let mut can_lower = true;
         for param in &function.params {
-            let Some(type_) =
-                lower_value_type_ref(&param.type_ref, structs, enums, diagnostics, message)
-            else {
+            let Some(type_) = lower_value_type_ref(
+                &param.type_ref,
+                structs,
+                enums,
+                traits,
+                diagnostics,
+                message,
+            ) else {
                 can_lower = false;
                 continue;
             };
@@ -1025,8 +1252,14 @@ fn lower_value_type_ref(
                 mutable: param.mutable,
             });
         }
-        let return_type =
-            lower_value_type_ref(&function.return_type, structs, enums, diagnostics, message);
+        let return_type = lower_value_type_ref(
+            &function.return_type,
+            structs,
+            enums,
+            traits,
+            diagnostics,
+            message,
+        );
         return if can_lower {
             return_type.map(|return_type| LoweredType::Function {
                 params,
@@ -1061,6 +1294,10 @@ fn lower_value_type_ref(
         return Some(LoweredType::Enum(type_ref.name.clone()));
     }
 
+    if traits.contains_key(&type_ref.name) {
+        return Some(LoweredType::Trait(type_ref.name.clone()));
+    }
+
     diagnostics.push(Diagnostic::error(type_ref.span, message));
     None
 }
@@ -1072,6 +1309,7 @@ fn infer_function_return_type(
     signatures: &HashMap<String, FunctionSignature>,
     structs: &HashMap<String, LoweredStruct>,
     enums: &HashMap<String, LoweredEnum>,
+    traits: &HashMap<String, LoweredTrait>,
 ) -> Result<Option<LoweredType>, ReturnTypeConflict> {
     let mut locals = HashMap::new();
 
@@ -1090,14 +1328,16 @@ fn infer_function_return_type(
         let Some(type_ref) = param.type_ref.as_ref() else {
             return Ok(None);
         };
-        let Some(type_) = quiet_lower_type_ref(type_ref, &locals, structs, enums) else {
+        let Some(type_) = quiet_lower_type_ref(type_ref, &locals, structs, enums, traits) else {
             return Ok(None);
         };
         locals.insert(param.name.clone(), type_);
     }
 
     match &function.body {
-        FunctionBody::Expr(expr) => Ok(infer_expr_type(expr, &locals, signatures, structs, enums)),
+        FunctionBody::Expr(expr) => Ok(infer_expr_type(
+            expr, &locals, signatures, structs, enums, traits,
+        )),
         FunctionBody::Block(block) => {
             let mut return_type = None;
             let mut has_unresolved_value_return = false;
@@ -1107,6 +1347,7 @@ fn infer_function_return_type(
                 signatures,
                 structs,
                 enums,
+                traits,
                 &mut return_type,
                 &mut has_unresolved_value_return,
             )?;
@@ -1126,6 +1367,7 @@ fn infer_block_return_types(
     signatures: &HashMap<String, FunctionSignature>,
     structs: &HashMap<String, LoweredStruct>,
     enums: &HashMap<String, LoweredEnum>,
+    traits: &HashMap<String, LoweredTrait>,
     return_type: &mut Option<LoweredType>,
     has_unresolved_value_return: &mut bool,
 ) -> Result<(), ReturnTypeConflict> {
@@ -1133,13 +1375,16 @@ fn infer_block_return_types(
         match &statement.kind {
             StmtKind::Let { name, value, .. } => {
                 if let Some(value) = value
-                    && let Some(type_) = infer_expr_type(value, locals, signatures, structs, enums)
+                    && let Some(type_) =
+                        infer_expr_type(value, locals, signatures, structs, enums, traits)
                 {
                     locals.insert(name.clone(), type_);
                 }
             }
             StmtKind::Return { value: Some(value) } => {
-                if let Some(type_) = infer_expr_type(value, locals, signatures, structs, enums) {
+                if let Some(type_) =
+                    infer_expr_type(value, locals, signatures, structs, enums, traits)
+                {
                     merge_inferred_return_type(return_type, type_, value.span)?;
                 } else {
                     *has_unresolved_value_return = true;
@@ -1160,6 +1405,7 @@ fn infer_block_return_types(
                     signatures,
                     structs,
                     enums,
+                    traits,
                     return_type,
                     has_unresolved_value_return,
                 )?;
@@ -1174,6 +1420,7 @@ fn infer_block_return_types(
                             signatures,
                             structs,
                             enums,
+                            traits,
                             return_type,
                             has_unresolved_value_return,
                         )?,
@@ -1188,6 +1435,7 @@ fn infer_block_return_types(
                                 signatures,
                                 structs,
                                 enums,
+                                traits,
                                 return_type,
                                 has_unresolved_value_return,
                             )?;
@@ -1202,6 +1450,7 @@ fn infer_block_return_types(
                     signatures,
                     structs,
                     enums,
+                    traits,
                     return_type,
                     has_unresolved_value_return,
                 )?;
@@ -1250,6 +1499,7 @@ fn infer_expr_type(
     signatures: &HashMap<String, FunctionSignature>,
     structs: &HashMap<String, LoweredStruct>,
     enums: &HashMap<String, LoweredEnum>,
+    traits: &HashMap<String, LoweredTrait>,
 ) -> Option<LoweredType> {
     match &expr.kind {
         ExprKind::String(_) => Some(LoweredType::Basic(BasicType::String)),
@@ -1272,7 +1522,7 @@ fn infer_expr_type(
         ExprKind::Unary {
             op: UnaryOp::Negate,
             operand,
-        } => infer_expr_type(operand, locals, signatures, structs, enums),
+        } => infer_expr_type(operand, locals, signatures, structs, enums, traits),
         ExprKind::Binary {
             left,
             op:
@@ -1293,9 +1543,9 @@ fn infer_expr_type(
             } else if matches!(left.kind, ExprKind::Number(_))
                 && !matches!(right.kind, ExprKind::Number(_))
             {
-                infer_expr_type(right, locals, signatures, structs, enums)
+                infer_expr_type(right, locals, signatures, structs, enums, traits)
             } else {
-                infer_expr_type(left, locals, signatures, structs, enums)
+                infer_expr_type(left, locals, signatures, structs, enums, traits)
             }
         }
         ExprKind::Number(value) => Some(LoweredType::Basic(if number_literal_is_float(value) {
@@ -1331,7 +1581,7 @@ fn infer_expr_type(
             }
 
             let LoweredType::Struct(struct_name) =
-                infer_expr_type(object, locals, signatures, structs, enums)?
+                infer_expr_type(object, locals, signatures, structs, enums, traits)?
             else {
                 return None;
             };
@@ -1343,13 +1593,13 @@ fn infer_expr_type(
                 .map(|field| field.type_.clone())
         }
         ExprKind::GenericMember { object, .. } => {
-            infer_expr_type(object, locals, signatures, structs, enums)
+            infer_expr_type(object, locals, signatures, structs, enums, traits)
         }
         ExprKind::Call { callee, .. } => {
             if let ExprKind::Member { object, name } = &callee.kind
                 && name == "clone"
             {
-                return infer_expr_type(object, locals, signatures, structs, enums);
+                return infer_expr_type(object, locals, signatures, structs, enums, traits);
             }
 
             if let ExprKind::Member { object, name } = &callee.kind
@@ -1369,7 +1619,16 @@ fn infer_expr_type(
             }
 
             if let ExprKind::Member { object, name } = &callee.kind {
-                let object_type = infer_expr_type(object, locals, signatures, structs, enums)?;
+                let object_type =
+                    infer_expr_type(object, locals, signatures, structs, enums, traits)?;
+                if let LoweredType::Trait(trait_name) = &object_type {
+                    return traits
+                        .get(trait_name)?
+                        .methods
+                        .iter()
+                        .find(|method| method.name == *name)
+                        .map(|method| method.return_type.clone());
+                }
                 return signatures
                     .get(&callable_method_name(&object_type, name, signatures)?)
                     .filter(|signature| signature.return_type_known)
@@ -1377,7 +1636,7 @@ fn infer_expr_type(
             }
 
             if let Some(LoweredType::Function { return_type, .. }) =
-                infer_expr_type(callee, locals, signatures, structs, enums)
+                infer_expr_type(callee, locals, signatures, structs, enums, traits)
             {
                 return Some(*return_type);
             }
@@ -1393,16 +1652,16 @@ fn infer_expr_type(
         }
         ExprKind::Array(_) | ExprKind::GenericType { .. } | ExprKind::Missing => None,
         ExprKind::Lambda(function) => {
-            infer_lambda_expr_type(function, locals, signatures, structs, enums)
+            infer_lambda_expr_type(function, locals, signatures, structs, enums, traits)
         }
         ExprKind::Match { branches, .. } => branches.iter().find_map(|branch| {
             let MatchBranchBody::Expr(expr) = &branch.body else {
                 return None;
             };
-            infer_expr_type(expr, locals, signatures, structs, enums)
+            infer_expr_type(expr, locals, signatures, structs, enums, traits)
         }),
         ExprKind::PostfixIncrement(target) => {
-            infer_expr_type(target, locals, signatures, structs, enums)
+            infer_expr_type(target, locals, signatures, structs, enums, traits)
         }
     }
 }
@@ -1427,11 +1686,18 @@ fn infer_lambda_expr_type(
     signatures: &HashMap<String, FunctionSignature>,
     structs: &HashMap<String, LoweredStruct>,
     enums: &HashMap<String, LoweredEnum>,
+    traits: &HashMap<String, LoweredTrait>,
 ) -> Option<LoweredType> {
     let mut locals = outer_locals.clone();
     let mut params = Vec::new();
     for param in &function.params {
-        let type_ = quiet_lower_type_ref(param.type_ref.as_ref()?, outer_locals, structs, enums)?;
+        let type_ = quiet_lower_type_ref(
+            param.type_ref.as_ref()?,
+            outer_locals,
+            structs,
+            enums,
+            traits,
+        )?;
         locals.insert(param.name.clone(), type_.clone());
         params.push(LoweredFunctionTypeParam {
             type_,
@@ -1440,10 +1706,12 @@ fn infer_lambda_expr_type(
     }
 
     let return_type = if let Some(type_ref) = &function.return_type {
-        quiet_lower_type_ref(type_ref, outer_locals, structs, enums)?
+        quiet_lower_type_ref(type_ref, outer_locals, structs, enums, traits)?
     } else {
         match &function.body {
-            FunctionBody::Expr(expr) => infer_expr_type(expr, &locals, signatures, structs, enums)?,
+            FunctionBody::Expr(expr) => {
+                infer_expr_type(expr, &locals, signatures, structs, enums, traits)?
+            }
             FunctionBody::Block(block) => {
                 let mut return_type = None;
                 let mut has_unresolved_value_return = false;
@@ -1453,6 +1721,7 @@ fn infer_lambda_expr_type(
                     signatures,
                     structs,
                     enums,
+                    traits,
                     &mut return_type,
                     &mut has_unresolved_value_return,
                 )
@@ -1476,6 +1745,7 @@ fn quiet_lower_type_ref(
     locals: &HashMap<String, LoweredType>,
     structs: &HashMap<String, LoweredStruct>,
     enums: &HashMap<String, LoweredEnum>,
+    traits: &HashMap<String, LoweredTrait>,
 ) -> Option<LoweredType> {
     if let Some(function) = &type_ref.function {
         let params = function
@@ -1483,12 +1753,13 @@ fn quiet_lower_type_ref(
             .iter()
             .map(|param| {
                 Some(LoweredFunctionTypeParam {
-                    type_: quiet_lower_type_ref(&param.type_ref, locals, structs, enums)?,
+                    type_: quiet_lower_type_ref(&param.type_ref, locals, structs, enums, traits)?,
                     mutable: param.mutable,
                 })
             })
             .collect::<Option<Vec<_>>>()?;
-        let return_type = quiet_lower_type_ref(&function.return_type, locals, structs, enums)?;
+        let return_type =
+            quiet_lower_type_ref(&function.return_type, locals, structs, enums, traits)?;
         return Some(LoweredType::Function {
             params,
             return_type: Box::new(return_type),
@@ -1509,6 +1780,8 @@ fn quiet_lower_type_ref(
         Some(LoweredType::Struct(type_ref.name.clone()))
     } else if enums.contains_key(&type_ref.name) {
         Some(LoweredType::Enum(type_ref.name.clone()))
+    } else if traits.contains_key(&type_ref.name) {
+        Some(LoweredType::Trait(type_ref.name.clone()))
     } else {
         None
     }
@@ -1627,6 +1900,7 @@ fn lowered_expression_has_mutable_capability(
             })
         }
         LoweredExprKind::Clone(_) => true,
+        LoweredExprKind::TraitObject { .. } => true,
         LoweredExprKind::Call { name, args } => signatures.get(name).is_some_and(|signature| {
             matches!(signature.return_type, LoweredType::Struct(_))
                 && args.iter().zip(&signature.params).all(|(arg, param)| {
@@ -1636,7 +1910,9 @@ fn lowered_expression_has_mutable_capability(
                         )
                 })
         }),
-        LoweredExprKind::IndirectCall { .. } => matches!(expr.type_, LoweredType::Struct(_)),
+        LoweredExprKind::IndirectCall { .. } | LoweredExprKind::DynamicCall { .. } => {
+            matches!(expr.type_, LoweredType::Struct(_) | LoweredType::Trait(_))
+        }
         LoweredExprKind::StringLiteral(_)
         | LoweredExprKind::BoolLiteral(_)
         | LoweredExprKind::NumberLiteral(_)
@@ -1982,6 +2258,7 @@ fn lower_function(
     signatures: &HashMap<String, FunctionSignature>,
     structs: &HashMap<String, LoweredStruct>,
     enums: &HashMap<String, LoweredEnum>,
+    traits: &HashMap<String, LoweredTrait>,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> Option<LoweredFunction> {
     let signature = signatures.get(name)?;
@@ -2064,6 +2341,7 @@ fn lower_function(
                 signatures,
                 structs,
                 enums,
+                traits,
                 diagnostics,
                 Some(signature.return_type.clone()),
                 "expected supported arrow function value in executable builds",
@@ -2081,6 +2359,7 @@ fn lower_function(
                             signatures,
                             structs,
                             enums,
+                            traits,
                             diagnostics,
                         ) {
                             statements.push(statement);
@@ -2093,6 +2372,7 @@ fn lower_function(
                             signatures,
                             structs,
                             enums,
+                            traits,
                             diagnostics,
                         ) {
                             statements.push(statement);
@@ -2106,6 +2386,7 @@ fn lower_function(
                                 signatures,
                                 structs,
                                 enums,
+                                traits,
                                 diagnostics,
                                 Some(signature.return_type.clone()),
                                 "expected supported return value in executable builds",
@@ -2125,6 +2406,7 @@ fn lower_function(
                             signatures,
                             structs,
                             enums,
+                            traits,
                             diagnostics,
                             Some(&signature.return_type),
                         ) {
@@ -2138,6 +2420,7 @@ fn lower_function(
                             signatures,
                             structs,
                             enums,
+                            traits,
                             diagnostics,
                             Some(&signature.return_type),
                         ) {
@@ -2151,6 +2434,7 @@ fn lower_function(
                             signatures,
                             structs,
                             enums,
+                            traits,
                             diagnostics,
                             Some(&signature.return_type),
                         ) {
@@ -2196,6 +2480,7 @@ fn lower_main(
     signatures: &HashMap<String, FunctionSignature>,
     structs: &HashMap<String, LoweredStruct>,
     enums: &HashMap<String, LoweredEnum>,
+    traits: &HashMap<String, LoweredTrait>,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> Vec<LoweredStatement> {
     let mut statements = Vec::new();
@@ -2228,6 +2513,7 @@ fn lower_main(
                             signatures,
                             structs,
                             enums,
+                            traits,
                             diagnostics,
                             None,
                         ) {
@@ -2241,6 +2527,7 @@ fn lower_main(
                             signatures,
                             structs,
                             enums,
+                            traits,
                             diagnostics,
                         ) {
                             statements.push(statement);
@@ -2253,6 +2540,7 @@ fn lower_main(
                             signatures,
                             structs,
                             enums,
+                            traits,
                             diagnostics,
                         ) {
                             statements.push(statement);
@@ -2271,6 +2559,7 @@ fn lower_main(
                             signatures,
                             structs,
                             enums,
+                            traits,
                             diagnostics,
                             None,
                         ) {
@@ -2284,6 +2573,7 @@ fn lower_main(
                             signatures,
                             structs,
                             enums,
+                            traits,
                             diagnostics,
                             None,
                         ) {
@@ -2316,6 +2606,7 @@ fn lower_if_statement(
     signatures: &HashMap<String, FunctionSignature>,
     structs: &HashMap<String, LoweredStruct>,
     enums: &HashMap<String, LoweredEnum>,
+    traits: &HashMap<String, LoweredTrait>,
     diagnostics: &mut Vec<Diagnostic>,
     return_type: Option<&LoweredType>,
 ) -> Option<LoweredStatement> {
@@ -2334,6 +2625,7 @@ fn lower_if_statement(
         signatures,
         structs,
         enums,
+        traits,
         diagnostics,
         Some(LoweredType::Basic(BasicType::Bool)),
         "expected supported `if` condition in executable builds",
@@ -2344,6 +2636,7 @@ fn lower_if_statement(
         signatures,
         structs,
         enums,
+        traits,
         diagnostics,
         return_type,
     );
@@ -2357,6 +2650,7 @@ fn lower_if_statement(
                 signatures,
                 structs,
                 enums,
+                traits,
                 diagnostics,
                 return_type,
             ),
@@ -2366,6 +2660,7 @@ fn lower_if_statement(
                 signatures,
                 structs,
                 enums,
+                traits,
                 diagnostics,
                 return_type,
             )
@@ -2387,6 +2682,7 @@ fn lower_while_statement(
     signatures: &HashMap<String, FunctionSignature>,
     structs: &HashMap<String, LoweredStruct>,
     enums: &HashMap<String, LoweredEnum>,
+    traits: &HashMap<String, LoweredTrait>,
     diagnostics: &mut Vec<Diagnostic>,
     return_type: Option<&LoweredType>,
 ) -> Option<LoweredStatement> {
@@ -2400,6 +2696,7 @@ fn lower_while_statement(
         signatures,
         structs,
         enums,
+        traits,
         diagnostics,
         Some(LoweredType::Basic(BasicType::Bool)),
         "expected supported `while` condition in executable builds",
@@ -2410,6 +2707,7 @@ fn lower_while_statement(
         signatures,
         structs,
         enums,
+        traits,
         diagnostics,
         return_type,
     );
@@ -2423,6 +2721,7 @@ fn lower_conditional_block(
     signatures: &HashMap<String, FunctionSignature>,
     structs: &HashMap<String, LoweredStruct>,
     enums: &HashMap<String, LoweredEnum>,
+    traits: &HashMap<String, LoweredTrait>,
     diagnostics: &mut Vec<Diagnostic>,
     return_type: Option<&LoweredType>,
 ) -> Vec<LoweredStatement> {
@@ -2437,6 +2736,7 @@ fn lower_conditional_block(
                     signatures,
                     structs,
                     enums,
+                    traits,
                     diagnostics,
                 ) {
                     statements.push(statement);
@@ -2449,6 +2749,7 @@ fn lower_conditional_block(
                     signatures,
                     structs,
                     enums,
+                    traits,
                     diagnostics,
                 ) {
                     statements.push(statement);
@@ -2469,6 +2770,7 @@ fn lower_conditional_block(
                         signatures,
                         structs,
                         enums,
+                        traits,
                         diagnostics,
                         Some(return_type.clone()),
                         "expected supported return value in executable builds",
@@ -2483,6 +2785,7 @@ fn lower_conditional_block(
                     signatures,
                     structs,
                     enums,
+                    traits,
                     diagnostics,
                     return_type,
                 ) {
@@ -2500,6 +2803,7 @@ fn lower_conditional_block(
                     signatures,
                     structs,
                     enums,
+                    traits,
                     diagnostics,
                     return_type,
                 ) {
@@ -2515,6 +2819,7 @@ fn lower_conditional_block(
                     signatures,
                     structs,
                     enums,
+                    traits,
                     diagnostics,
                     return_type,
                 ) {
@@ -2564,6 +2869,7 @@ fn lower_expression_statement(
     signatures: &HashMap<String, FunctionSignature>,
     structs: &HashMap<String, LoweredStruct>,
     enums: &HashMap<String, LoweredEnum>,
+    traits: &HashMap<String, LoweredTrait>,
     diagnostics: &mut Vec<Diagnostic>,
     return_type: Option<&LoweredType>,
 ) -> Option<LoweredStatement> {
@@ -2578,6 +2884,7 @@ fn lower_expression_statement(
             signatures,
             structs,
             enums,
+            traits,
             diagnostics,
             return_type,
         );
@@ -2590,6 +2897,7 @@ fn lower_expression_statement(
             signatures,
             structs,
             enums,
+            traits,
             diagnostics,
             None,
             "expected supported increment expression in executable builds",
@@ -2627,6 +2935,7 @@ fn lower_expression_statement(
             signatures,
             structs,
             enums,
+            traits,
             diagnostics,
             None,
             "`io.println` only accepts `String` values in executable builds",
@@ -2652,6 +2961,7 @@ fn lower_expression_statement(
         signatures,
         structs,
         enums,
+        traits,
         diagnostics,
         None,
         "expected supported function call in executable builds",
@@ -2665,6 +2975,7 @@ fn lower_match_statement(
     signatures: &HashMap<String, FunctionSignature>,
     structs: &HashMap<String, LoweredStruct>,
     enums: &HashMap<String, LoweredEnum>,
+    traits: &HashMap<String, LoweredTrait>,
     diagnostics: &mut Vec<Diagnostic>,
     return_type: Option<&LoweredType>,
 ) -> Option<LoweredStatement> {
@@ -2677,6 +2988,7 @@ fn lower_match_statement(
         signatures,
         structs,
         enums,
+        traits,
         diagnostics,
         None,
         "expected supported match value in executable builds",
@@ -2711,6 +3023,7 @@ fn lower_match_statement(
                 signatures,
                 structs,
                 enums,
+                traits,
                 diagnostics,
                 return_type,
             ),
@@ -2720,6 +3033,7 @@ fn lower_match_statement(
                 signatures,
                 structs,
                 enums,
+                traits,
                 diagnostics,
                 return_type,
             )
@@ -2745,6 +3059,7 @@ fn lower_match_expression_branch_block(
     signatures: &HashMap<String, FunctionSignature>,
     structs: &HashMap<String, LoweredStruct>,
     enums: &HashMap<String, LoweredEnum>,
+    traits: &HashMap<String, LoweredTrait>,
     diagnostics: &mut Vec<Diagnostic>,
     expected_type: Option<LoweredType>,
 ) -> Option<(Vec<LoweredStatement>, LoweredExpr)> {
@@ -2773,6 +3088,7 @@ fn lower_match_expression_branch_block(
                     signatures,
                     structs,
                     enums,
+                    traits,
                     diagnostics,
                 ) {
                     statements.push(statement);
@@ -2785,6 +3101,7 @@ fn lower_match_expression_branch_block(
                     signatures,
                     structs,
                     enums,
+                    traits,
                     diagnostics,
                 ) {
                     statements.push(statement);
@@ -2797,6 +3114,7 @@ fn lower_match_expression_branch_block(
                     signatures,
                     structs,
                     enums,
+                    traits,
                     diagnostics,
                     None,
                 ) {
@@ -2810,6 +3128,7 @@ fn lower_match_expression_branch_block(
                     signatures,
                     structs,
                     enums,
+                    traits,
                     diagnostics,
                     None,
                 ) {
@@ -2823,6 +3142,7 @@ fn lower_match_expression_branch_block(
                     signatures,
                     structs,
                     enums,
+                    traits,
                     diagnostics,
                     None,
                 ) {
@@ -2850,6 +3170,7 @@ fn lower_match_expression_branch_block(
         signatures,
         structs,
         enums,
+        traits,
         diagnostics,
         expected_type,
         "expected supported match branch value in executable builds",
@@ -2871,6 +3192,7 @@ fn lower_local_statement(
     signatures: &HashMap<String, FunctionSignature>,
     structs: &HashMap<String, LoweredStruct>,
     enums: &HashMap<String, LoweredEnum>,
+    traits: &HashMap<String, LoweredTrait>,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> Option<LoweredStatement> {
     let StmtKind::Let {
@@ -2892,8 +3214,9 @@ fn lower_local_statement(
             self_type,
             structs,
             enums,
+            traits,
             diagnostics,
-            "only basic, struct, enum, and function local types are supported in executable builds",
+            "only basic, struct, enum, trait, and function local types are supported in executable builds",
         );
         if lowered.is_none() {
             can_lower = false;
@@ -2910,6 +3233,7 @@ fn lower_local_statement(
             signatures,
             structs,
             enums,
+            traits,
             diagnostics,
             annotated_type.clone(),
             "only literal, string concat, struct literal, field access, and function call local values are supported in executable builds",
@@ -2921,10 +3245,13 @@ fn lower_local_statement(
             LoweredType::Basic(type_) if type_.is_numeric() => {
                 LoweredExprKind::NumberLiteral("0".to_string())
             }
-            LoweredType::Struct(_) | LoweredType::Enum(_) | LoweredType::Function { .. } => {
+            LoweredType::Struct(_)
+            | LoweredType::Enum(_)
+            | LoweredType::Trait(_)
+            | LoweredType::Function { .. } => {
                 diagnostics.push(Diagnostic::error(
                     statement.span,
-                    "struct, enum, and function locals must include an initializer in executable builds",
+                    "struct, enum, trait, and function locals must include an initializer in executable builds",
                 ));
                 return None;
             }
@@ -3008,6 +3335,7 @@ fn lower_assignment_statement(
     signatures: &HashMap<String, FunctionSignature>,
     structs: &HashMap<String, LoweredStruct>,
     enums: &HashMap<String, LoweredEnum>,
+    traits: &HashMap<String, LoweredTrait>,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> Option<LoweredStatement> {
     let StmtKind::Assign { target, op, value } = &statement.kind else {
@@ -3057,6 +3385,7 @@ fn lower_assignment_statement(
         signatures,
         structs,
         enums,
+        traits,
         diagnostics,
         None,
         "expected supported assignment target in executable builds",
@@ -3082,6 +3411,7 @@ fn lower_assignment_statement(
         signatures,
         structs,
         enums,
+        traits,
         diagnostics,
         Some(lowered_target.type_.clone()),
         "expected supported assignment value in executable builds",
@@ -3101,6 +3431,7 @@ fn lower_struct_init(
     signatures: &HashMap<String, FunctionSignature>,
     structs: &HashMap<String, LoweredStruct>,
     enums: &HashMap<String, LoweredEnum>,
+    traits: &HashMap<String, LoweredTrait>,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> Option<LoweredExpr> {
     let resolved_name = if name == "Self" {
@@ -3158,6 +3489,7 @@ fn lower_struct_init(
             signatures,
             structs,
             enums,
+            traits,
             diagnostics,
             Some(expected_field.type_.clone()),
             "expected supported struct field value in executable builds",
@@ -3198,11 +3530,12 @@ fn lower_expr(
     signatures: &HashMap<String, FunctionSignature>,
     structs: &HashMap<String, LoweredStruct>,
     enums: &HashMap<String, LoweredEnum>,
+    traits: &HashMap<String, LoweredTrait>,
     diagnostics: &mut Vec<Diagnostic>,
     expected_type: Option<LoweredType>,
     message: &str,
 ) -> Option<LoweredExpr> {
-    let lowered = match &expr.kind {
+    let mut lowered = match &expr.kind {
         ExprKind::String(value) => LoweredExpr {
             type_: LoweredType::Basic(BasicType::String),
             kind: LoweredExprKind::StringLiteral(value.clone()),
@@ -3299,6 +3632,7 @@ fn lower_expr(
                 signatures,
                 structs,
                 enums,
+                traits,
                 diagnostics,
                 None,
                 "expected supported increment target in executable builds",
@@ -3330,6 +3664,7 @@ fn lower_expr(
                 signatures,
                 structs,
                 enums,
+                traits,
                 diagnostics,
                 Some(LoweredType::Basic(BasicType::Bool)),
                 "expected supported boolean operand in executable builds",
@@ -3350,6 +3685,7 @@ fn lower_expr(
                 signatures,
                 structs,
                 enums,
+                traits,
                 diagnostics,
                 expected_type.clone(),
                 "expected supported signed numeric operand in executable builds",
@@ -3383,6 +3719,7 @@ fn lower_expr(
                 signatures,
                 structs,
                 enums,
+                traits,
                 diagnostics,
                 Some(bool_type.clone()),
                 "expected supported boolean operand in executable builds",
@@ -3393,6 +3730,7 @@ fn lower_expr(
                 signatures,
                 structs,
                 enums,
+                traits,
                 diagnostics,
                 Some(bool_type.clone()),
                 "expected supported boolean operand in executable builds",
@@ -3447,6 +3785,7 @@ fn lower_expr(
                     signatures,
                     structs,
                     enums,
+                    traits,
                     diagnostics,
                     Some(type_.clone()),
                     "expected supported arithmetic operand in executable builds",
@@ -3457,6 +3796,7 @@ fn lower_expr(
                     signatures,
                     structs,
                     enums,
+                    traits,
                     diagnostics,
                     Some(type_.clone()),
                     "expected supported arithmetic operand in executable builds",
@@ -3470,6 +3810,7 @@ fn lower_expr(
                     signatures,
                     structs,
                     enums,
+                    traits,
                     diagnostics,
                     Some(type_.clone()),
                     "expected supported arithmetic operand in executable builds",
@@ -3480,6 +3821,7 @@ fn lower_expr(
                     signatures,
                     structs,
                     enums,
+                    traits,
                     diagnostics,
                     Some(type_),
                     "expected supported arithmetic operand in executable builds",
@@ -3494,6 +3836,7 @@ fn lower_expr(
                     signatures,
                     structs,
                     enums,
+                    traits,
                     diagnostics,
                     None,
                     "expected supported arithmetic operand in executable builds",
@@ -3504,6 +3847,7 @@ fn lower_expr(
                     signatures,
                     structs,
                     enums,
+                    traits,
                     diagnostics,
                     Some(right.type_.clone()),
                     "expected supported arithmetic operand in executable builds",
@@ -3516,6 +3860,7 @@ fn lower_expr(
                     signatures,
                     structs,
                     enums,
+                    traits,
                     diagnostics,
                     None,
                     "expected supported arithmetic operand in executable builds",
@@ -3526,6 +3871,7 @@ fn lower_expr(
                     signatures,
                     structs,
                     enums,
+                    traits,
                     diagnostics,
                     Some(left.type_.clone()),
                     "expected supported arithmetic operand in executable builds",
@@ -3575,6 +3921,7 @@ fn lower_expr(
                     signatures,
                     structs,
                     enums,
+                    traits,
                     diagnostics,
                     Some(type_.clone()),
                     "expected supported comparison operand in executable builds",
@@ -3585,6 +3932,7 @@ fn lower_expr(
                     signatures,
                     structs,
                     enums,
+                    traits,
                     diagnostics,
                     Some(type_),
                     "expected supported comparison operand in executable builds",
@@ -3599,6 +3947,7 @@ fn lower_expr(
                     signatures,
                     structs,
                     enums,
+                    traits,
                     diagnostics,
                     None,
                     "expected supported comparison operand in executable builds",
@@ -3609,6 +3958,7 @@ fn lower_expr(
                     signatures,
                     structs,
                     enums,
+                    traits,
                     diagnostics,
                     Some(right.type_.clone()),
                     "expected supported comparison operand in executable builds",
@@ -3621,6 +3971,7 @@ fn lower_expr(
                     signatures,
                     structs,
                     enums,
+                    traits,
                     diagnostics,
                     None,
                     "expected supported comparison operand in executable builds",
@@ -3631,6 +3982,7 @@ fn lower_expr(
                     signatures,
                     structs,
                     enums,
+                    traits,
                     diagnostics,
                     Some(left.type_.clone()),
                     "expected supported comparison operand in executable builds",
@@ -3696,6 +4048,7 @@ fn lower_expr(
             signatures,
             structs,
             enums,
+            traits,
             diagnostics,
         )?,
         ExprKind::Member { object, name } => {
@@ -3726,6 +4079,7 @@ fn lower_expr(
                 signatures,
                 structs,
                 enums,
+                traits,
                 diagnostics,
                 None,
                 "expected supported field access object in executable builds",
@@ -3781,6 +4135,7 @@ fn lower_expr(
                     signatures,
                     structs,
                     enums,
+                    traits,
                     diagnostics,
                     None,
                     "expected supported clone source in executable builds",
@@ -3827,6 +4182,7 @@ fn lower_expr(
                         signatures,
                         structs,
                         enums,
+                        traits,
                         diagnostics,
                         Some(type_.clone()),
                         "expected supported enum payload in executable builds",
@@ -3881,6 +4237,7 @@ fn lower_expr(
                         signatures,
                         structs,
                         enums,
+                        traits,
                         diagnostics,
                         Some(param.type_.clone()),
                         "expected supported static function argument in executable builds",
@@ -3910,6 +4267,7 @@ fn lower_expr(
                     signatures,
                     structs,
                     enums,
+                    traits,
                     diagnostics,
                     None,
                     "expected supported method receiver in executable builds",
@@ -3932,6 +4290,91 @@ fn lower_expr(
                     return Some(LoweredExpr {
                         type_: LoweredType::Basic(BasicType::String),
                         kind: LoweredExprKind::NumberToString(Box::new(object)),
+                    });
+                }
+
+                if let LoweredType::Trait(trait_name) = &object.type_ {
+                    let Some(trait_) = traits.get(trait_name) else {
+                        diagnostics.push(Diagnostic::error(
+                            callee.span,
+                            format!("unknown trait `{trait_name}` in executable build"),
+                        ));
+                        return None;
+                    };
+                    let source_name = source_callable_name(name);
+                    let Some(method) = trait_
+                        .methods
+                        .iter()
+                        .find(|method| method.name == source_name)
+                    else {
+                        diagnostics.push(Diagnostic::error(
+                            callee.span,
+                            format!(
+                                "unknown method `{source_name}` for trait `{trait_name}` in executable build"
+                            ),
+                        ));
+                        return None;
+                    };
+
+                    if method.mutable_self && !receiver_has_mutable_capability {
+                        let qualified_name = format!("{trait_name}.{source_name}");
+                        let message = if let Some(binding_name) = receiver_binding
+                            && locals
+                                .get(&binding_name)
+                                .is_some_and(|local| !local.mutable)
+                        {
+                            format!(
+                                "cannot call mutable function `{qualified_name}` through immutable binding `{binding_name}`; declare it with `let mut {binding_name}` or call the function on a mutable clone"
+                            )
+                        } else {
+                            format!(
+                                "mutable function `{qualified_name}` requires a mutable receiver; bind the value with `let mut` or call the function on a mutable clone"
+                            )
+                        };
+                        diagnostics.push(Diagnostic::error(receiver_span, message));
+                        return None;
+                    }
+
+                    if args.len() != method.params.len() {
+                        diagnostics.push(Diagnostic::error(
+                            expr.span,
+                            format!(
+                                "method `{trait_name}.{source_name}` expects {} arguments, got {}",
+                                method.params.len(),
+                                args.len()
+                            ),
+                        ));
+                        return None;
+                    }
+
+                    let mut lowered_args = Vec::new();
+                    for (arg, param) in args.iter().zip(&method.params) {
+                        if let Some(arg) = lower_expr(
+                            arg,
+                            locals,
+                            signatures,
+                            structs,
+                            enums,
+                            traits,
+                            diagnostics,
+                            Some(param.type_.clone()),
+                            "expected supported dynamic method argument in executable builds",
+                        ) {
+                            lowered_args.push(arg);
+                        }
+                    }
+
+                    if lowered_args.len() != args.len() {
+                        return None;
+                    }
+
+                    return Some(LoweredExpr {
+                        type_: method.return_type.clone(),
+                        kind: LoweredExprKind::DynamicCall {
+                            object: Box::new(object),
+                            method: source_name.to_string(),
+                            args: lowered_args,
+                        },
                     });
                 }
 
@@ -3992,6 +4435,7 @@ fn lower_expr(
                         signatures,
                         structs,
                         enums,
+                        traits,
                         diagnostics,
                         Some(param.type_.clone()),
                         "expected supported method argument in executable builds",
@@ -4020,6 +4464,7 @@ fn lower_expr(
                         signatures,
                         structs,
                         enums,
+                        traits,
                         diagnostics,
                         None,
                         "expected supported function value in executable builds",
@@ -4049,6 +4494,7 @@ fn lower_expr(
                             signatures,
                             structs,
                             enums,
+                            traits,
                             diagnostics,
                             Some(param.type_.clone()),
                             "expected supported function value argument in executable builds",
@@ -4106,6 +4552,7 @@ fn lower_expr(
                         signatures,
                         structs,
                         enums,
+                        traits,
                         diagnostics,
                         Some(param.type_.clone()),
                         "expected supported function argument in executable builds",
@@ -4134,6 +4581,7 @@ fn lower_expr(
             signatures,
             structs,
             enums,
+            traits,
             diagnostics,
             expected_type.clone(),
         )?,
@@ -4144,6 +4592,7 @@ fn lower_expr(
                 signatures,
                 structs,
                 enums,
+                traits,
                 diagnostics,
                 None,
                 "expected supported match value in executable builds",
@@ -4183,6 +4632,7 @@ fn lower_expr(
                             signatures,
                             structs,
                             enums,
+                            traits,
                             diagnostics,
                             expected_branch_type,
                             "expected supported match branch value in executable builds",
@@ -4194,6 +4644,7 @@ fn lower_expr(
                         signatures,
                         structs,
                         enums,
+                        traits,
                         diagnostics,
                         expected_branch_type,
                     )?,
@@ -4230,6 +4681,30 @@ fn lower_expr(
     };
 
     if let Some(expected_type) = expected_type {
+        if let LoweredType::Trait(trait_name) = &expected_type
+            && lowered.type_ != expected_type
+            && lowered_type_implements_trait(traits, trait_name, &lowered.type_)
+        {
+            if !matches!(lowered.type_, LoweredType::Struct(_)) {
+                diagnostics.push(Diagnostic::error(
+                    expr.span,
+                    format!(
+                        "only struct values can be coerced to trait `{trait_name}` in executable builds"
+                    ),
+                ));
+                return None;
+            }
+
+            lowered = LoweredExpr {
+                type_: expected_type.clone(),
+                kind: LoweredExprKind::TraitObject {
+                    trait_name: trait_name.clone(),
+                    self_type: lowered.type_.clone(),
+                    value: Box::new(lowered),
+                },
+            };
+        }
+
         if lowered.type_ != expected_type {
             diagnostics.push(Diagnostic::error(
                 expr.span,
@@ -4246,6 +4721,16 @@ fn lower_expr(
     Some(lowered)
 }
 
+fn lowered_type_implements_trait(
+    traits: &HashMap<String, LoweredTrait>,
+    trait_name: &str,
+    type_: &LoweredType,
+) -> bool {
+    traits
+        .get(trait_name)
+        .is_some_and(|trait_| trait_.impls.iter().any(|impl_| impl_.self_type == *type_))
+}
+
 fn lower_lambda_expr(
     span: Span,
     function: &FunctionDecl,
@@ -4253,6 +4738,7 @@ fn lower_lambda_expr(
     signatures: &HashMap<String, FunctionSignature>,
     structs: &HashMap<String, LoweredStruct>,
     enums: &HashMap<String, LoweredEnum>,
+    traits: &HashMap<String, LoweredTrait>,
     diagnostics: &mut Vec<Diagnostic>,
     expected_type: Option<LoweredType>,
 ) -> Option<LoweredExpr> {
@@ -4264,6 +4750,7 @@ fn lower_lambda_expr(
             signatures,
             structs,
             enums,
+            traits,
             diagnostics,
         )
     })?;
@@ -4355,6 +4842,7 @@ fn lower_lambda_expr(
                 signatures,
                 structs,
                 enums,
+                traits,
                 diagnostics,
                 Some(*return_type.clone()),
                 "expected supported lambda return value in executable builds",
@@ -4371,6 +4859,7 @@ fn lower_lambda_expr(
                             signatures,
                             structs,
                             enums,
+                            traits,
                             diagnostics,
                         ) {
                             statements.push(statement);
@@ -4383,6 +4872,7 @@ fn lower_lambda_expr(
                             signatures,
                             structs,
                             enums,
+                            traits,
                             diagnostics,
                         ) {
                             statements.push(statement);
@@ -4396,6 +4886,7 @@ fn lower_lambda_expr(
                                 signatures,
                                 structs,
                                 enums,
+                                traits,
                                 diagnostics,
                                 Some(*return_type.clone()),
                                 "expected supported lambda return value in executable builds",
@@ -4414,6 +4905,7 @@ fn lower_lambda_expr(
                             signatures,
                             structs,
                             enums,
+                            traits,
                             diagnostics,
                             Some(return_type.as_ref()),
                         ) {
@@ -4427,6 +4919,7 @@ fn lower_lambda_expr(
                             signatures,
                             structs,
                             enums,
+                            traits,
                             diagnostics,
                             Some(return_type.as_ref()),
                         ) {
@@ -4440,6 +4933,7 @@ fn lower_lambda_expr(
                             signatures,
                             structs,
                             enums,
+                            traits,
                             diagnostics,
                             Some(return_type.as_ref()),
                         ) {
@@ -4485,6 +4979,7 @@ fn infer_lambda_function_type(
     signatures: &HashMap<String, FunctionSignature>,
     structs: &HashMap<String, LoweredStruct>,
     enums: &HashMap<String, LoweredEnum>,
+    traits: &HashMap<String, LoweredTrait>,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> Option<LoweredType> {
     let self_type = outer_locals.get("Self").map(|local| &local.type_);
@@ -4507,6 +5002,7 @@ fn infer_lambda_function_type(
             self_type,
             structs,
             enums,
+            traits,
             diagnostics,
             "lambda parameter types must be supported in executable builds",
         )?;
@@ -4523,13 +5019,15 @@ fn infer_lambda_function_type(
             self_type,
             structs,
             enums,
+            traits,
             diagnostics,
             "lambda return types must be supported in executable builds",
         )?
     } else {
         match &function.body {
             FunctionBody::Expr(expr) => {
-                let Some(return_type) = infer_expr_type(expr, &locals, signatures, structs, enums)
+                let Some(return_type) =
+                    infer_expr_type(expr, &locals, signatures, structs, enums, traits)
                 else {
                     diagnostics.push(Diagnostic::error(
                         span,
@@ -4548,6 +5046,7 @@ fn infer_lambda_function_type(
                     signatures,
                     structs,
                     enums,
+                    traits,
                     &mut return_type,
                     &mut has_unresolved_value_return,
                 ) {

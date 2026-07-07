@@ -3493,6 +3493,64 @@ fn main() {
 }
 
 #[test]
+fn trait_typed_values_accept_implemented_concrete_values() {
+    let result = check_source(
+        r#"impl Describe for Person {
+    fn describe() => self.name
+}
+
+trait Describe {
+    fn describe(): String
+}
+
+struct Person {
+    name: String
+}
+
+fn printDescription(value: Describe) {
+    io.println(value.describe())
+}
+
+fn main() {
+    let person = Person { name: "Gust" }
+    let described: Describe = person
+    printDescription(person)
+    io.println(described.describe())
+}"#,
+    );
+
+    assert!(
+        !result.has_errors(),
+        "expected trait typed values to validate, got {:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
+fn trait_typed_values_require_impls() {
+    let result = check_source(
+        r#"trait Describe {
+    fn describe(): String
+}
+
+struct Person {
+    name: String
+}
+
+fn main() {
+    let person = Person { name: "Gust" }
+    let described: Describe = person
+}"#,
+    );
+
+    assert!(result.diagnostics.iter().any(|diagnostic| {
+        diagnostic
+            .message
+            .contains("expected value of type `Describe`, got `Person`")
+    }));
+}
+
+#[test]
 fn trait_impls_report_missing_extra_and_mismatched_methods() {
     let missing = check_source(
         r#"trait Describe {

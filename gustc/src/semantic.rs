@@ -109,6 +109,7 @@ enum Type {
     Basic(BasicType),
     Struct(String),
     Enum(String),
+    Trait(String),
     Function {
         params: Vec<FunctionTypeParam>,
         return_type: Box<Type>,
@@ -130,6 +131,7 @@ impl Type {
             Type::Basic(type_) => type_.name().to_string(),
             Type::Struct(name) => name.clone(),
             Type::Enum(name) => name.clone(),
+            Type::Trait(name) => name.clone(),
             Type::Function {
                 params,
                 return_type,
@@ -526,7 +528,7 @@ impl Analyzer {
 
         if matches!(
             self_type,
-            Type::Unknown | Type::Void | Type::Function { .. } | Type::Named(_)
+            Type::Unknown | Type::Void | Type::Trait(_) | Type::Function { .. } | Type::Named(_)
         ) {
             return;
         }
@@ -1248,6 +1250,7 @@ impl Analyzer {
                 Some(Type::Basic(_))
                 | Some(Type::Struct(_))
                 | Some(Type::Enum(_))
+                | Some(Type::Trait(_))
                 | Some(Type::Function { .. })
                 | Some(Type::Void)
                 | Some(Type::Named(_))
@@ -2042,6 +2045,8 @@ impl Analyzer {
             Some(Type::Struct(name.clone()))
         } else if self.enums.contains_key(name) {
             Some(Type::Enum(name.clone()))
+        } else if self.traits.contains_key(name) {
+            Some(Type::Trait(name.clone()))
         } else if self.types.contains(name) && name != "void" {
             Some(Type::Named(name.clone()))
         } else {
@@ -2150,13 +2155,18 @@ impl Analyzer {
             return Type::Basic(BasicType::String);
         }
 
-        let intrinsic = if let Type::Struct(struct_name) = &object_type {
-            self.structs
+        let intrinsic = match &object_type {
+            Type::Struct(struct_name) => self
+                .structs
                 .get(struct_name)
                 .and_then(|struct_| struct_.methods.get(source_name))
-                .cloned()
-        } else {
-            None
+                .cloned(),
+            Type::Trait(trait_name) => self
+                .traits
+                .get(trait_name)
+                .and_then(|trait_| trait_.methods.get(source_name))
+                .cloned(),
+            _ => None,
         };
         let signature = intrinsic
             .or_else(|| {
@@ -2165,9 +2175,13 @@ impl Analyzer {
                     .cloned()
             })
             .or_else(|| {
-                self.trait_methods
-                    .get(&trait_method_name(&object_type.name(), source_name))
-                    .cloned()
+                if matches!(object_type, Type::Trait(_)) {
+                    None
+                } else {
+                    self.trait_methods
+                        .get(&trait_method_name(&object_type.name(), source_name))
+                        .cloned()
+                }
             });
         let Some(signature) = signature else {
             if matches!(object_type, Type::Basic(_)) {
@@ -2175,6 +2189,7 @@ impl Analyzer {
             } else {
                 let target = match &object_type {
                     Type::Struct(name) => format!("struct `{name}`"),
+                    Type::Trait(name) => format!("trait `{name}`"),
                     _ => format!("type `{}`", object_type.name()),
                 };
                 self.diagnostics.push(Diagnostic::error(
@@ -2556,7 +2571,7 @@ impl Analyzer {
                 return Type::Unknown;
             }
             Type::Named(_) => return Type::Unknown,
-            Type::Basic(_) | Type::Function { .. } | Type::Void => {
+            Type::Basic(_) | Type::Trait(_) | Type::Function { .. } | Type::Void => {
                 self.diagnostics.push(Diagnostic::error(
                     span,
                     "field access requires a struct value",
@@ -2604,7 +2619,7 @@ impl Analyzer {
             return;
         }
 
-        if !types_are_compatible(&expected_type, &value_type) {
+        if !self.types_are_compatible(&expected_type, &value_type) {
             self.diagnostics.push(Diagnostic::error(
                 span,
                 format!(
@@ -2689,6 +2704,35 @@ impl Analyzer {
         }
     }
 
+    fn types_are_compatible(&self, expected_type: &Type, value_type: &Type) -> bool {
+        match (expected_type, value_type) {
+            (Type::Unknown, _) | (_, Type::Unknown) => true,
+            (Type::Trait(trait_name), Type::Basic(_))
+            | (Type::Trait(trait_name), Type::Struct(_))
+            | (Type::Trait(trait_name), Type::Enum(_)) => self
+                .trait_impls
+                .contains(&(trait_name.clone(), value_type.name())),
+            (
+                Type::Function {
+                    params,
+                    return_type,
+                },
+                Type::Function {
+                    params: value_params,
+                    return_type: value_return_type,
+                },
+            ) => {
+                params.len() == value_params.len()
+                    && params.iter().zip(value_params).all(|(param, value_param)| {
+                        param.mutable == value_param.mutable
+                            && self.types_are_compatible(&param.type_, &value_param.type_)
+                    })
+                    && self.types_are_compatible(return_type, value_return_type)
+            }
+            _ => expected_type == value_type,
+        }
+    }
+
     fn validate_type(&mut self, type_ref: &TypeRef) -> Type {
         if let Some(function) = &type_ref.function {
             let params = function
@@ -2749,6 +2793,8 @@ impl Analyzer {
             Type::Struct(type_ref.name.clone())
         } else if self.enums.contains_key(&type_ref.name) {
             Type::Enum(type_ref.name.clone())
+        } else if self.traits.contains_key(&type_ref.name) {
+            Type::Trait(type_ref.name.clone())
         } else if type_ref.name == "void" {
             Type::Void
         } else if self.types.contains(&type_ref.name) {
@@ -2806,6 +2852,8 @@ impl Analyzer {
             Type::Struct(type_ref.name.clone())
         } else if self.enums.contains_key(&type_ref.name) {
             Type::Enum(type_ref.name.clone())
+        } else if self.traits.contains_key(&type_ref.name) {
+            Type::Trait(type_ref.name.clone())
         } else if type_ref.name == "void" {
             Type::Void
         } else if self.types.contains(&type_ref.name) {
@@ -2842,7 +2890,7 @@ impl Analyzer {
     }
 
     fn requires_mutable_capability(&self, type_: &Type) -> bool {
-        matches!(type_, Type::Struct(_))
+        matches!(type_, Type::Struct(_) | Type::Trait(_))
     }
 
     fn expr_has_mutable_capability(&self, expr: &Expr) -> bool {
@@ -2955,30 +3003,6 @@ impl Analyzer {
 
     fn current_return_type(&self) -> Type {
         self.return_types.last().cloned().unwrap_or(Type::Unknown)
-    }
-}
-
-fn types_are_compatible(expected_type: &Type, value_type: &Type) -> bool {
-    match (expected_type, value_type) {
-        (Type::Unknown, _) | (_, Type::Unknown) => true,
-        (
-            Type::Function {
-                params,
-                return_type,
-            },
-            Type::Function {
-                params: value_params,
-                return_type: value_return_type,
-            },
-        ) => {
-            params.len() == value_params.len()
-                && params.iter().zip(value_params).all(|(param, value_param)| {
-                    param.mutable == value_param.mutable
-                        && types_are_compatible(&param.type_, &value_param.type_)
-                })
-                && types_are_compatible(return_type, value_return_type)
-        }
-        _ => expected_type == value_type,
     }
 }
 
