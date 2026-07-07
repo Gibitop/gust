@@ -2,8 +2,8 @@ use std::collections::HashSet;
 
 use crate::ast::{BasicType, BinaryOp};
 use crate::lower::{
-    LoweredEnum, LoweredExpr, LoweredExprKind, LoweredFunction, LoweredPattern, LoweredProgram,
-    LoweredStatement, LoweredStruct, LoweredType,
+    LoweredClosureFunction, LoweredEnum, LoweredExpr, LoweredExprKind, LoweredFunction,
+    LoweredPattern, LoweredProgram, LoweredStatement, LoweredStruct, LoweredType,
 };
 
 pub fn emit_c(program: &LoweredProgram) -> String {
@@ -46,7 +46,10 @@ pub fn emit_c(program: &LoweredProgram) -> String {
         source.push_str("#include <math.h>\n");
     }
 
-    let uses_alloc = uses_string_concat || uses_number_to_string || !program.structs.is_empty();
+    let uses_alloc = uses_string_concat
+        || uses_number_to_string
+        || !program.structs.is_empty()
+        || !program.closure_functions.is_empty();
 
     if uses_alloc {
         source.push_str("#include <stdlib.h>\n#include <string.h>\n");
@@ -59,6 +62,7 @@ pub fn emit_c(program: &LoweredProgram) -> String {
     }
 
     push_c_type_definitions(&mut source, program);
+    push_c_function_type_definitions(&mut source, program);
 
     if uses_alloc {
         source.push_str("static void* gust_rt_alloc(size_t size) {\n");
@@ -97,6 +101,12 @@ pub fn emit_c(program: &LoweredProgram) -> String {
     }
 
     push_c_struct_runtime_helpers(&mut source, program);
+    push_c_closure_env_structs(&mut source, &program.closure_functions);
+
+    for function in &program.closure_functions {
+        push_c_closure_function_signature(&mut source, function);
+        source.push_str(";\n\n");
+    }
 
     for function in ordered_functions(&program.functions) {
         if function_calls_name(function, &function.name) {
@@ -105,6 +115,11 @@ pub fn emit_c(program: &LoweredProgram) -> String {
         }
 
         push_c_function(&mut source, function, &program.structs);
+        source.push('\n');
+    }
+
+    for function in &program.closure_functions {
+        push_c_closure_function(&mut source, function, &program.structs);
         source.push('\n');
     }
 
@@ -162,6 +177,7 @@ fn function_uses_type(function: &LoweredFunction, type_: BasicType) -> bool {
 fn statement_uses_type(statement: &LoweredStatement, type_: BasicType) -> bool {
     match statement {
         LoweredStatement::Local { value, .. }
+        | LoweredStatement::LocalCell { value, .. }
         | LoweredStatement::Println(value)
         | LoweredStatement::Expr(value) => expr_uses_type(value, type_),
         LoweredStatement::Assignment { target, value } => {
@@ -242,12 +258,17 @@ fn expr_uses_type(expr: &LoweredExpr, type_: BasicType) -> bool {
             LoweredExprKind::FieldAccess { object, .. }
             | LoweredExprKind::Clone(object)
             | LoweredExprKind::NumberToString(object) => expr_uses_type(object, type_),
-            LoweredExprKind::Call { args, .. } => args.iter().any(|arg| expr_uses_type(arg, type_)),
+            LoweredExprKind::Call { args, .. } | LoweredExprKind::IndirectCall { args, .. } => {
+                args.iter().any(|arg| expr_uses_type(arg, type_))
+            }
             LoweredExprKind::Void
             | LoweredExprKind::StringLiteral(_)
             | LoweredExprKind::BoolLiteral(_)
             | LoweredExprKind::NumberLiteral(_)
             | LoweredExprKind::Local(_)
+            | LoweredExprKind::LocalCell(_)
+            | LoweredExprKind::CapturedLocal { .. }
+            | LoweredExprKind::Closure { .. }
             | LoweredExprKind::MatchValue(_) => false,
         }
 }
@@ -304,6 +325,7 @@ fn program_uses_number_to_string(program: &LoweredProgram, type_: BasicType) -> 
 fn statement_uses_number_to_string(statement: &LoweredStatement, type_: BasicType) -> bool {
     match statement {
         LoweredStatement::Local { value, .. }
+        | LoweredStatement::LocalCell { value, .. }
         | LoweredStatement::Println(value)
         | LoweredStatement::Expr(value) => expr_uses_number_to_string(value, type_),
         LoweredStatement::Assignment { target, value } => {
@@ -387,7 +409,7 @@ fn expr_uses_number_to_string(expr: &LoweredExpr, type_: BasicType) -> bool {
                         || expr_uses_number_to_string(&branch.value, type_)
                 })
         }
-        LoweredExprKind::Call { args, .. } => args
+        LoweredExprKind::Call { args, .. } | LoweredExprKind::IndirectCall { args, .. } => args
             .iter()
             .any(|arg| expr_uses_number_to_string(arg, type_)),
         LoweredExprKind::Void
@@ -395,6 +417,9 @@ fn expr_uses_number_to_string(expr: &LoweredExpr, type_: BasicType) -> bool {
         | LoweredExprKind::BoolLiteral(_)
         | LoweredExprKind::NumberLiteral(_)
         | LoweredExprKind::Local(_)
+        | LoweredExprKind::LocalCell(_)
+        | LoweredExprKind::CapturedLocal { .. }
+        | LoweredExprKind::Closure { .. }
         | LoweredExprKind::MatchValue(_) => false,
     }
 }
@@ -423,6 +448,7 @@ fn program_uses_string_equality(program: &LoweredProgram) -> bool {
 fn statement_uses_string_equality(statement: &LoweredStatement) -> bool {
     match statement {
         LoweredStatement::Local { value, .. }
+        | LoweredStatement::LocalCell { value, .. }
         | LoweredStatement::Println(value)
         | LoweredStatement::Expr(value) => expr_uses_string_equality(value),
         LoweredStatement::Assignment { target, value } => {
@@ -494,12 +520,17 @@ fn expr_uses_string_equality(expr: &LoweredExpr) -> bool {
         LoweredExprKind::FieldAccess { object, .. }
         | LoweredExprKind::Clone(object)
         | LoweredExprKind::NumberToString(object) => expr_uses_string_equality(object),
-        LoweredExprKind::Call { args, .. } => args.iter().any(expr_uses_string_equality),
+        LoweredExprKind::Call { args, .. } | LoweredExprKind::IndirectCall { args, .. } => {
+            args.iter().any(expr_uses_string_equality)
+        }
         LoweredExprKind::Void
         | LoweredExprKind::StringLiteral(_)
         | LoweredExprKind::BoolLiteral(_)
         | LoweredExprKind::NumberLiteral(_)
         | LoweredExprKind::Local(_)
+        | LoweredExprKind::LocalCell(_)
+        | LoweredExprKind::CapturedLocal { .. }
+        | LoweredExprKind::Closure { .. }
         | LoweredExprKind::MatchValue(_) => false,
     }
 }
@@ -512,6 +543,7 @@ fn function_uses_string_concat(function: &LoweredFunction) -> bool {
 fn statement_uses_string_concat(statement: &LoweredStatement) -> bool {
     match statement {
         LoweredStatement::Local { value, .. }
+        | LoweredStatement::LocalCell { value, .. }
         | LoweredStatement::Println(value)
         | LoweredStatement::Expr(value) => expr_uses_string_concat(value),
         LoweredStatement::Assignment { target, value } => {
@@ -574,12 +606,17 @@ fn expr_uses_string_concat(expr: &LoweredExpr) -> bool {
         LoweredExprKind::FieldAccess { object, .. }
         | LoweredExprKind::Clone(object)
         | LoweredExprKind::NumberToString(object) => expr_uses_string_concat(object),
-        LoweredExprKind::Call { args, .. } => args.iter().any(expr_uses_string_concat),
+        LoweredExprKind::Call { args, .. } | LoweredExprKind::IndirectCall { args, .. } => {
+            args.iter().any(expr_uses_string_concat)
+        }
         LoweredExprKind::Void
         | LoweredExprKind::StringLiteral(_)
         | LoweredExprKind::BoolLiteral(_)
         | LoweredExprKind::NumberLiteral(_)
         | LoweredExprKind::Local(_)
+        | LoweredExprKind::LocalCell(_)
+        | LoweredExprKind::CapturedLocal { .. }
+        | LoweredExprKind::Closure { .. }
         | LoweredExprKind::MatchValue(_) => false,
     }
 }
@@ -609,9 +646,9 @@ fn statement_uses_println(statement: &LoweredStatement) -> bool {
         LoweredStatement::While { condition, body } => {
             expr_uses_println(condition) || body.iter().any(statement_uses_println)
         }
-        LoweredStatement::Local { value, .. } | LoweredStatement::Expr(value) => {
-            expr_uses_println(value)
-        }
+        LoweredStatement::Local { value, .. }
+        | LoweredStatement::LocalCell { value, .. }
+        | LoweredStatement::Expr(value) => expr_uses_println(value),
         LoweredStatement::Assignment { target, value } => {
             expr_uses_println(target) || expr_uses_println(value)
         }
@@ -654,12 +691,17 @@ fn expr_uses_println(expr: &LoweredExpr) -> bool {
                         || expr_uses_println(&branch.value)
                 })
         }
-        LoweredExprKind::Call { args, .. } => args.iter().any(expr_uses_println),
+        LoweredExprKind::Call { args, .. } | LoweredExprKind::IndirectCall { args, .. } => {
+            args.iter().any(expr_uses_println)
+        }
         LoweredExprKind::Void
         | LoweredExprKind::StringLiteral(_)
         | LoweredExprKind::BoolLiteral(_)
         | LoweredExprKind::NumberLiteral(_)
         | LoweredExprKind::Local(_)
+        | LoweredExprKind::LocalCell(_)
+        | LoweredExprKind::CapturedLocal { .. }
+        | LoweredExprKind::Closure { .. }
         | LoweredExprKind::MatchValue(_) => false,
     }
 }
@@ -709,6 +751,7 @@ fn function_calls_name(function: &LoweredFunction, name: &str) -> bool {
 fn statement_calls_name(statement: &LoweredStatement, name: &str) -> bool {
     match statement {
         LoweredStatement::Local { value, .. }
+        | LoweredStatement::LocalCell { value, .. }
         | LoweredStatement::Println(value)
         | LoweredStatement::Expr(value) => expr_calls_name(value, name),
         LoweredStatement::Assignment { target, value } => {
@@ -792,11 +835,17 @@ fn expr_calls_name(expr: &LoweredExpr, name: &str) -> bool {
             name: called_name,
             args,
         } => called_name == name || args.iter().any(|arg| expr_calls_name(arg, name)),
+        LoweredExprKind::IndirectCall { callee, args } => {
+            expr_calls_name(callee, name) || args.iter().any(|arg| expr_calls_name(arg, name))
+        }
         LoweredExprKind::Void
         | LoweredExprKind::StringLiteral(_)
         | LoweredExprKind::BoolLiteral(_)
         | LoweredExprKind::NumberLiteral(_)
         | LoweredExprKind::Local(_)
+        | LoweredExprKind::LocalCell(_)
+        | LoweredExprKind::CapturedLocal { .. }
+        | LoweredExprKind::Closure { .. }
         | LoweredExprKind::MatchValue(_) => false,
     }
 }
@@ -883,9 +932,214 @@ fn push_c_type_definitions(source: &mut String, program: &LoweredProgram) {
     }
 }
 
+fn push_c_function_type_definitions(source: &mut String, program: &LoweredProgram) {
+    let mut types = Vec::new();
+    collect_program_function_types(program, &mut types);
+    types.sort_by_key(type_name_key);
+    types.dedup();
+
+    for type_ in types {
+        let LoweredType::Function {
+            params,
+            return_type,
+        } = &type_
+        else {
+            continue;
+        };
+
+        source.push_str("typedef struct ");
+        push_c_function_type_name(source, &type_);
+        source.push_str(" {\n");
+        source.push_str("    void* gust_env;\n");
+        source.push_str("    ");
+        push_c_type(source, return_type);
+        source.push_str(" (*gust_call)(void*");
+        for param in params {
+            source.push_str(", ");
+            push_c_type(source, &param.type_);
+        }
+        source.push_str(");\n} ");
+        push_c_function_type_name(source, &type_);
+        source.push_str(";\n\n");
+    }
+}
+
+fn collect_program_function_types(program: &LoweredProgram, types: &mut Vec<LoweredType>) {
+    for struct_ in &program.structs {
+        for field in &struct_.fields {
+            collect_function_type(&field.type_, types);
+        }
+    }
+    for enum_ in &program.enums {
+        for variant in &enum_.variants {
+            if let Some(payload) = &variant.payload {
+                collect_function_type(payload, types);
+            }
+        }
+    }
+    for function in &program.functions {
+        collect_function_type(&function.return_type, types);
+        for param in &function.params {
+            collect_function_type(&param.type_, types);
+        }
+        for statement in &function.statements {
+            collect_statement_function_types(statement, types);
+        }
+        collect_expr_function_types(&function.return_value, types);
+    }
+    for function in &program.closure_functions {
+        collect_function_type(&function.return_type, types);
+        for param in &function.params {
+            collect_function_type(&param.type_, types);
+        }
+        for capture in &function.captures {
+            collect_function_type(&capture.type_, types);
+        }
+        for statement in &function.statements {
+            collect_statement_function_types(statement, types);
+        }
+        collect_expr_function_types(&function.return_value, types);
+    }
+    for statement in &program.statements {
+        collect_statement_function_types(statement, types);
+    }
+}
+
+fn collect_function_type(type_: &LoweredType, types: &mut Vec<LoweredType>) {
+    if let LoweredType::Function {
+        params,
+        return_type,
+    } = type_
+    {
+        types.push(type_.clone());
+        for param in params {
+            collect_function_type(&param.type_, types);
+        }
+        collect_function_type(return_type, types);
+    }
+}
+
+fn collect_statement_function_types(statement: &LoweredStatement, types: &mut Vec<LoweredType>) {
+    match statement {
+        LoweredStatement::Local { value, .. }
+        | LoweredStatement::LocalCell { value, .. }
+        | LoweredStatement::Println(value)
+        | LoweredStatement::Expr(value) => collect_expr_function_types(value, types),
+        LoweredStatement::Assignment { target, value } => {
+            collect_expr_function_types(target, types);
+            collect_expr_function_types(value, types);
+        }
+        LoweredStatement::Return(value) => {
+            if let Some(value) = value {
+                collect_expr_function_types(value, types);
+            }
+        }
+        LoweredStatement::If {
+            condition,
+            then_branch,
+            else_branch,
+        } => {
+            collect_expr_function_types(condition, types);
+            for statement in then_branch {
+                collect_statement_function_types(statement, types);
+            }
+            if let Some(else_branch) = else_branch {
+                for statement in else_branch {
+                    collect_statement_function_types(statement, types);
+                }
+            }
+        }
+        LoweredStatement::While { condition, body } => {
+            collect_expr_function_types(condition, types);
+            for statement in body {
+                collect_statement_function_types(statement, types);
+            }
+        }
+        LoweredStatement::Match {
+            value, branches, ..
+        } => {
+            collect_expr_function_types(value, types);
+            for branch in branches {
+                for statement in &branch.statements {
+                    collect_statement_function_types(statement, types);
+                }
+            }
+        }
+        LoweredStatement::Break | LoweredStatement::Continue => {}
+    }
+}
+
+fn collect_expr_function_types(expr: &LoweredExpr, types: &mut Vec<LoweredType>) {
+    collect_function_type(&expr.type_, types);
+    match &expr.kind {
+        LoweredExprKind::StringConcat(left, right)
+        | LoweredExprKind::Logical { left, right, .. }
+        | LoweredExprKind::Arithmetic { left, right, .. }
+        | LoweredExprKind::Comparison { left, right, .. } => {
+            collect_expr_function_types(left, types);
+            collect_expr_function_types(right, types);
+        }
+        LoweredExprKind::PostfixIncrement(operand)
+        | LoweredExprKind::Not(operand)
+        | LoweredExprKind::Negate(operand)
+        | LoweredExprKind::EnumPayload {
+            object: operand, ..
+        }
+        | LoweredExprKind::FieldAccess {
+            object: operand, ..
+        }
+        | LoweredExprKind::Clone(operand)
+        | LoweredExprKind::NumberToString(operand) => collect_expr_function_types(operand, types),
+        LoweredExprKind::StructLiteral { fields, .. } => {
+            for field in fields {
+                collect_expr_function_types(&field.value, types);
+            }
+        }
+        LoweredExprKind::EnumLiteral { payload, .. } => {
+            if let Some(payload) = payload {
+                collect_expr_function_types(payload, types);
+            }
+        }
+        LoweredExprKind::Match {
+            value, branches, ..
+        } => {
+            collect_expr_function_types(value, types);
+            for branch in branches {
+                for statement in &branch.statements {
+                    collect_statement_function_types(statement, types);
+                }
+                collect_expr_function_types(&branch.value, types);
+            }
+        }
+        LoweredExprKind::Call { args, .. } => {
+            for arg in args {
+                collect_expr_function_types(arg, types);
+            }
+        }
+        LoweredExprKind::IndirectCall { callee, args } => {
+            collect_expr_function_types(callee, types);
+            for arg in args {
+                collect_expr_function_types(arg, types);
+            }
+        }
+        LoweredExprKind::Void
+        | LoweredExprKind::StringLiteral(_)
+        | LoweredExprKind::BoolLiteral(_)
+        | LoweredExprKind::NumberLiteral(_)
+        | LoweredExprKind::Local(_)
+        | LoweredExprKind::LocalCell(_)
+        | LoweredExprKind::CapturedLocal { .. }
+        | LoweredExprKind::Closure { .. }
+        | LoweredExprKind::MatchValue(_) => {}
+    }
+}
+
 fn type_definition_is_emitted(type_: &LoweredType, emitted: &HashSet<String>) -> bool {
     match type_ {
-        LoweredType::Basic(_) | LoweredType::Struct(_) | LoweredType::Void => true,
+        LoweredType::Basic(_)
+        | LoweredType::Struct(_)
+        | LoweredType::Function { .. }
+        | LoweredType::Void => true,
         LoweredType::Enum(name) => emitted.contains(&format!("enum:{name}")),
     }
 }
@@ -975,7 +1229,7 @@ fn push_c_struct_runtime_helpers(source: &mut String, program: &LoweredProgram) 
                     push_c_local_name(source, &variant.name);
                     source.push_str(", entries);\n");
                 }
-                Some(LoweredType::Basic(_)) | None => {}
+                Some(LoweredType::Basic(_)) | Some(LoweredType::Function { .. }) | None => {}
                 Some(LoweredType::Void) => {
                     unreachable!("enum variants cannot contain void")
                 }
@@ -1163,6 +1417,77 @@ fn push_c_function_signature(source: &mut String, function: &LoweredFunction) {
     source.push(')');
 }
 
+fn push_c_closure_env_structs(source: &mut String, functions: &[LoweredClosureFunction]) {
+    for function in functions {
+        if function.captures.is_empty() {
+            continue;
+        }
+
+        source.push_str("typedef struct ");
+        source.push_str(&closure_env_type_name(&function.name));
+        source.push_str(" {\n");
+        for capture in &function.captures {
+            source.push_str("    ");
+            push_c_type(source, &capture.type_);
+            source.push_str("* ");
+            push_c_local_name(source, &capture.name);
+            source.push_str(";\n");
+        }
+        source.push_str("} ");
+        source.push_str(&closure_env_type_name(&function.name));
+        source.push_str(";\n\n");
+    }
+}
+
+fn push_c_closure_function(
+    source: &mut String,
+    function: &LoweredClosureFunction,
+    structs: &[LoweredStruct],
+) {
+    source.push_str("// Gust closure: ");
+    source.push_str(&function.name);
+    source.push('\n');
+    push_c_closure_function_signature(source, function);
+    source.push_str(" {\n");
+    if !function.captures.is_empty() {
+        source.push_str("    ");
+        source.push_str(&closure_env_type_name(&function.name));
+        source.push_str("* gust_env = gust_raw_env;\n");
+    } else {
+        source.push_str("    (void)gust_raw_env;\n");
+    }
+
+    for statement in &function.statements {
+        push_c_statement(source, statement, 1, structs);
+    }
+
+    if function.return_type != LoweredType::Void && function.return_value.type_ != LoweredType::Void
+    {
+        source.push_str("    return ");
+        push_c_value(source, &function.return_value, structs);
+        source.push_str(";\n");
+    }
+
+    source.push_str("}\n");
+}
+
+fn push_c_closure_function_signature(source: &mut String, function: &LoweredClosureFunction) {
+    source.push_str("static ");
+    push_c_type(source, &function.return_type);
+    source.push(' ');
+    push_c_function_name(source, &function.name);
+    source.push_str("(void* gust_raw_env");
+
+    for param in &function.params {
+        source.push_str(", ");
+        push_c_type(source, &param.type_);
+        source.push(' ');
+        push_c_local_name(source, &param.name);
+    }
+
+    source.push(')');
+}
+
 fn push_c_statement(
     source: &mut String,
     statement: &LoweredStatement,
@@ -1174,6 +1499,21 @@ fn push_c_statement(
             push_c_indent(source, indent);
             push_c_type(source, &value.type_);
             source.push(' ');
+            push_c_local_name(source, name);
+            source.push_str(" = ");
+            push_c_value(source, value, structs);
+            source.push_str(";\n");
+        }
+        LoweredStatement::LocalCell { name, value } => {
+            push_c_indent(source, indent);
+            push_c_type(source, &value.type_);
+            source.push_str("* ");
+            push_c_local_name(source, name);
+            source.push_str(" = gust_rt_alloc(sizeof(");
+            push_c_type(source, &value.type_);
+            source.push_str("));\n");
+            push_c_indent(source, indent);
+            source.push('*');
             push_c_local_name(source, name);
             source.push_str(" = ");
             push_c_value(source, value, structs);
@@ -1200,6 +1540,8 @@ fn push_c_statement(
                 source.push_str(");\n");
             }
             LoweredExprKind::StringConcat(_, _)
+            | LoweredExprKind::LocalCell(_)
+            | LoweredExprKind::CapturedLocal { .. }
             | LoweredExprKind::Not(_)
             | LoweredExprKind::Logical { .. }
             | LoweredExprKind::Comparison { .. }
@@ -1208,7 +1550,8 @@ fn push_c_statement(
             | LoweredExprKind::MatchValue(_)
             | LoweredExprKind::Match { .. }
             | LoweredExprKind::NumberToString(_)
-            | LoweredExprKind::Call { .. } => {
+            | LoweredExprKind::Call { .. }
+            | LoweredExprKind::IndirectCall { .. } => {
                 push_c_indent(source, indent);
                 source.push_str("gust_rt_io_println(");
                 push_c_value(source, value, structs);
@@ -1222,6 +1565,7 @@ fn push_c_statement(
             | LoweredExprKind::Arithmetic { .. }
             | LoweredExprKind::StructLiteral { .. }
             | LoweredExprKind::Clone(_)
+            | LoweredExprKind::Closure { .. }
             | LoweredExprKind::EnumLiteral { .. } => {
                 unreachable!("println only lowers String values")
             }
@@ -1417,6 +1761,50 @@ fn push_c_enum_variant_tag(source: &mut String, enum_name: &str, variant: &str) 
     push_c_identifier_suffix(source, variant);
 }
 
+fn push_c_function_type_name(source: &mut String, type_: &LoweredType) {
+    source.push_str("gust_fn_type_");
+    source.push_str(&format!("{:08x}", stable_name_hash(&type_name_key(type_))));
+}
+
+fn closure_env_type_name(name: &str) -> String {
+    format!(
+        "gust_env_{:08x}_{}",
+        stable_name_hash(name),
+        sanitized_name(name)
+    )
+}
+
+fn sanitized_name(name: &str) -> String {
+    let mut result = String::new();
+    push_c_identifier_suffix(&mut result, name);
+    result
+}
+
+fn type_name_key(type_: &LoweredType) -> String {
+    match type_ {
+        LoweredType::Basic(type_) => type_.name().to_string(),
+        LoweredType::Struct(name) | LoweredType::Enum(name) => name.clone(),
+        LoweredType::Function {
+            params,
+            return_type,
+        } => {
+            let params = params
+                .iter()
+                .map(|param| {
+                    if param.mutable {
+                        format!("mut {}", type_name_key(&param.type_))
+                    } else {
+                        type_name_key(&param.type_)
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join(",");
+            format!("fn({params}):{}", type_name_key(return_type))
+        }
+        LoweredType::Void => "void".to_string(),
+    }
+}
+
 fn stable_name_hash(name: &str) -> u32 {
     let mut hash = 0x811c9dc5_u32;
 
@@ -1445,6 +1833,7 @@ fn push_c_type(source: &mut String, type_: &LoweredType) {
             source.push('*');
         }
         LoweredType::Enum(name) => push_c_enum_name(source, name),
+        LoweredType::Function { .. } => push_c_function_type_name(source, type_),
         LoweredType::Void => source.push_str("void"),
     }
 }
@@ -1613,6 +2002,18 @@ fn push_c_value(source: &mut String, value: &LoweredExpr, structs: &[LoweredStru
             push_c_number_literal(source, literal, &value.type_)
         }
         LoweredExprKind::Local(name) => push_c_local_name(source, name),
+        LoweredExprKind::LocalCell(name) => {
+            source.push_str("(*");
+            push_c_local_name(source, name);
+            source.push(')');
+        }
+        LoweredExprKind::CapturedLocal { env_name, name } => {
+            source.push_str("(*");
+            push_c_local_name(source, env_name);
+            source.push_str("->");
+            push_c_local_name(source, name);
+            source.push(')');
+        }
         LoweredExprKind::PostfixIncrement(target) => {
             source.push('(');
             push_c_value(source, target, structs);
@@ -1838,6 +2239,48 @@ fn push_c_value(source: &mut String, value: &LoweredExpr, structs: &[LoweredStru
                 push_c_value(source, arg, structs);
             }
 
+            source.push(')');
+        }
+        LoweredExprKind::Closure { name, captures } => {
+            let LoweredType::Function { .. } = &value.type_ else {
+                unreachable!("closure expressions must have function type")
+            };
+            if captures.is_empty() {
+                source.push('(');
+                push_c_type(source, &value.type_);
+                source.push_str("){ .gust_env = NULL, .gust_call = ");
+                push_c_function_name(source, name);
+                source.push_str(" }");
+            } else {
+                let env_type = closure_env_type_name(name);
+                source.push_str("({\n    ");
+                source.push_str(&env_type);
+                source.push_str("* gust_env = gust_rt_alloc(sizeof(");
+                source.push_str(&env_type);
+                source.push_str("));\n");
+                for capture in captures {
+                    source.push_str("    gust_env->");
+                    push_c_local_name(source, &capture.name);
+                    source.push_str(" = ");
+                    push_c_local_name(source, &capture.name);
+                    source.push_str(";\n");
+                }
+                source.push_str("    (");
+                push_c_type(source, &value.type_);
+                source.push_str("){ .gust_env = gust_env, .gust_call = ");
+                push_c_function_name(source, name);
+                source.push_str(" };\n})");
+            }
+        }
+        LoweredExprKind::IndirectCall { callee, args } => {
+            push_c_value(source, callee, structs);
+            source.push_str(".gust_call(");
+            push_c_value(source, callee, structs);
+            source.push_str(".gust_env");
+            for arg in args {
+                source.push_str(", ");
+                push_c_value(source, arg, structs);
+            }
             source.push(')');
         }
     }

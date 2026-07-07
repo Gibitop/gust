@@ -203,6 +203,7 @@ impl Monomorphizer {
                     self.self_types.push(TypeRef {
                         name: specialized.name.clone(),
                         args: Vec::new(),
+                        function: None,
                         span: specialized.span,
                     });
                     for member in &mut specialized.members {
@@ -385,6 +386,7 @@ impl Monomorphizer {
                 self.self_types.push(TypeRef {
                     name: item.name.clone(),
                     args: Vec::new(),
+                    function: None,
                     span: item.span,
                 });
                 for member in &mut item.members {
@@ -925,6 +927,14 @@ impl Monomorphizer {
     }
 
     fn rewrite_type(&mut self, type_ref: &mut TypeRef, substitutions: &HashMap<String, TypeRef>) {
+        if let Some(function) = &mut type_ref.function {
+            for param in &mut function.params {
+                self.rewrite_type(&mut param.type_ref, substitutions);
+            }
+            self.rewrite_type(&mut function.return_type, substitutions);
+            return;
+        }
+
         if type_ref.args.is_empty()
             && let Some(substitution) = substitutions.get(&type_ref.name)
         {
@@ -1015,6 +1025,7 @@ impl Monomorphizer {
         let self_type = TypeRef {
             name: self_type.to_string(),
             args: Vec::new(),
+            function: None,
             span: function.span,
         };
         let mut scope = function
@@ -1413,6 +1424,7 @@ impl Monomorphizer {
         let inferred = |name: &str| TypeRef {
             name: name.to_string(),
             args: Vec::new(),
+            function: None,
             span: expr.span,
         };
         match &expr.kind {
@@ -1442,6 +1454,7 @@ impl Monomorphizer {
                     return Some(TypeRef {
                         name: name.clone(),
                         args,
+                        function: None,
                         span: expr.span,
                     });
                 }
@@ -1451,6 +1464,7 @@ impl Monomorphizer {
                     Some(TypeRef {
                         name: name.clone(),
                         args: args.clone(),
+                        function: None,
                         span: expr.span,
                     })
                 }
@@ -1468,6 +1482,7 @@ impl Monomorphizer {
                     Some(TypeRef {
                         name: name.clone(),
                         args: args.clone(),
+                        function: None,
                         span: expr.span,
                     })
                 }
@@ -1486,6 +1501,7 @@ impl Monomorphizer {
                     return Some(TypeRef {
                         name: enum_name.clone(),
                         args: args.clone(),
+                        function: None,
                         span: expr.span,
                     });
                 }
@@ -1513,6 +1529,7 @@ impl Monomorphizer {
                                 return Some(TypeRef {
                                     name: enum_name.clone(),
                                     args: type_args,
+                                    function: None,
                                     span: expr.span,
                                 });
                             }
@@ -1524,6 +1541,7 @@ impl Monomorphizer {
                             return Some(TypeRef {
                                 name: enum_name.clone(),
                                 args: args.clone(),
+                                function: None,
                                 span: expr.span,
                             });
                         }
@@ -1648,6 +1666,7 @@ impl Monomorphizer {
             return TypeRef {
                 name: name.clone(),
                 args: args.clone(),
+                function: None,
                 span: type_ref.span,
             };
         }
@@ -2226,6 +2245,20 @@ fn substitute_type(type_ref: &TypeRef, substitutions: &HashMap<String, TypeRef>)
             .iter()
             .map(|arg| substitute_type(arg, substitutions))
             .collect(),
+        function: type_ref
+            .function
+            .as_ref()
+            .map(|function| crate::ast::FunctionTypeRef {
+                params: function
+                    .params
+                    .iter()
+                    .map(|param| crate::ast::FunctionTypeParam {
+                        mutable: param.mutable,
+                        type_ref: substitute_type(&param.type_ref, substitutions),
+                    })
+                    .collect(),
+                return_type: Box::new(substitute_type(&function.return_type, substitutions)),
+            }),
         span: type_ref.span,
     }
 }

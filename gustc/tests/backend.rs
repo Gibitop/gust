@@ -426,6 +426,70 @@ fn main() {
 }
 
 #[test]
+fn inferred_return_function_values_lower_and_emit_c() {
+    let result = check_source(
+        r#"fn apply(value: i32, f: fn(i32): i32) {
+    return f(value)
+}
+
+fn addOne(value: i32) {
+    return value + 1
+}
+
+fn main() {
+    if apply(41, addOne) == 42 {
+        io.println("function value works")
+    }
+}"#,
+    );
+
+    assert!(
+        !result.has_errors(),
+        "expected no frontend errors, got {:?}",
+        result.diagnostics
+    );
+
+    let lowered = lower_program(&result.program).expect("function value should lower");
+    let source = emit_c(&lowered);
+
+    assert!(source.contains("function value works"));
+    assert!(source.contains(".gust_call("));
+}
+
+#[test]
+fn incompatible_inferred_return_function_values_are_lowering_errors() {
+    let result = check_source(
+        r#"fn useString(f: fn(i32): String): String {
+    return f(1)
+}
+
+fn addOne(value: i32) {
+    return value + 1
+}
+
+fn main() {
+    io.println(useString(addOne))
+}"#,
+    );
+
+    assert!(
+        !result.has_errors(),
+        "expected frontend to defer inferred return mismatch, got {:?}",
+        result.diagnostics
+    );
+
+    let diagnostics =
+        lower_program(&result.program).expect_err("inferred function return should mismatch");
+
+    assert!(
+        diagnostics.iter().any(|diagnostic| diagnostic
+            .message
+            .contains("expected value of type `fn(i32): String`, got `fn(i32): i32`")),
+        "expected inferred function return mismatch, got {diagnostics:?}"
+    );
+}
+
+#[test]
 fn inferred_arrow_void_and_early_return_helpers_emit_c() {
     let result = check_source(
         r#"fn inferred(name: String) {

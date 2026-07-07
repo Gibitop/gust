@@ -1449,6 +1449,31 @@ fn main() {}
 }
 
 #[test]
+fn inferred_return_function_values_validate_with_context() {
+    let result = check_source(
+        r#"
+fn apply(value: i32, f: fn(i32): i32) {
+    return f(value)
+}
+
+fn addOne(value: i32) {
+    return value + 1
+}
+
+fn main() {
+    let result = apply(41, addOne)
+}
+"#,
+    );
+
+    assert!(
+        !result.has_errors(),
+        "expected inferred return function value to validate, got {:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
 fn unknown_call_callee_suppresses_initializer_mismatch() {
     let result = check_source(
         r#"

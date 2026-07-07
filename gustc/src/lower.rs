@@ -1,4 +1,5 @@
-use std::collections::HashMap;
+use std::cell::RefCell;
+use std::collections::{HashMap, HashSet};
 
 use crate::ast::{
     BasicType, BinaryOp, Block, ElseBranch, Expr, ExprKind, FunctionBody, FunctionDecl, Item,
@@ -13,6 +14,7 @@ pub struct LoweredProgram {
     pub structs: Vec<LoweredStruct>,
     pub enums: Vec<LoweredEnum>,
     pub functions: Vec<LoweredFunction>,
+    pub closure_functions: Vec<LoweredClosureFunction>,
     pub statements: Vec<LoweredStatement>,
 }
 
@@ -56,8 +58,28 @@ pub struct LoweredParam {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LoweredClosureFunction {
+    pub name: String,
+    pub captures: Vec<LoweredClosureCapture>,
+    pub params: Vec<LoweredParam>,
+    pub return_type: LoweredType,
+    pub statements: Vec<LoweredStatement>,
+    pub return_value: LoweredExpr,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LoweredClosureCapture {
+    pub name: String,
+    pub type_: LoweredType,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LoweredStatement {
     Local {
+        name: String,
+        value: LoweredExpr,
+    },
+    LocalCell {
         name: String,
         value: LoweredExpr,
     },
@@ -97,7 +119,17 @@ pub enum LoweredType {
     Basic(BasicType),
     Struct(String),
     Enum(String),
+    Function {
+        params: Vec<LoweredFunctionTypeParam>,
+        return_type: Box<LoweredType>,
+    },
     Void,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LoweredFunctionTypeParam {
+    pub type_: LoweredType,
+    pub mutable: bool,
 }
 
 impl LoweredType {
@@ -106,6 +138,23 @@ impl LoweredType {
             LoweredType::Basic(type_) => type_.name().to_string(),
             LoweredType::Struct(name) => name.clone(),
             LoweredType::Enum(name) => name.clone(),
+            LoweredType::Function {
+                params,
+                return_type,
+            } => {
+                let params = params
+                    .iter()
+                    .map(|param| {
+                        if param.mutable {
+                            format!("mut {}", param.type_.name())
+                        } else {
+                            param.type_.name()
+                        }
+                    })
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!("fn({params}): {}", return_type.name())
+            }
             LoweredType::Void => "void".to_string(),
         }
     }
@@ -118,6 +167,11 @@ pub enum LoweredExprKind {
     BoolLiteral(bool),
     NumberLiteral(String),
     Local(String),
+    LocalCell(String),
+    CapturedLocal {
+        env_name: String,
+        name: String,
+    },
     PostfixIncrement(Box<LoweredExpr>),
     StringConcat(Box<LoweredExpr>, Box<LoweredExpr>),
     Not(Box<LoweredExpr>),
@@ -164,6 +218,14 @@ pub enum LoweredExprKind {
     NumberToString(Box<LoweredExpr>),
     Call {
         name: String,
+        args: Vec<LoweredExpr>,
+    },
+    Closure {
+        name: String,
+        captures: Vec<LoweredClosureCapture>,
+    },
+    IndirectCall {
+        callee: Box<LoweredExpr>,
         args: Vec<LoweredExpr>,
     },
 }
@@ -213,6 +275,19 @@ struct LoweringLocal {
     type_: LoweredType,
     mutable: bool,
     replacement: Option<LoweredExpr>,
+    captured: bool,
+}
+
+#[derive(Debug, Default)]
+struct LoweringContext {
+    diagnostics: Vec<Diagnostic>,
+    closure_functions: Vec<LoweredClosureFunction>,
+    next_closure_id: usize,
+}
+
+thread_local! {
+    static CLOSURE_LOWERING: RefCell<LoweringContext> = RefCell::new(LoweringContext::default());
+    static CAPTURED_NAMES: RefCell<HashSet<String>> = RefCell::new(HashSet::new());
 }
 
 fn is_self_param(param: &crate::ast::Param) -> bool {
@@ -282,6 +357,8 @@ pub fn lower_program(program: &Program) -> Result<LoweredProgram, Vec<Diagnostic
 }
 
 fn lower_monomorphized_program(program: &Program) -> Result<LoweredProgram, Vec<Diagnostic>> {
+    CLOSURE_LOWERING.with(|state| *state.borrow_mut() = LoweringContext::default());
+
     let mut diagnostics = Vec::new();
     let mut main = None;
     let mut structs = HashMap::new();
@@ -587,6 +664,14 @@ fn lower_monomorphized_program(program: &Program) -> Result<LoweredProgram, Vec<
     }
 
     let statements = lower_main(main, &signatures, &structs, &enums, &mut diagnostics);
+    let (closure_functions, closure_diagnostics) = CLOSURE_LOWERING.with(|state| {
+        let mut state = state.borrow_mut();
+        (
+            std::mem::take(&mut state.closure_functions),
+            std::mem::take(&mut state.diagnostics),
+        )
+    });
+    diagnostics.extend(closure_diagnostics);
 
     if diagnostics.is_empty() {
         let mut structs = structs.into_values().collect::<Vec<_>>();
@@ -598,6 +683,7 @@ fn lower_monomorphized_program(program: &Program) -> Result<LoweredProgram, Vec<
             structs,
             enums,
             functions,
+            closure_functions,
             statements,
         })
     } else {
@@ -794,6 +880,44 @@ fn lower_value_type_ref_in_context(
     diagnostics: &mut Vec<Diagnostic>,
     message: &str,
 ) -> Option<LoweredType> {
+    if let Some(function) = &type_ref.function {
+        let mut params = Vec::new();
+        let mut can_lower = true;
+        for param in &function.params {
+            let Some(type_) = lower_value_type_ref_in_context(
+                &param.type_ref,
+                self_type,
+                structs,
+                enums,
+                diagnostics,
+                message,
+            ) else {
+                can_lower = false;
+                continue;
+            };
+            params.push(LoweredFunctionTypeParam {
+                type_,
+                mutable: param.mutable,
+            });
+        }
+        let return_type = lower_value_type_ref_in_context(
+            &function.return_type,
+            self_type,
+            structs,
+            enums,
+            diagnostics,
+            message,
+        );
+        return if can_lower {
+            return_type.map(|return_type| LoweredType::Function {
+                params,
+                return_type: Box::new(return_type),
+            })
+        } else {
+            None
+        };
+    }
+
     if type_ref.name == "Self" && type_ref.args.is_empty() {
         return self_type.cloned().or_else(|| {
             diagnostics.push(Diagnostic::error(
@@ -814,6 +938,33 @@ fn lower_value_type_ref(
     diagnostics: &mut Vec<Diagnostic>,
     message: &str,
 ) -> Option<LoweredType> {
+    if let Some(function) = &type_ref.function {
+        let mut params = Vec::new();
+        let mut can_lower = true;
+        for param in &function.params {
+            let Some(type_) =
+                lower_value_type_ref(&param.type_ref, structs, enums, diagnostics, message)
+            else {
+                can_lower = false;
+                continue;
+            };
+            params.push(LoweredFunctionTypeParam {
+                type_,
+                mutable: param.mutable,
+            });
+        }
+        let return_type =
+            lower_value_type_ref(&function.return_type, structs, enums, diagnostics, message);
+        return if can_lower {
+            return_type.map(|return_type| LoweredType::Function {
+                params,
+                return_type: Box::new(return_type),
+            })
+        } else {
+            None
+        };
+    }
+
     if !type_ref.args.is_empty() {
         diagnostics.push(Diagnostic::error(
             type_ref.span,
@@ -867,13 +1018,7 @@ fn infer_function_return_type(
         let Some(type_ref) = param.type_ref.as_ref() else {
             return Ok(None);
         };
-        let type_ = if let Some(type_) = BasicType::from_name(&type_ref.name) {
-            LoweredType::Basic(type_)
-        } else if let Some(struct_) = structs.get(&type_ref.name) {
-            LoweredType::Struct(struct_.name.clone())
-        } else if let Some(enum_) = enums.get(&type_ref.name) {
-            LoweredType::Enum(enum_.name.clone())
-        } else {
+        let Some(type_) = quiet_lower_type_ref(type_ref, &locals, structs, enums) else {
             return Ok(None);
         };
         locals.insert(param.name.clone(), type_);
@@ -1086,7 +1231,12 @@ fn infer_expr_type(
         } else {
             BasicType::I32
         })),
-        ExprKind::Identifier(name) => locals.get(name).cloned(),
+        ExprKind::Identifier(name) => locals.get(name).cloned().or_else(|| {
+            let signature = signatures.get(name)?;
+            signature
+                .return_type_known
+                .then(|| function_type_from_signature(signature))
+        }),
         ExprKind::StructInit { name, .. } => {
             let name = if name == "Self" {
                 let LoweredType::Struct(name) = locals.get("Self")? else {
@@ -1151,6 +1301,12 @@ fn infer_expr_type(
                     .map(|signature| signature.return_type.clone());
             }
 
+            if let Some(LoweredType::Function { return_type, .. }) =
+                infer_expr_type(callee, locals, signatures, structs, enums)
+            {
+                return Some(*return_type);
+            }
+
             let ExprKind::Identifier(name) = &callee.kind else {
                 return None;
             };
@@ -1160,10 +1316,10 @@ fn infer_expr_type(
                 .filter(|signature| signature.return_type_known)
                 .map(|signature| signature.return_type.clone())
         }
-        ExprKind::Array(_)
-        | ExprKind::GenericType { .. }
-        | ExprKind::Lambda(_)
-        | ExprKind::Missing => None,
+        ExprKind::Array(_) | ExprKind::GenericType { .. } | ExprKind::Missing => None,
+        ExprKind::Lambda(function) => {
+            infer_lambda_expr_type(function, locals, signatures, structs, enums)
+        }
         ExprKind::Match { branches, .. } => branches.iter().find_map(|branch| {
             let MatchBranchBody::Expr(expr) = &branch.body else {
                 return None;
@@ -1173,6 +1329,113 @@ fn infer_expr_type(
         ExprKind::PostfixIncrement(target) => {
             infer_expr_type(target, locals, signatures, structs, enums)
         }
+    }
+}
+
+fn function_type_from_signature(signature: &FunctionSignature) -> LoweredType {
+    LoweredType::Function {
+        params: signature
+            .params
+            .iter()
+            .map(|param| LoweredFunctionTypeParam {
+                type_: param.type_.clone(),
+                mutable: param.mutable,
+            })
+            .collect(),
+        return_type: Box::new(signature.return_type.clone()),
+    }
+}
+
+fn infer_lambda_expr_type(
+    function: &FunctionDecl,
+    outer_locals: &HashMap<String, LoweredType>,
+    signatures: &HashMap<String, FunctionSignature>,
+    structs: &HashMap<String, LoweredStruct>,
+    enums: &HashMap<String, LoweredEnum>,
+) -> Option<LoweredType> {
+    let mut locals = outer_locals.clone();
+    let mut params = Vec::new();
+    for param in &function.params {
+        let type_ = quiet_lower_type_ref(param.type_ref.as_ref()?, outer_locals, structs, enums)?;
+        locals.insert(param.name.clone(), type_.clone());
+        params.push(LoweredFunctionTypeParam {
+            type_,
+            mutable: param.mutable,
+        });
+    }
+
+    let return_type = if let Some(type_ref) = &function.return_type {
+        quiet_lower_type_ref(type_ref, outer_locals, structs, enums)?
+    } else {
+        match &function.body {
+            FunctionBody::Expr(expr) => infer_expr_type(expr, &locals, signatures, structs, enums)?,
+            FunctionBody::Block(block) => {
+                let mut return_type = None;
+                let mut has_unresolved_value_return = false;
+                infer_block_return_types(
+                    block,
+                    &mut locals,
+                    signatures,
+                    structs,
+                    enums,
+                    &mut return_type,
+                    &mut has_unresolved_value_return,
+                )
+                .ok()?;
+                if has_unresolved_value_return {
+                    return None;
+                }
+                return_type.unwrap_or(LoweredType::Void)
+            }
+        }
+    };
+
+    Some(LoweredType::Function {
+        params,
+        return_type: Box::new(return_type),
+    })
+}
+
+fn quiet_lower_type_ref(
+    type_ref: &TypeRef,
+    locals: &HashMap<String, LoweredType>,
+    structs: &HashMap<String, LoweredStruct>,
+    enums: &HashMap<String, LoweredEnum>,
+) -> Option<LoweredType> {
+    if let Some(function) = &type_ref.function {
+        let params = function
+            .params
+            .iter()
+            .map(|param| {
+                Some(LoweredFunctionTypeParam {
+                    type_: quiet_lower_type_ref(&param.type_ref, locals, structs, enums)?,
+                    mutable: param.mutable,
+                })
+            })
+            .collect::<Option<Vec<_>>>()?;
+        let return_type = quiet_lower_type_ref(&function.return_type, locals, structs, enums)?;
+        return Some(LoweredType::Function {
+            params,
+            return_type: Box::new(return_type),
+        });
+    }
+
+    if !type_ref.args.is_empty() {
+        return None;
+    }
+    if type_ref.name == "Self" {
+        return locals.get("Self").cloned();
+    }
+    if let Some(type_) = BasicType::from_name(&type_ref.name) {
+        Some(LoweredType::Basic(type_))
+    } else if type_ref.name == "void" {
+        Some(LoweredType::Void)
+    } else if structs.contains_key(&type_ref.name) {
+        Some(LoweredType::Struct(type_ref.name.clone()))
+    } else if enums.contains_key(&type_ref.name) {
+        Some(LoweredType::Enum(type_ref.name.clone()))
+    } else {
+        None
     }
 }
 
@@ -1259,7 +1522,10 @@ fn lowered_expression_has_mutable_capability(
     structs: &HashMap<String, LoweredStruct>,
 ) -> bool {
     match &expr.kind {
-        LoweredExprKind::Local(name) => locals.get(name).is_some_and(|local| local.mutable),
+        LoweredExprKind::Local(name) | LoweredExprKind::LocalCell(name) => {
+            locals.get(name).is_some_and(|local| local.mutable)
+        }
+        LoweredExprKind::CapturedLocal { .. } => true,
         LoweredExprKind::FieldAccess { object, .. } => {
             lowered_expression_has_mutable_capability(object, locals, signatures, structs)
         }
@@ -1294,6 +1560,7 @@ fn lowered_expression_has_mutable_capability(
                         )
                 })
         }),
+        LoweredExprKind::IndirectCall { .. } => matches!(expr.type_, LoweredType::Struct(_)),
         LoweredExprKind::StringLiteral(_)
         | LoweredExprKind::BoolLiteral(_)
         | LoweredExprKind::NumberLiteral(_)
@@ -1303,13 +1570,329 @@ fn lowered_expression_has_mutable_capability(
         | LoweredExprKind::Arithmetic { .. }
         | LoweredExprKind::Logical { .. }
         | LoweredExprKind::Comparison { .. }
-        | LoweredExprKind::NumberToString(_) => true,
+        | LoweredExprKind::NumberToString(_)
+        | LoweredExprKind::Closure { .. } => true,
         LoweredExprKind::Void
         | LoweredExprKind::PostfixIncrement(_)
         | LoweredExprKind::EnumLiteral { .. }
         | LoweredExprKind::EnumPayload { .. }
         | LoweredExprKind::MatchValue(_)
         | LoweredExprKind::Match { .. } => false,
+    }
+}
+
+fn captured_let_names(function: &FunctionDecl) -> HashSet<String> {
+    let mut captured = HashSet::new();
+    let mut available = HashSet::new();
+    match &function.body {
+        FunctionBody::Block(block) => collect_block_captures(block, &mut available, &mut captured),
+        FunctionBody::Expr(expr) => collect_expr_captures(expr, &available, &mut captured),
+    }
+    captured
+}
+
+fn collect_block_captures(
+    block: &Block,
+    available: &mut HashSet<String>,
+    captured: &mut HashSet<String>,
+) {
+    for statement in &block.statements {
+        match &statement.kind {
+            StmtKind::Let { name, value, .. } => {
+                if let Some(value) = value {
+                    collect_expr_captures(value, available, captured);
+                }
+                available.insert(name.clone());
+            }
+            StmtKind::Assign { target, value, .. } => {
+                collect_expr_captures(target, available, captured);
+                collect_expr_captures(value, available, captured);
+            }
+            StmtKind::Return { value } => {
+                if let Some(value) = value.as_ref() {
+                    collect_expr_captures(value, available, captured);
+                }
+            }
+            StmtKind::Expr(value) => collect_expr_captures(value, available, captured),
+            StmtKind::If {
+                condition,
+                then_branch,
+                else_branch,
+            } => {
+                collect_expr_captures(condition, available, captured);
+                let mut branch_available = available.clone();
+                collect_block_captures(then_branch, &mut branch_available, captured);
+                if let Some(else_branch) = else_branch {
+                    let mut branch_available = available.clone();
+                    match else_branch {
+                        ElseBranch::Block(block) => {
+                            collect_block_captures(block, &mut branch_available, captured)
+                        }
+                        ElseBranch::If(statement) => {
+                            collect_statement_captures(statement, &mut branch_available, captured)
+                        }
+                    }
+                }
+            }
+            StmtKind::While { condition, body } => {
+                collect_expr_captures(condition, available, captured);
+                let mut body_available = available.clone();
+                collect_block_captures(body, &mut body_available, captured);
+            }
+            StmtKind::For { iterable, body, .. } => {
+                collect_expr_captures(iterable, available, captured);
+                let mut body_available = available.clone();
+                collect_block_captures(body, &mut body_available, captured);
+            }
+            StmtKind::Break | StmtKind::Continue => {}
+        }
+    }
+}
+
+fn collect_statement_captures(
+    statement: &Stmt,
+    available: &mut HashSet<String>,
+    captured: &mut HashSet<String>,
+) {
+    let block = Block {
+        statements: vec![statement.clone()],
+        span: statement.span,
+    };
+    collect_block_captures(&block, available, captured);
+}
+
+fn collect_expr_captures(expr: &Expr, available: &HashSet<String>, captured: &mut HashSet<String>) {
+    match &expr.kind {
+        ExprKind::Lambda(function) => {
+            let mut lambda_locals = HashSet::new();
+            for param in &function.params {
+                lambda_locals.insert(param.name.clone());
+            }
+            collect_lambda_body_captures(function, available, &mut lambda_locals, captured);
+        }
+        ExprKind::Call { callee, args } => {
+            collect_expr_captures(callee, available, captured);
+            for arg in args {
+                collect_expr_captures(arg, available, captured);
+            }
+        }
+        ExprKind::Member { object, .. }
+        | ExprKind::Unary {
+            operand: object, ..
+        }
+        | ExprKind::PostfixIncrement(object) => collect_expr_captures(object, available, captured),
+        ExprKind::Binary { left, right, .. } => {
+            collect_expr_captures(left, available, captured);
+            collect_expr_captures(right, available, captured);
+        }
+        ExprKind::Array(items) => {
+            for item in items {
+                collect_expr_captures(item, available, captured);
+            }
+        }
+        ExprKind::StructInit { fields, .. } => {
+            for field in fields {
+                collect_expr_captures(&field.value, available, captured);
+            }
+        }
+        ExprKind::Match { value, branches } => {
+            collect_expr_captures(value, available, captured);
+            for branch in branches {
+                match &branch.body {
+                    MatchBranchBody::Expr(expr) => collect_expr_captures(expr, available, captured),
+                    MatchBranchBody::Block(block) => {
+                        let mut branch_available = available.clone();
+                        collect_block_captures(block, &mut branch_available, captured);
+                    }
+                }
+            }
+        }
+        ExprKind::Identifier(_)
+        | ExprKind::Number(_)
+        | ExprKind::String(_)
+        | ExprKind::Bool(_)
+        | ExprKind::GenericType { .. }
+        | ExprKind::Missing => {}
+    }
+}
+
+fn collect_lambda_body_captures(
+    function: &FunctionDecl,
+    available: &HashSet<String>,
+    lambda_locals: &mut HashSet<String>,
+    captured: &mut HashSet<String>,
+) {
+    match &function.body {
+        FunctionBody::Expr(expr) => {
+            collect_lambda_expr_captures(expr, available, lambda_locals, captured)
+        }
+        FunctionBody::Block(block) => {
+            for statement in &block.statements {
+                match &statement.kind {
+                    StmtKind::Let { name, value, .. } => {
+                        if let Some(value) = value {
+                            collect_lambda_expr_captures(value, available, lambda_locals, captured);
+                        }
+                        lambda_locals.insert(name.clone());
+                    }
+                    StmtKind::Assign { target, value, .. } => {
+                        collect_lambda_expr_captures(target, available, lambda_locals, captured);
+                        collect_lambda_expr_captures(value, available, lambda_locals, captured);
+                    }
+                    StmtKind::Return { value } => {
+                        if let Some(value) = value.as_ref() {
+                            collect_lambda_expr_captures(value, available, lambda_locals, captured);
+                        }
+                    }
+                    StmtKind::Expr(value) => {
+                        collect_lambda_expr_captures(value, available, lambda_locals, captured)
+                    }
+                    StmtKind::If {
+                        condition,
+                        then_branch,
+                        else_branch,
+                    } => {
+                        collect_lambda_expr_captures(condition, available, lambda_locals, captured);
+                        let mut branch_locals = lambda_locals.clone();
+                        collect_lambda_block_captures(
+                            then_branch,
+                            available,
+                            &mut branch_locals,
+                            captured,
+                        );
+                        if let Some(else_branch) = else_branch {
+                            let mut branch_locals = lambda_locals.clone();
+                            match else_branch {
+                                ElseBranch::Block(block) => collect_lambda_block_captures(
+                                    block,
+                                    available,
+                                    &mut branch_locals,
+                                    captured,
+                                ),
+                                ElseBranch::If(statement) => {
+                                    let block = Block {
+                                        statements: vec![(**statement).clone()],
+                                        span: statement.span,
+                                    };
+                                    collect_lambda_block_captures(
+                                        &block,
+                                        available,
+                                        &mut branch_locals,
+                                        captured,
+                                    );
+                                }
+                            }
+                        }
+                    }
+                    StmtKind::While { condition, body } => {
+                        collect_lambda_expr_captures(condition, available, lambda_locals, captured);
+                        let mut body_locals = lambda_locals.clone();
+                        collect_lambda_block_captures(body, available, &mut body_locals, captured);
+                    }
+                    StmtKind::For {
+                        iterable,
+                        body,
+                        name,
+                    } => {
+                        collect_lambda_expr_captures(iterable, available, lambda_locals, captured);
+                        let mut body_locals = lambda_locals.clone();
+                        body_locals.insert(name.clone());
+                        collect_lambda_block_captures(body, available, &mut body_locals, captured);
+                    }
+                    StmtKind::Break | StmtKind::Continue => {}
+                }
+            }
+        }
+    }
+}
+
+fn collect_lambda_block_captures(
+    block: &Block,
+    available: &HashSet<String>,
+    lambda_locals: &mut HashSet<String>,
+    captured: &mut HashSet<String>,
+) {
+    let function = FunctionDecl {
+        name: None,
+        type_params: Vec::new(),
+        params: Vec::new(),
+        return_type: None,
+        body: FunctionBody::Block(block.clone()),
+        span: block.span,
+    };
+    collect_lambda_body_captures(&function, available, lambda_locals, captured);
+}
+
+fn collect_lambda_expr_captures(
+    expr: &Expr,
+    available: &HashSet<String>,
+    lambda_locals: &mut HashSet<String>,
+    captured: &mut HashSet<String>,
+) {
+    match &expr.kind {
+        ExprKind::Identifier(name) => {
+            if available.contains(name) && !lambda_locals.contains(name) {
+                captured.insert(name.clone());
+            }
+        }
+        ExprKind::Lambda(function) => {
+            let mut nested_locals = lambda_locals.clone();
+            for param in &function.params {
+                nested_locals.insert(param.name.clone());
+            }
+            collect_lambda_body_captures(function, available, &mut nested_locals, captured);
+        }
+        ExprKind::Call { callee, args } => {
+            collect_lambda_expr_captures(callee, available, lambda_locals, captured);
+            for arg in args {
+                collect_lambda_expr_captures(arg, available, lambda_locals, captured);
+            }
+        }
+        ExprKind::Member { object, .. }
+        | ExprKind::Unary {
+            operand: object, ..
+        }
+        | ExprKind::PostfixIncrement(object) => {
+            collect_lambda_expr_captures(object, available, lambda_locals, captured)
+        }
+        ExprKind::Binary { left, right, .. } => {
+            collect_lambda_expr_captures(left, available, lambda_locals, captured);
+            collect_lambda_expr_captures(right, available, lambda_locals, captured);
+        }
+        ExprKind::Array(items) => {
+            for item in items {
+                collect_lambda_expr_captures(item, available, lambda_locals, captured);
+            }
+        }
+        ExprKind::StructInit { fields, .. } => {
+            for field in fields {
+                collect_lambda_expr_captures(&field.value, available, lambda_locals, captured);
+            }
+        }
+        ExprKind::Match { value, branches } => {
+            collect_lambda_expr_captures(value, available, lambda_locals, captured);
+            for branch in branches {
+                match &branch.body {
+                    MatchBranchBody::Expr(expr) => {
+                        collect_lambda_expr_captures(expr, available, lambda_locals, captured)
+                    }
+                    MatchBranchBody::Block(block) => {
+                        let mut branch_locals = lambda_locals.clone();
+                        collect_lambda_block_captures(
+                            block,
+                            available,
+                            &mut branch_locals,
+                            captured,
+                        );
+                    }
+                }
+            }
+        }
+        ExprKind::Number(_)
+        | ExprKind::String(_)
+        | ExprKind::Bool(_)
+        | ExprKind::GenericType { .. }
+        | ExprKind::Missing => {}
     }
 }
 
@@ -1324,6 +1907,8 @@ fn lower_function(
     diagnostics: &mut Vec<Diagnostic>,
 ) -> Option<LoweredFunction> {
     let signature = signatures.get(name)?;
+    let captured_names = captured_let_names(function);
+    CAPTURED_NAMES.with(|names| *names.borrow_mut() = captured_names);
 
     let mut locals = HashMap::new();
     let mut params = Vec::new();
@@ -1337,6 +1922,7 @@ fn lower_function(
                 type_: self_type.clone(),
                 mutable: false,
                 replacement: None,
+                captured: false,
             },
         );
     }
@@ -1350,6 +1936,7 @@ fn lower_function(
                 type_: self_type.clone(),
                 mutable: signature.mutable_self,
                 replacement: None,
+                captured: false,
             },
         );
         params.push(LoweredParam {
@@ -1374,6 +1961,7 @@ fn lower_function(
                     type_: signature_param.type_.clone(),
                     mutable: param.mutable,
                     replacement: None,
+                    captured: false,
                 },
             )
             .is_some()
@@ -1534,6 +2122,8 @@ fn lower_main(
 ) -> Vec<LoweredStatement> {
     let mut statements = Vec::new();
     let mut locals = HashMap::new();
+    let captured_names = captured_let_names(main);
+    CAPTURED_NAMES.with(|names| *names.borrow_mut() = captured_names);
 
     if let Some(param) = main.params.first() {
         diagnostics.push(Diagnostic::error(
@@ -1875,6 +2465,7 @@ fn lowered_statement_always_returns_value(statement: &LoweredStatement) -> bool 
                     .any(lowered_statement_always_returns_value)
         }
         LoweredStatement::Local { .. }
+        | LoweredStatement::LocalCell { .. }
         | LoweredStatement::Assignment { .. }
         | LoweredStatement::Println(_)
         | LoweredStatement::Expr(_)
@@ -2217,39 +2808,19 @@ fn lower_local_statement(
     let mut can_lower = true;
 
     let annotated_type = if let Some(type_annotation) = type_annotation {
-        if !type_annotation.args.is_empty() {
-            diagnostics.push(Diagnostic::error(
-                type_annotation.span,
-                "generic local types are not supported in executable builds",
-            ));
+        let self_type = locals.get("Self").map(|local| &local.type_);
+        let lowered = lower_value_type_ref_in_context(
+            type_annotation,
+            self_type,
+            structs,
+            enums,
+            diagnostics,
+            "only basic, struct, enum, and function local types are supported in executable builds",
+        );
+        if lowered.is_none() {
             can_lower = false;
-            None
-        } else if type_annotation.name == "Self" {
-            locals
-                .get("Self")
-                .map(|local| local.type_.clone())
-                .or_else(|| {
-                    diagnostics.push(Diagnostic::error(
-                        type_annotation.span,
-                        "`Self` is only available in methods and extension functions",
-                    ));
-                    can_lower = false;
-                    None
-                })
-        } else if let Some(type_) = BasicType::from_name(&type_annotation.name) {
-            Some(LoweredType::Basic(type_))
-        } else if structs.contains_key(&type_annotation.name) {
-            Some(LoweredType::Struct(type_annotation.name.clone()))
-        } else if enums.contains_key(&type_annotation.name) {
-            Some(LoweredType::Enum(type_annotation.name.clone()))
-        } else {
-            diagnostics.push(Diagnostic::error(
-                type_annotation.span,
-                "only basic, struct, and enum local types are supported in executable builds",
-            ));
-            can_lower = false;
-            None
         }
+        lowered
     } else {
         None
     };
@@ -2272,10 +2843,10 @@ fn lower_local_statement(
             LoweredType::Basic(type_) if type_.is_numeric() => {
                 LoweredExprKind::NumberLiteral("0".to_string())
             }
-            LoweredType::Struct(_) | LoweredType::Enum(_) => {
+            LoweredType::Struct(_) | LoweredType::Enum(_) | LoweredType::Function { .. } => {
                 diagnostics.push(Diagnostic::error(
                     statement.span,
-                    "struct and enum locals must include an initializer in executable builds",
+                    "struct, enum, and function locals must include an initializer in executable builds",
                 ));
                 return None;
             }
@@ -2319,6 +2890,8 @@ fn lower_local_statement(
         return None;
     }
 
+    let captured = CAPTURED_NAMES.with(|names| names.borrow().contains(name));
+
     if locals
         .insert(
             name.clone(),
@@ -2326,6 +2899,7 @@ fn lower_local_statement(
                 type_: value.type_.clone(),
                 mutable: *mutable,
                 replacement: None,
+                captured,
             },
         )
         .is_some()
@@ -2337,10 +2911,17 @@ fn lower_local_statement(
         return None;
     }
 
-    Some(LoweredStatement::Local {
-        name: name.clone(),
-        value,
-    })
+    if captured {
+        Some(LoweredStatement::LocalCell {
+            name: name.clone(),
+            value,
+        })
+    } else {
+        Some(LoweredStatement::Local {
+            name: name.clone(),
+            value,
+        })
+    }
 }
 
 fn lower_assignment_statement(
@@ -2577,8 +3158,19 @@ fn lower_expr(
             .clone()
             .unwrap_or_else(|| LoweredExpr {
                 type_: locals[name].type_.clone(),
-                kind: LoweredExprKind::Local(name.clone()),
+                kind: if locals[name].captured {
+                    LoweredExprKind::LocalCell(name.clone())
+                } else {
+                    LoweredExprKind::Local(name.clone())
+                },
             }),
+        ExprKind::Identifier(name) if signatures.contains_key(name) => lower_function_value_expr(
+            name,
+            signatures,
+            expected_type.clone(),
+            diagnostics,
+            expr.span,
+        )?,
         ExprKind::Identifier(name) => {
             diagnostics.push(Diagnostic::error(
                 expr.span,
@@ -3342,6 +3934,63 @@ fn lower_expr(
                     },
                 }
             } else {
+                let try_indirect = !matches!(&callee.kind, ExprKind::Identifier(name) if signatures.contains_key(name));
+                if try_indirect
+                    && let Some(callee) = lower_expr(
+                        callee,
+                        locals,
+                        signatures,
+                        structs,
+                        enums,
+                        diagnostics,
+                        None,
+                        "expected supported function value in executable builds",
+                    )
+                    && let LoweredType::Function {
+                        params,
+                        return_type,
+                    } = &callee.type_
+                {
+                    if args.len() != params.len() {
+                        diagnostics.push(Diagnostic::error(
+                            expr.span,
+                            format!(
+                                "function value expects {} arguments, got {}",
+                                params.len(),
+                                args.len()
+                            ),
+                        ));
+                        return None;
+                    }
+
+                    let mut lowered_args = Vec::new();
+                    for (arg, param) in args.iter().zip(params) {
+                        if let Some(arg) = lower_expr(
+                            arg,
+                            locals,
+                            signatures,
+                            structs,
+                            enums,
+                            diagnostics,
+                            Some(param.type_.clone()),
+                            "expected supported function value argument in executable builds",
+                        ) {
+                            lowered_args.push(arg);
+                        }
+                    }
+                    if lowered_args.len() != args.len() {
+                        return None;
+                    }
+
+                    return Some(LoweredExpr {
+                        type_: *return_type.clone(),
+                        kind: LoweredExprKind::IndirectCall {
+                            callee: Box::new(callee),
+                            args: lowered_args,
+                        },
+                    });
+                }
+
                 let ExprKind::Identifier(name) = &callee.kind else {
                     diagnostics.push(Diagnostic::error(
                         callee.span,
@@ -3400,6 +4049,16 @@ fn lower_expr(
                 }
             }
         }
+        ExprKind::Lambda(function) => lower_lambda_expr(
+            expr.span,
+            function,
+            locals,
+            signatures,
+            structs,
+            enums,
+            diagnostics,
+            expected_type.clone(),
+        )?,
         ExprKind::Match { value, branches } => {
             let value = lower_expr(
                 value,
@@ -3509,6 +4168,424 @@ fn lower_expr(
     Some(lowered)
 }
 
+fn lower_lambda_expr(
+    span: Span,
+    function: &FunctionDecl,
+    outer_locals: &HashMap<String, LoweringLocal>,
+    signatures: &HashMap<String, FunctionSignature>,
+    structs: &HashMap<String, LoweredStruct>,
+    enums: &HashMap<String, LoweredEnum>,
+    diagnostics: &mut Vec<Diagnostic>,
+    expected_type: Option<LoweredType>,
+) -> Option<LoweredExpr> {
+    let function_type = expected_type.or_else(|| {
+        infer_lambda_function_type(
+            span,
+            function,
+            outer_locals,
+            signatures,
+            structs,
+            enums,
+            diagnostics,
+        )
+    })?;
+    let LoweredType::Function {
+        params: function_params,
+        return_type,
+    } = &function_type
+    else {
+        diagnostics.push(Diagnostic::error(
+            span,
+            "lambda expressions require a function type context in executable builds",
+        ));
+        return None;
+    };
+    let function_params = function_params.clone();
+    let return_type = return_type.clone();
+
+    if function.params.len() != function_params.len() {
+        diagnostics.push(Diagnostic::error(
+            span,
+            format!(
+                "lambda expects {} parameters from context, got {}",
+                function_params.len(),
+                function.params.len()
+            ),
+        ));
+        return None;
+    }
+
+    let name = CLOSURE_LOWERING.with(|state| {
+        let mut state = state.borrow_mut();
+        let name = format!("lambda{}", state.next_closure_id);
+        state.next_closure_id += 1;
+        name
+    });
+
+    let captures = outer_locals
+        .iter()
+        .filter(|(_, local)| local.captured)
+        .map(|(name, local)| LoweredClosureCapture {
+            name: name.clone(),
+            type_: local.type_.clone(),
+        })
+        .collect::<Vec<_>>();
+
+    let mut locals = HashMap::new();
+    for capture in &captures {
+        locals.insert(
+            capture.name.clone(),
+            LoweringLocal {
+                type_: capture.type_.clone(),
+                mutable: true,
+                replacement: Some(LoweredExpr {
+                    type_: capture.type_.clone(),
+                    kind: LoweredExprKind::CapturedLocal {
+                        env_name: "env".to_string(),
+                        name: capture.name.clone(),
+                    },
+                }),
+                captured: false,
+            },
+        );
+    }
+
+    let mut params = Vec::new();
+    for (param, param_type) in function.params.iter().zip(function_params) {
+        locals.insert(
+            param.name.clone(),
+            LoweringLocal {
+                type_: param_type.type_.clone(),
+                mutable: param.mutable,
+                replacement: None,
+                captured: false,
+            },
+        );
+        params.push(LoweredParam {
+            name: param.name.clone(),
+            type_: param_type.type_.clone(),
+        });
+    }
+
+    let mut statements = Vec::new();
+    let mut return_value = None;
+    match &function.body {
+        FunctionBody::Expr(expr) => {
+            return_value = lower_expr(
+                expr,
+                &locals,
+                signatures,
+                structs,
+                enums,
+                diagnostics,
+                Some(*return_type.clone()),
+                "expected supported lambda return value in executable builds",
+            );
+        }
+        FunctionBody::Block(block) => {
+            for (index, statement) in block.statements.iter().enumerate() {
+                let is_last = index + 1 == block.statements.len();
+                match &statement.kind {
+                    StmtKind::Let { .. } => {
+                        if let Some(statement) = lower_local_statement(
+                            statement,
+                            &mut locals,
+                            signatures,
+                            structs,
+                            enums,
+                            diagnostics,
+                        ) {
+                            statements.push(statement);
+                        }
+                    }
+                    StmtKind::Assign { .. } => {
+                        if let Some(statement) = lower_assignment_statement(
+                            statement,
+                            &locals,
+                            signatures,
+                            structs,
+                            enums,
+                            diagnostics,
+                        ) {
+                            statements.push(statement);
+                        }
+                    }
+                    StmtKind::Return { value } => {
+                        let value = value.as_ref().and_then(|value| {
+                            lower_expr(
+                                value,
+                                &locals,
+                                signatures,
+                                structs,
+                                enums,
+                                diagnostics,
+                                Some(*return_type.clone()),
+                                "expected supported lambda return value in executable builds",
+                            )
+                        });
+                        if is_last && value.is_some() {
+                            return_value = value;
+                        } else {
+                            statements.push(LoweredStatement::Return(value));
+                        }
+                    }
+                    StmtKind::Expr(expr) => {
+                        if let Some(statement) = lower_expression_statement(
+                            expr,
+                            &locals,
+                            signatures,
+                            structs,
+                            enums,
+                            diagnostics,
+                            Some(return_type.as_ref()),
+                        ) {
+                            statements.push(statement);
+                        }
+                    }
+                    StmtKind::If { .. } => {
+                        if let Some(statement) = lower_if_statement(
+                            statement,
+                            &locals,
+                            signatures,
+                            structs,
+                            enums,
+                            diagnostics,
+                            Some(return_type.as_ref()),
+                        ) {
+                            statements.push(statement);
+                        }
+                    }
+                    StmtKind::While { .. } => {
+                        if let Some(statement) = lower_while_statement(
+                            statement,
+                            &locals,
+                            signatures,
+                            structs,
+                            enums,
+                            diagnostics,
+                            Some(return_type.as_ref()),
+                        ) {
+                            statements.push(statement);
+                        }
+                    }
+                    StmtKind::Break => statements.push(LoweredStatement::Break),
+                    StmtKind::Continue => statements.push(LoweredStatement::Continue),
+                    StmtKind::For { .. } => diagnostics.push(Diagnostic::error(
+                        statement.span,
+                        "for loops are not supported in lambda executable builds",
+                    )),
+                }
+            }
+        }
+    }
+
+    let return_value = return_value.unwrap_or_else(void_expr);
+    CLOSURE_LOWERING.with(|state| {
+        state
+            .borrow_mut()
+            .closure_functions
+            .push(LoweredClosureFunction {
+                name: name.clone(),
+                captures: captures.clone(),
+                params,
+                return_type: *return_type.clone(),
+                statements,
+                return_value,
+            });
+    });
+
+    Some(LoweredExpr {
+        type_: function_type,
+        kind: LoweredExprKind::Closure { name, captures },
+    })
+}
+
+fn infer_lambda_function_type(
+    span: Span,
+    function: &FunctionDecl,
+    outer_locals: &HashMap<String, LoweringLocal>,
+    signatures: &HashMap<String, FunctionSignature>,
+    structs: &HashMap<String, LoweredStruct>,
+    enums: &HashMap<String, LoweredEnum>,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> Option<LoweredType> {
+    let self_type = outer_locals.get("Self").map(|local| &local.type_);
+    let mut locals = outer_locals
+        .iter()
+        .map(|(name, local)| (name.clone(), local.type_.clone()))
+        .collect::<HashMap<_, _>>();
+    let mut params = Vec::new();
+
+    for param in &function.params {
+        let Some(type_ref) = &param.type_ref else {
+            diagnostics.push(Diagnostic::error(
+                param.span,
+                "lambda parameters must include type annotations when no function type context is available",
+            ));
+            return None;
+        };
+        let type_ = lower_value_type_ref_in_context(
+            type_ref,
+            self_type,
+            structs,
+            enums,
+            diagnostics,
+            "lambda parameter types must be supported in executable builds",
+        )?;
+        locals.insert(param.name.clone(), type_.clone());
+        params.push(LoweredFunctionTypeParam {
+            type_,
+            mutable: param.mutable,
+        });
+    }
+
+    let return_type = if let Some(type_ref) = &function.return_type {
+        lower_value_type_ref_in_context(
+            type_ref,
+            self_type,
+            structs,
+            enums,
+            diagnostics,
+            "lambda return types must be supported in executable builds",
+        )?
+    } else {
+        match &function.body {
+            FunctionBody::Expr(expr) => {
+                let Some(return_type) = infer_expr_type(expr, &locals, signatures, structs, enums)
+                else {
+                    diagnostics.push(Diagnostic::error(
+                        span,
+                        "could not infer lambda return type; add a function type annotation",
+                    ));
+                    return None;
+                };
+                return_type
+            }
+            FunctionBody::Block(block) => {
+                let mut return_type = None;
+                let mut has_unresolved_value_return = false;
+                if let Err(conflict) = infer_block_return_types(
+                    block,
+                    &mut locals,
+                    signatures,
+                    structs,
+                    enums,
+                    &mut return_type,
+                    &mut has_unresolved_value_return,
+                ) {
+                    diagnostics.push(Diagnostic::error(
+                        conflict.span,
+                        format!(
+                            "lambda has multiple return types (`{}` and `{}`); inferred return types must be consistent",
+                            conflict.first.name(),
+                            conflict.second.name()
+                        ),
+                    ));
+                    return None;
+                }
+                if has_unresolved_value_return {
+                    diagnostics.push(Diagnostic::error(
+                        span,
+                        "could not infer lambda return type; add a function type annotation",
+                    ));
+                    return None;
+                }
+                return_type.unwrap_or(LoweredType::Void)
+            }
+        }
+    };
+
+    Some(LoweredType::Function {
+        params,
+        return_type: Box::new(return_type),
+    })
+}
+
+fn lower_function_value_expr(
+    name: &str,
+    signatures: &HashMap<String, FunctionSignature>,
+    expected_type: Option<LoweredType>,
+    diagnostics: &mut Vec<Diagnostic>,
+    span: Span,
+) -> Option<LoweredExpr> {
+    let Some(signature) = signatures.get(name) else {
+        return None;
+    };
+    let function_type = LoweredType::Function {
+        params: signature
+            .params
+            .iter()
+            .map(|param| LoweredFunctionTypeParam {
+                type_: param.type_.clone(),
+                mutable: param.mutable,
+            })
+            .collect(),
+        return_type: Box::new(signature.return_type.clone()),
+    };
+
+    if let Some(expected_type) = expected_type
+        && expected_type != function_type
+    {
+        diagnostics.push(Diagnostic::error(
+            span,
+            format!(
+                "expected value of type `{}`, got `{}`",
+                expected_type.name(),
+                function_type.name()
+            ),
+        ));
+        return None;
+    }
+
+    let wrapper_name = CLOSURE_LOWERING.with(|state| {
+        let mut state = state.borrow_mut();
+        let wrapper_name = format!("functionValue{}_{}", state.next_closure_id, name);
+        state.next_closure_id += 1;
+
+        let params = signature
+            .params
+            .iter()
+            .enumerate()
+            .map(|(index, param)| LoweredParam {
+                name: format!("arg{index}"),
+                type_: param.type_.clone(),
+            })
+            .collect::<Vec<_>>();
+        let args = params
+            .iter()
+            .map(|param| LoweredExpr {
+                type_: param.type_.clone(),
+                kind: LoweredExprKind::Local(param.name.clone()),
+            })
+            .collect::<Vec<_>>();
+
+        state.closure_functions.push(LoweredClosureFunction {
+            name: wrapper_name.clone(),
+            captures: Vec::new(),
+            params,
+            return_type: signature.return_type.clone(),
+            statements: Vec::new(),
+            return_value: LoweredExpr {
+                type_: signature.return_type.clone(),
+                kind: LoweredExprKind::Call {
+                    name: name.to_string(),
+                    args,
+                },
+            },
+        });
+
+        wrapper_name
+    });
+
+    Some(LoweredExpr {
+        type_: function_type,
+        kind: LoweredExprKind::Closure {
+            name: wrapper_name,
+            captures: Vec::new(),
+        },
+    })
+}
+
 fn find_qualified_variant<'a>(
     enums: &'a HashMap<String, LoweredEnum>,
     enum_name: &str,
@@ -3577,6 +4654,7 @@ fn lower_match_pattern(
                                 variant: variant.clone(),
                             },
                         }),
+                        captured: false,
                     },
                 );
             }
