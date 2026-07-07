@@ -3394,6 +3394,37 @@ fn main() {
 }
 
 #[test]
+fn enum_methods_validate_with_self_and_generic_payloads() {
+    let result = check_source(
+        r#"enum Option<T> {
+    Some(T)
+    None
+
+    fn unwrapOr(fallback: T): T {
+        return match self {
+            Option.Some(value) => value,
+            Option.None => fallback,
+        }
+    }
+}
+
+fn main() {
+    let present = Option.Some(42)
+    let absent: Option<i32> = Option.None
+    let value = present.unwrapOr(0)
+    let fallback = absent.unwrapOr(7)
+}
+"#,
+    );
+
+    assert!(
+        !result.has_errors(),
+        "expected enum methods to validate, got {:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
 fn generic_methods_report_inference_and_declaration_errors() {
     let unresolved = check_source(
         r#"struct Box<T> {

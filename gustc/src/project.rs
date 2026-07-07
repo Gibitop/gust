@@ -522,6 +522,14 @@ impl<'names, 'diagnostics> ModuleRewriter<'names, 'diagnostics> {
                         self.rewrite_type(type_ref);
                     }
                 }
+                for member in &mut item.members {
+                    match member {
+                        StructMember::Method(function) | StructMember::StaticMethod(function) => {
+                            self.rewrite_function(function);
+                        }
+                        StructMember::Field(field) => self.rewrite_type(&mut field.type_ref),
+                    }
+                }
                 self.scopes.pop();
             }
             Item::Struct(item) => {
@@ -900,6 +908,17 @@ fn shift_program(program: &mut Program, offset: usize) {
                     shift_span(&mut variant.span, offset);
                     if let Some(type_ref) = &mut variant.payload {
                         shift_type(type_ref, offset);
+                    }
+                }
+                for member in &mut item.members {
+                    match member {
+                        StructMember::Method(function) | StructMember::StaticMethod(function) => {
+                            shift_function(function, offset);
+                        }
+                        StructMember::Field(field) => {
+                            shift_span(&mut field.span, offset);
+                            shift_type(&mut field.type_ref, offset);
+                        }
                     }
                 }
             }

@@ -57,6 +57,7 @@ pub struct EnumDecl {
     pub type_params: Vec<String>,
     pub type_param_bounds: Vec<TypeParamBound>,
     pub variants: Vec<EnumVariant>,
+    pub members: Vec<StructMember>,
     pub span: Span,
 }
 

@@ -137,6 +137,16 @@ mutable-capable receiver.
 
 The method name `clone` is reserved for the built-in deep clone operation.
 
+## Enum methods
+
+Enum methods follow the same receiver rules as struct methods. Instance methods use an implicit
+immutable `self` parameter whose type is the enclosing enum, and `Self` refers to that enum inside
+instance and static methods. Method calls are statically dispatched and lower to functions with the
+receiver as their first argument.
+
+Generic enum methods are monomorphized with the enclosing enum specialization, so methods such as
+`Option<T>.unwrapOr(fallback: T): T` become concrete methods like `Option<i32>.unwrapOr`.
+
 ## Extension functions
 
 An extension function is declared at the top level with `fn Type.functionName(...)`.

@@ -118,23 +118,45 @@ impl Parser {
         self.expect_kind(&TokenKind::LeftBrace, "`{`");
 
         let mut variants = Vec::new();
+        let mut members = Vec::new();
         while !self.at_eof() && !self.check_kind(&TokenKind::RightBrace) {
-            let variant_start = self.current().span;
-            let variant_name = self.expect_identifier("expected enum variant name");
-            let payload = if self.match_kind(&TokenKind::LeftParen) {
-                let payload = self.parse_type();
-                self.expect_kind(&TokenKind::RightParen, "`)`");
-                payload
+            let member_start = self.position;
+
+            if self.current_keyword() == Some(Keyword::Static) {
+                let start = self.expect_keyword(Keyword::Static, "`static`").span;
+                self.expect_keyword(Keyword::Fn, "`fn`");
+                let name = self.expect_identifier("expected static function name");
+                let (type_params, type_param_bounds) = self.parse_type_params();
+                members.push(StructMember::StaticMethod(self.parse_function_tail(
+                    start,
+                    Some(name),
+                    type_params,
+                    type_param_bounds,
+                )));
+            } else if self.current_keyword() == Some(Keyword::Fn) {
+                members.push(StructMember::Method(self.parse_function(true)));
             } else {
-                None
-            };
-            let span = variant_start.join(self.previous_span());
-            variants.push(EnumVariant {
-                name: variant_name,
-                payload,
-                span,
-            });
-            self.match_kind(&TokenKind::Comma);
+                let variant_start = self.current().span;
+                let variant_name = self.expect_identifier("expected enum variant name");
+                let payload = if self.match_kind(&TokenKind::LeftParen) {
+                    let payload = self.parse_type();
+                    self.expect_kind(&TokenKind::RightParen, "`)`");
+                    payload
+                } else {
+                    None
+                };
+                let span = variant_start.join(self.previous_span());
+                variants.push(EnumVariant {
+                    name: variant_name,
+                    payload,
+                    span,
+                });
+                self.match_kind(&TokenKind::Comma);
+            }
+
+            if self.position == member_start {
+                self.advance();
+            }
         }
 
         self.expect_kind(&TokenKind::RightBrace, "`}`");
@@ -145,6 +167,7 @@ impl Parser {
             type_params,
             type_param_bounds,
             variants,
+            members,
             span: start.join(end),
         }
     }

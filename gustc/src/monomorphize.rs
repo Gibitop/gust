@@ -58,6 +58,22 @@ enum PendingSpecialization {
     },
 }
 
+fn find_method_member(
+    members: &[StructMember],
+    method_name: &str,
+    static_: bool,
+) -> Option<FunctionDecl> {
+    members.iter().find_map(|member| match member {
+        StructMember::Method(function) if !static_ => {
+            (function.name.as_deref() == Some(method_name)).then(|| function.clone())
+        }
+        StructMember::StaticMethod(function) if static_ => {
+            (function.name.as_deref() == Some(method_name)).then(|| function.clone())
+        }
+        StructMember::Field(_) | StructMember::Method(_) | StructMember::StaticMethod(_) => None,
+    })
+}
+
 impl Monomorphizer {
     fn new(program: &Program) -> Self {
         let struct_templates = program
@@ -309,7 +325,10 @@ impl Monomorphizer {
                             }
                         }
                     }
-                    self.infer_specialized_member_returns(&mut specialized);
+                    self.infer_specialized_member_returns(
+                        &specialized.name,
+                        &mut specialized.members,
+                    );
                     self.self_types.pop();
                     items.push(Item::Struct(specialized));
                 }
@@ -331,11 +350,33 @@ impl Monomorphizer {
                     specialized.name = specialized_name;
                     specialized.type_params.clear();
                     specialized.type_param_bounds.clear();
+                    self.self_types.push(TypeRef {
+                        name: specialized.name.clone(),
+                        args: Vec::new(),
+                        function: None,
+                        span: specialized.span,
+                    });
                     for variant in &mut specialized.variants {
                         if let Some(payload) = &mut variant.payload {
                             self.rewrite_type(payload, &substitutions);
                         }
                     }
+                    for member in &mut specialized.members {
+                        match member {
+                            StructMember::Method(function)
+                            | StructMember::StaticMethod(function) => {
+                                if function.type_params.is_empty() {
+                                    self.rewrite_function(function, &substitutions);
+                                }
+                            }
+                            StructMember::Field(_) => {}
+                        }
+                    }
+                    self.infer_specialized_member_returns(
+                        &mut specialized.name,
+                        &mut specialized.members,
+                    );
+                    self.self_types.pop();
                     self.concrete_enums
                         .insert(specialized.name.clone(), specialized.clone());
                     items.push(Item::Enum(specialized));
@@ -599,7 +640,12 @@ impl Monomorphizer {
                     ));
                 }
             }
-            self.validate_method_type_params(&template);
+            self.validate_method_type_params(
+                &template.name,
+                "struct",
+                &template.type_params,
+                &template.members,
+            );
         }
         for template in self
             .concrete_struct_defs
@@ -607,9 +653,14 @@ impl Monomorphizer {
             .cloned()
             .collect::<Vec<_>>()
         {
-            self.validate_method_type_params(&template);
+            self.validate_method_type_params(
+                &template.name,
+                "struct",
+                &template.type_params,
+                &template.members,
+            );
         }
-        for template in self.enum_templates.values() {
+        for template in self.enum_templates.values().cloned().collect::<Vec<_>>() {
             let mut names = HashSet::new();
             for name in &template.type_params {
                 if !names.insert(name) {
@@ -622,6 +673,20 @@ impl Monomorphizer {
                     ));
                 }
             }
+            self.validate_method_type_params(
+                &template.name,
+                "enum",
+                &template.type_params,
+                &template.members,
+            );
+        }
+        for template in self.concrete_enums.values().cloned().collect::<Vec<_>>() {
+            self.validate_method_type_params(
+                &template.name,
+                "enum",
+                &template.type_params,
+                &template.members,
+            );
         }
         for template in self.trait_templates.values() {
             let mut names = HashSet::new();
@@ -717,9 +782,15 @@ impl Monomorphizer {
         }
     }
 
-    fn validate_method_type_params(&mut self, template: &StructDecl) {
-        let struct_params = template.type_params.iter().cloned().collect::<HashSet<_>>();
-        for member in &template.members {
+    fn validate_method_type_params(
+        &mut self,
+        owner_name: &str,
+        owner_kind: &str,
+        owner_type_params: &[String],
+        members: &[StructMember],
+    ) {
+        let owner_params = owner_type_params.iter().cloned().collect::<HashSet<_>>();
+        for member in members {
             let function = match member {
                 StructMember::Method(function) | StructMember::StaticMethod(function) => function,
                 StructMember::Field(_) => continue,
@@ -736,12 +807,11 @@ impl Monomorphizer {
                         format!("duplicate type parameter `{name}` in method `{function_name}`"),
                     ));
                 }
-                if struct_params.contains(name) {
+                if owner_params.contains(name) {
                     self.diagnostics.push(Diagnostic::error(
                         function.span,
                         format!(
-                            "type parameter `{name}` in method `{function_name}` conflicts with struct `{}`",
-                            template.name
+                            "type parameter `{name}` in method `{function_name}` conflicts with {owner_kind} `{owner_name}`",
                         ),
                     ));
                 }
@@ -752,7 +822,7 @@ impl Monomorphizer {
                 .filter_map(|param| param.type_ref.as_ref())
                 .chain(function.return_type.as_ref().or_else(|| {
                     self.generic_method_returns.get(&(
-                        template.name.clone(),
+                        owner_name.to_string(),
                         function_name.to_string(),
                         matches!(member, StructMember::StaticMethod(_)),
                     ))
@@ -791,6 +861,42 @@ impl Monomorphizer {
             }
         }
         for template in self.concrete_struct_defs.values() {
+            for member in &template.members {
+                match member {
+                    StructMember::Method(function) | StructMember::StaticMethod(function)
+                        if !function.type_params.is_empty() =>
+                    {
+                        templates.push((
+                            template.name.clone(),
+                            function.clone(),
+                            matches!(member, StructMember::StaticMethod(_)),
+                        ));
+                    }
+                    StructMember::Field(_)
+                    | StructMember::Method(_)
+                    | StructMember::StaticMethod(_) => {}
+                }
+            }
+        }
+        for template in self.enum_templates.values() {
+            for member in &template.members {
+                match member {
+                    StructMember::Method(function) | StructMember::StaticMethod(function)
+                        if !function.type_params.is_empty() =>
+                    {
+                        templates.push((
+                            template.name.clone(),
+                            function.clone(),
+                            matches!(member, StructMember::StaticMethod(_)),
+                        ));
+                    }
+                    StructMember::Field(_)
+                    | StructMember::Method(_)
+                    | StructMember::StaticMethod(_) => {}
+                }
+            }
+        }
+        for template in self.concrete_enums.values() {
             for member in &template.members {
                 match member {
                     StructMember::Method(function) | StructMember::StaticMethod(function)
@@ -867,11 +973,28 @@ impl Monomorphizer {
                 for bound in &mut item.type_param_bounds {
                     self.rewrite_type(&mut bound.trait_ref, substitutions);
                 }
+                self.self_types.push(TypeRef {
+                    name: item.name.clone(),
+                    args: Vec::new(),
+                    function: None,
+                    span: item.span,
+                });
                 for variant in &mut item.variants {
                     if let Some(payload) = &mut variant.payload {
                         self.rewrite_type(payload, substitutions);
                     }
                 }
+                for member in &mut item.members {
+                    match member {
+                        StructMember::Method(function) | StructMember::StaticMethod(function) => {
+                            if function.type_params.is_empty() {
+                                self.rewrite_function(function, substitutions);
+                            }
+                        }
+                        StructMember::Field(_) => {}
+                    }
+                }
+                self.self_types.pop();
             }
             Item::Struct(item) => {
                 for bound in &mut item.type_param_bounds {
@@ -1421,7 +1544,10 @@ impl Monomorphizer {
                 let ExprKind::Identifier(type_name) = &object.kind else {
                     return self.rewrite_expr_children(expr, substitutions);
                 };
-                (self.struct_templates.contains_key(type_name)
+                ((self.struct_templates.contains_key(type_name)
+                    || self.enum_templates.get(type_name).is_some_and(|template| {
+                        find_method_member(&template.members, name, true).is_some()
+                    }))
                     && self.lookup_local_type(type_name).is_none())
                 .then(|| (type_name.clone(), name.clone()))
             }
@@ -1439,7 +1565,11 @@ impl Monomorphizer {
                     for type_arg in &mut type_args {
                         self.rewrite_type(type_arg, substitutions);
                     }
-                    self.specialize_struct(&type_name, &type_args, expr.span);
+                    if self.struct_templates.contains_key(&type_name) {
+                        self.specialize_struct(&type_name, &type_args, expr.span);
+                    } else {
+                        self.specialize_enum(&type_name, &type_args, expr.span);
+                    }
                     let ExprKind::Member { object, .. } = &mut callee.kind else {
                         unreachable!("generic static call requires a member callee")
                     };
@@ -1653,10 +1783,10 @@ impl Monomorphizer {
         }
     }
 
-    fn infer_specialized_member_returns(&mut self, struct_: &mut StructDecl) {
-        for _ in 0..struct_.members.len() {
+    fn infer_specialized_member_returns(&mut self, owner: &str, members: &mut [StructMember]) {
+        for _ in 0..members.len() {
             let mut changed = false;
-            for member in &struct_.members {
+            for member in members.iter() {
                 let (function, static_) = match member {
                     StructMember::Method(function) => (function, false),
                     StructMember::StaticMethod(function) => (function, true),
@@ -1669,12 +1799,12 @@ impl Monomorphizer {
                     && let Some(return_type) = &function.return_type
                 {
                     self.member_returns.insert(
-                        (struct_.name.clone(), name.clone(), static_),
+                        (owner.to_string(), name.clone(), static_),
                         return_type.clone(),
                     );
                 }
             }
-            for member in &mut struct_.members {
+            for member in members.iter_mut() {
                 let (function, static_) = match member {
                     StructMember::Method(function) => (function, false),
                     StructMember::StaticMethod(function) => (function, true),
@@ -1687,14 +1817,14 @@ impl Monomorphizer {
                     continue;
                 }
                 let Some(return_type) =
-                    self.infer_rewritten_function_return(function, &struct_.name, !static_)
+                    self.infer_rewritten_function_return(function, owner, !static_)
                 else {
                     continue;
                 };
                 function.return_type = Some(return_type.clone());
                 if let Some(name) = &function.name {
                     self.member_returns
-                        .insert((struct_.name.clone(), name.clone(), static_), return_type);
+                        .insert((owner.to_string(), name.clone(), static_), return_type);
                 }
                 changed = true;
             }
@@ -1899,15 +2029,17 @@ impl Monomorphizer {
         method_name: &str,
         args: &[Expr],
     ) -> Result<Vec<TypeRef>, String> {
-        let template = &self.struct_templates[type_name];
-        let Some(function) = template.members.iter().find_map(|member| {
-            let StructMember::StaticMethod(function) = member else {
-                return None;
+        let (type_params, members, kind) =
+            if let Some(template) = self.struct_templates.get(type_name) {
+                (&template.type_params, &template.members, "struct")
+            } else if let Some(template) = self.enum_templates.get(type_name) {
+                (&template.type_params, &template.members, "enum")
+            } else {
+                return Err(format!("unknown generic type `{type_name}`"));
             };
-            (function.name.as_deref() == Some(method_name)).then_some(function)
-        }) else {
+        let Some(function) = find_method_member(members, method_name, true) else {
             return Err(format!(
-                "unknown static function `{method_name}` for generic struct `{type_name}`"
+                "unknown static function `{method_name}` for generic {kind} `{type_name}`"
             ));
         };
         let constraints = function
@@ -1920,7 +2052,7 @@ impl Monomorphizer {
                     .map(|actual| (expected.clone(), actual))
             })
             .collect();
-        self.solve_type_arguments(type_name, &template.type_params, constraints)
+        self.solve_type_arguments(type_name, type_params, constraints)
             .map_err(|reason| {
                 format!(
                     "cannot infer type arguments for generic static call `{type_name}.{method_name}`: {reason}; write `{type_name}<Type>.{method_name}(...)` or add a concrete expected type"
@@ -2132,24 +2264,20 @@ impl Monomorphizer {
     ) -> Option<(TypeRef, HashMap<String, TypeRef>, FunctionDecl)> {
         let receiver = self.expanded_type(receiver);
         if let Some((generic_name, args)) = self.specializations.get(&receiver.name) {
-            let template = self.struct_templates.get(generic_name)?;
-            let substitutions = template
-                .type_params
+            let (type_params, members) =
+                if let Some(template) = self.struct_templates.get(generic_name) {
+                    (&template.type_params, &template.members)
+                } else if let Some(template) = self.enum_templates.get(generic_name) {
+                    (&template.type_params, &template.members)
+                } else {
+                    return None;
+                };
+            let substitutions = type_params
                 .iter()
                 .cloned()
                 .zip(args.iter().cloned())
                 .collect::<HashMap<_, _>>();
-            let mut function = template.members.iter().find_map(|member| match member {
-                StructMember::Method(function) if !static_ => {
-                    (function.name.as_deref() == Some(method_name)).then(|| function.clone())
-                }
-                StructMember::StaticMethod(function) if static_ => {
-                    (function.name.as_deref() == Some(method_name)).then(|| function.clone())
-                }
-                StructMember::Field(_)
-                | StructMember::Method(_)
-                | StructMember::StaticMethod(_) => None,
-            })?;
+            let mut function = find_method_member(members, method_name, static_)?;
             if function.return_type.is_none()
                 && let Some(return_type) = self.generic_method_returns.get(&(
                     generic_name.clone(),
@@ -2163,25 +2291,22 @@ impl Monomorphizer {
         }
 
         if !receiver.args.is_empty()
-            && let Some(template) = self.struct_templates.get(&receiver.name)
+            && (self.struct_templates.contains_key(&receiver.name)
+                || self.enum_templates.contains_key(&receiver.name))
         {
-            let substitutions = template
-                .type_params
+            let (type_params, members) =
+                if let Some(template) = self.struct_templates.get(&receiver.name) {
+                    (&template.type_params, &template.members)
+                } else {
+                    let template = self.enum_templates.get(&receiver.name)?;
+                    (&template.type_params, &template.members)
+                };
+            let substitutions = type_params
                 .iter()
                 .cloned()
                 .zip(receiver.args.iter().cloned())
                 .collect::<HashMap<_, _>>();
-            let mut function = template.members.iter().find_map(|member| match member {
-                StructMember::Method(function) if !static_ => {
-                    (function.name.as_deref() == Some(method_name)).then(|| function.clone())
-                }
-                StructMember::StaticMethod(function) if static_ => {
-                    (function.name.as_deref() == Some(method_name)).then(|| function.clone())
-                }
-                StructMember::Field(_)
-                | StructMember::Method(_)
-                | StructMember::StaticMethod(_) => None,
-            })?;
+            let mut function = find_method_member(members, method_name, static_)?;
             if function.return_type.is_none()
                 && let Some(return_type) = self.generic_method_returns.get(&(
                     receiver.name.clone(),
@@ -2203,18 +2328,14 @@ impl Monomorphizer {
             ));
         }
 
-        let template = self.concrete_struct_defs.get(&receiver.name)?;
-        let mut function = template.members.iter().find_map(|member| match member {
-            StructMember::Method(function) if !static_ => {
-                (function.name.as_deref() == Some(method_name)).then(|| function.clone())
-            }
-            StructMember::StaticMethod(function) if static_ => {
-                (function.name.as_deref() == Some(method_name)).then(|| function.clone())
-            }
-            StructMember::Field(_) | StructMember::Method(_) | StructMember::StaticMethod(_) => {
-                None
-            }
-        })?;
+        let members = if let Some(template) = self.concrete_struct_defs.get(&receiver.name) {
+            &template.members
+        } else if let Some(template) = self.concrete_enums.get(&receiver.name) {
+            &template.members
+        } else {
+            return None;
+        };
+        let mut function = find_method_member(members, method_name, static_)?;
         if function.return_type.is_none()
             && let Some(return_type) = self.generic_method_returns.get(&(
                 receiver.name.clone(),
@@ -2342,16 +2463,21 @@ impl Monomorphizer {
                 return_type.clone(),
             );
         }
-        let Some(Item::Struct(struct_)) = items
-            .iter_mut()
-            .find(|item| matches!(item, Item::Struct(struct_) if struct_.name == receiver))
-        else {
+        let Some(item) = items.iter_mut().find(|item| {
+            matches!(item, Item::Struct(struct_) if struct_.name == receiver)
+                || matches!(item, Item::Enum(enum_) if enum_.name == receiver)
+        }) else {
             return;
         };
+        let members = match item {
+            Item::Struct(struct_) => &mut struct_.members,
+            Item::Enum(enum_) => &mut enum_.members,
+            _ => unreachable!("method receiver must be a struct or enum"),
+        };
         if static_ {
-            struct_.members.push(StructMember::StaticMethod(function));
+            members.push(StructMember::StaticMethod(function));
         } else {
-            struct_.members.push(StructMember::Method(function));
+            members.push(StructMember::Method(function));
         }
     }
 
@@ -2691,18 +2817,26 @@ impl Monomorphizer {
             return Some(return_type.clone());
         }
         let receiver = self.expanded_type(receiver);
-        let template = self.struct_templates.get(&receiver.name)?;
-        let substitutions = template
-            .type_params
+        let (type_params, members, allow_fields) =
+            if let Some(template) = self.struct_templates.get(&receiver.name) {
+                (&template.type_params, &template.members, true)
+            } else if let Some(template) = self.enum_templates.get(&receiver.name) {
+                (&template.type_params, &template.members, false)
+            } else {
+                return None;
+            };
+        let substitutions = type_params
             .iter()
             .cloned()
             .zip(receiver.args.iter().cloned())
             .collect::<HashMap<_, _>>();
-        let return_type = template.members.iter().find_map(|member| {
+        let return_type = members.iter().find_map(|member| {
             let function = match member {
                 StructMember::Method(function) if !static_ => function,
                 StructMember::StaticMethod(function) if static_ => function,
-                StructMember::Field(field) if !static_ && field.name == member_name => {
+                StructMember::Field(field)
+                    if allow_fields && !static_ && field.name == member_name =>
+                {
                     return Some(field.type_ref.clone());
                 }
                 _ => return None,
@@ -2943,6 +3077,7 @@ struct StructShape {
 
 struct MethodReachability<'items> {
     structs: HashMap<String, StructShape>,
+    enums: HashMap<String, StructShape>,
     functions: HashMap<String, Option<String>>,
     generic_structs: &'items HashSet<String>,
     generic_methods: HashMap<(String, String, bool), FunctionDecl>,
@@ -2953,6 +3088,7 @@ struct MethodReachability<'items> {
 impl<'items> MethodReachability<'items> {
     fn new(items: &[Item], generic_structs: &'items HashSet<String>) -> Self {
         let mut structs = HashMap::new();
+        let mut enums = HashMap::new();
         let mut functions = HashMap::new();
         let mut generic_methods = HashMap::new();
 
@@ -3045,6 +3181,80 @@ impl<'items> MethodReachability<'items> {
                         },
                     );
                 }
+                Item::Enum(item) => {
+                    let fields = HashMap::new();
+                    let methods = item
+                        .members
+                        .iter()
+                        .filter_map(|member| {
+                            let StructMember::Method(function) = member else {
+                                return None;
+                            };
+                            let name = function.name.clone()?;
+                            Some((
+                                name.clone(),
+                                function.return_type.as_ref().and_then(|type_ref| {
+                                    if type_ref.name == "Self" && type_ref.args.is_empty() {
+                                        Some(item.name.clone())
+                                    } else {
+                                        concrete_type_name(type_ref)
+                                    }
+                                }),
+                            ))
+                        })
+                        .collect();
+                    let static_methods = item
+                        .members
+                        .iter()
+                        .filter_map(|member| {
+                            let StructMember::StaticMethod(function) = member else {
+                                return None;
+                            };
+                            let name = function.name.clone()?;
+                            Some((
+                                name,
+                                function.return_type.as_ref().and_then(|type_ref| {
+                                    if type_ref.name == "Self" && type_ref.args.is_empty() {
+                                        Some(item.name.clone())
+                                    } else {
+                                        concrete_type_name(type_ref)
+                                    }
+                                }),
+                            ))
+                        })
+                        .collect();
+                    if generic_structs.contains(&item.name) {
+                        for member in &item.members {
+                            match member {
+                                StructMember::Method(function) => {
+                                    if let Some(name) = &function.name {
+                                        generic_methods.insert(
+                                            (item.name.clone(), name.clone(), false),
+                                            function.clone(),
+                                        );
+                                    }
+                                }
+                                StructMember::StaticMethod(function) => {
+                                    if let Some(name) = &function.name {
+                                        generic_methods.insert(
+                                            (item.name.clone(), name.clone(), true),
+                                            function.clone(),
+                                        );
+                                    }
+                                }
+                                StructMember::Field(_) => {}
+                            }
+                        }
+                    }
+                    enums.insert(
+                        item.name.clone(),
+                        StructShape {
+                            fields,
+                            methods,
+                            static_methods,
+                        },
+                    );
+                }
                 Item::Function(function) => {
                     if let Some(name) = &function.name {
                         functions.insert(
@@ -3053,16 +3263,13 @@ impl<'items> MethodReachability<'items> {
                         );
                     }
                 }
-                Item::Import(_)
-                | Item::Enum(_)
-                | Item::Trait(_)
-                | Item::Impl(_)
-                | Item::Extension(_) => {}
+                Item::Import(_) | Item::Trait(_) | Item::Impl(_) | Item::Extension(_) => {}
             }
         }
 
         Self {
             structs,
+            enums,
             functions,
             generic_structs,
             generic_methods,
@@ -3075,6 +3282,19 @@ impl<'items> MethodReachability<'items> {
         for item in items {
             match item {
                 Item::Struct(item) if !self.generic_structs.contains(&item.name) => {
+                    for member in &item.members {
+                        match member {
+                            StructMember::Method(function) => {
+                                self.visit_function(function, Some(&item.name), true);
+                            }
+                            StructMember::StaticMethod(function) => {
+                                self.visit_function(function, Some(&item.name), false);
+                            }
+                            StructMember::Field(_) => {}
+                        }
+                    }
+                }
+                Item::Enum(item) if !self.generic_structs.contains(&item.name) => {
                     for member in &item.members {
                         match member {
                             StructMember::Method(function) => {
@@ -3229,26 +3449,31 @@ impl<'items> MethodReachability<'items> {
                 match &callee.kind {
                     ExprKind::Identifier(name) => self.functions.get(name).cloned().flatten(),
                     ExprKind::Member { object, name } => {
-                        if let ExprKind::Identifier(identifier) = &object.kind
-                            && (identifier == "Self" || !locals.contains_key(identifier))
-                        {
-                            let type_name = if identifier == "Self" {
+                        if let ExprKind::Identifier(identifier) = &object.kind {
+                            let static_type_name = if identifier == "Self" {
                                 locals.get(identifier).map(String::as_str)
-                            } else {
+                            } else if !locals.contains_key(identifier)
+                                && (self.structs.contains_key(identifier)
+                                    || self.enums.contains_key(identifier))
+                            {
                                 Some(identifier.as_str())
+                            } else {
+                                None
                             };
-                            let Some(type_name) =
-                                type_name.filter(|name| self.structs.contains_key(*name))
-                            else {
-                                return None;
-                            };
-                            self.use_method(type_name, name, true);
-                            return self
-                                .structs
-                                .get(type_name)
-                                .and_then(|shape| shape.static_methods.get(name))
-                                .cloned()
-                                .flatten();
+                            if let Some(type_name) = static_type_name {
+                                self.use_method(type_name, name, true);
+                                return self
+                                    .structs
+                                    .get(type_name)
+                                    .and_then(|shape| shape.static_methods.get(name))
+                                    .or_else(|| {
+                                        self.enums
+                                            .get(type_name)
+                                            .and_then(|shape| shape.static_methods.get(name))
+                                    })
+                                    .cloned()
+                                    .flatten();
+                            }
                         }
                         let object_type = self.visit_expr(object, locals);
                         if name == "clone" {
@@ -3259,6 +3484,11 @@ impl<'items> MethodReachability<'items> {
                             self.structs
                                 .get(&object_type)
                                 .and_then(|shape| shape.methods.get(name))
+                                .or_else(|| {
+                                    self.enums
+                                        .get(&object_type)
+                                        .and_then(|shape| shape.methods.get(name))
+                                })
                                 .cloned()
                                 .flatten()
                         } else {
@@ -3348,37 +3578,65 @@ impl<'items> MethodReachability<'items> {
 fn prune_unused_generic_methods(items: &mut [Item], generic_structs: &HashSet<String>) {
     let used = MethodReachability::new(items, generic_structs).find(items);
     for item in items {
-        let Item::Struct(item) = item else {
-            continue;
-        };
-        if !generic_structs.contains(&item.name) {
-            continue;
+        match item {
+            Item::Struct(item) => {
+                if !generic_structs.contains(&item.name) {
+                    continue;
+                }
+                item.members.retain(|member| match member {
+                    StructMember::Method(function) => function.name.as_ref().is_some_and(|name| {
+                        used.contains(&(item.name.clone(), name.clone(), false))
+                    }),
+                    StructMember::StaticMethod(function) => {
+                        function.name.as_ref().is_some_and(|name| {
+                            used.contains(&(item.name.clone(), name.clone(), true))
+                        })
+                    }
+                    StructMember::Field(_) => true,
+                });
+            }
+            Item::Enum(item) => {
+                if !generic_structs.contains(&item.name) {
+                    continue;
+                }
+                item.members.retain(|member| match member {
+                    StructMember::Method(function) => function.name.as_ref().is_some_and(|name| {
+                        used.contains(&(item.name.clone(), name.clone(), false))
+                    }),
+                    StructMember::StaticMethod(function) => {
+                        function.name.as_ref().is_some_and(|name| {
+                            used.contains(&(item.name.clone(), name.clone(), true))
+                        })
+                    }
+                    StructMember::Field(_) => true,
+                });
+            }
+            _ => {}
         }
-        item.members.retain(|member| match member {
-            StructMember::Method(function) => function
-                .name
-                .as_ref()
-                .is_some_and(|name| used.contains(&(item.name.clone(), name.clone(), false))),
-            StructMember::StaticMethod(function) => function
-                .name
-                .as_ref()
-                .is_some_and(|name| used.contains(&(item.name.clone(), name.clone(), true))),
-            StructMember::Field(_) => true,
-        });
     }
 }
 
 fn prune_generic_method_templates(items: &mut [Item]) {
     for item in items {
-        let Item::Struct(item) = item else {
-            continue;
-        };
-        item.members.retain(|member| match member {
-            StructMember::Method(function) | StructMember::StaticMethod(function) => {
-                function.type_params.is_empty()
+        match item {
+            Item::Struct(item) => {
+                item.members.retain(|member| match member {
+                    StructMember::Method(function) | StructMember::StaticMethod(function) => {
+                        function.type_params.is_empty()
+                    }
+                    StructMember::Field(_) => true,
+                });
             }
-            StructMember::Field(_) => true,
-        });
+            Item::Enum(item) => {
+                item.members.retain(|member| match member {
+                    StructMember::Method(function) | StructMember::StaticMethod(function) => {
+                        function.type_params.is_empty()
+                    }
+                    StructMember::Field(_) => true,
+                });
+            }
+            _ => {}
+        }
     }
 }
 
