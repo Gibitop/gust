@@ -1,0 +1,29 @@
+impl Describe for Person {
+    fn describe() => "Hello, " + self.name
+    static fn new(name: String) => Self { name: name }
+}
+
+impl Update for Person {
+    fn update(mut self, name: String) {
+        self.name = name
+    }
+}
+
+trait Describe {
+    fn describe(): String
+    static fn new(name: String): Self
+}
+
+trait Update {
+    fn update(mut self, name: String): void
+}
+
+struct Person {
+    name: String
+}
+
+fn main() {
+    let mut person = Person.new("Gust")
+    person.update("John")
+    io.println(person.describe())
+}

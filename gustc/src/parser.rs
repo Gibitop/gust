@@ -1,8 +1,9 @@
 use crate::ast::{
     BinaryOp, Block, ElseBranch, EnumDecl, EnumVariant, Expr, ExprKind, ExtensionDecl, FieldDecl,
-    FunctionBody, FunctionDecl, FunctionTypeParam, FunctionTypeRef, ImportDecl, ImportName,
-    ImportNamespace, Item, MatchBranch, MatchBranchBody, Param, Pattern, Program, Stmt, StmtKind,
-    StructDecl, StructInitField, StructMember, TypeRef, UnaryOp,
+    FunctionBody, FunctionDecl, FunctionTypeParam, FunctionTypeRef, ImplDecl, ImplMember,
+    ImportDecl, ImportName, ImportNamespace, Item, MatchBranch, MatchBranchBody, Param, Pattern,
+    Program, Stmt, StmtKind, StructDecl, StructInitField, StructMember, TraitDecl, TraitMethodDecl,
+    TypeRef, UnaryOp,
 };
 use crate::diagnostic::Diagnostic;
 use crate::lexer::{Keyword, Token, TokenKind};
@@ -35,6 +36,8 @@ impl Parser {
                 Some(Keyword::From) => items.push(Item::Import(self.parse_import())),
                 Some(Keyword::Enum) => items.push(Item::Enum(self.parse_enum())),
                 Some(Keyword::Struct) => items.push(Item::Struct(self.parse_struct())),
+                Some(Keyword::Trait) => items.push(Item::Trait(self.parse_trait())),
+                Some(Keyword::Impl) => items.push(Item::Impl(self.parse_impl())),
                 Some(Keyword::Fn) => items.push(self.parse_top_level_function()),
                 Some(Keyword::Static) => items.push(self.parse_static_extension()),
                 _ => {
@@ -197,6 +200,107 @@ impl Parser {
             name,
             type_params,
             members,
+            span: start.join(end),
+        }
+    }
+
+    fn parse_trait(&mut self) -> TraitDecl {
+        let start = self.expect_keyword(Keyword::Trait, "`trait`").span;
+        let name = self.expect_identifier("expected trait name");
+        self.expect_kind(&TokenKind::LeftBrace, "`{`");
+
+        let mut methods = Vec::new();
+        while !self.at_eof() && !self.check_kind(&TokenKind::RightBrace) {
+            if matches!(self.current_keyword(), Some(Keyword::Fn | Keyword::Static)) {
+                methods.push(self.parse_trait_method());
+            } else {
+                self.error_here("expected trait method");
+                self.advance();
+            }
+        }
+
+        self.expect_kind(&TokenKind::RightBrace, "`}`");
+        let end = self.previous_span();
+
+        TraitDecl {
+            name,
+            methods,
+            span: start.join(end),
+        }
+    }
+
+    fn parse_trait_method(&mut self) -> TraitMethodDecl {
+        let (start, static_) = if self.current_keyword() == Some(Keyword::Static) {
+            let start = self.expect_keyword(Keyword::Static, "`static`").span;
+            self.expect_keyword(Keyword::Fn, "`fn`");
+            (start, true)
+        } else {
+            (self.expect_keyword(Keyword::Fn, "`fn`").span, false)
+        };
+        let name = self.expect_identifier("expected trait method name");
+        self.expect_kind(&TokenKind::LeftParen, "`(`");
+        let params = self.parse_params();
+        self.expect_kind(&TokenKind::RightParen, "`)`");
+
+        let return_type = if self.match_kind(&TokenKind::Colon) {
+            self.parse_type()
+        } else {
+            None
+        };
+
+        TraitMethodDecl {
+            name,
+            static_,
+            params,
+            return_type,
+            span: start.join(self.previous_span()),
+        }
+    }
+
+    fn parse_impl(&mut self) -> ImplDecl {
+        let start = self.expect_keyword(Keyword::Impl, "`impl`").span;
+        let trait_ref = self
+            .parse_type()
+            .unwrap_or_else(|| self.missing_type(self.current().span));
+        self.expect_keyword(Keyword::For, "`for`");
+        let type_ref = self
+            .parse_type()
+            .unwrap_or_else(|| self.missing_type(self.current().span));
+        self.expect_kind(&TokenKind::LeftBrace, "`{`");
+
+        let mut methods = Vec::new();
+        while !self.at_eof() && !self.check_kind(&TokenKind::RightBrace) {
+            if matches!(self.current_keyword(), Some(Keyword::Fn | Keyword::Static)) {
+                let (function, static_) = if self.current_keyword() == Some(Keyword::Static) {
+                    let start = self.expect_keyword(Keyword::Static, "`static`").span;
+                    self.expect_keyword(Keyword::Fn, "`fn`");
+                    let name = self.expect_identifier("expected impl method name");
+                    (
+                        self.parse_function_tail(start, Some(name), Vec::new()),
+                        true,
+                    )
+                } else {
+                    (self.parse_function(true), false)
+                };
+                let span = function.span;
+                methods.push(ImplMember {
+                    function,
+                    static_,
+                    span,
+                });
+            } else {
+                self.error_here("expected impl method");
+                self.advance();
+            }
+        }
+
+        self.expect_kind(&TokenKind::RightBrace, "`}`");
+        let end = self.previous_span();
+
+        ImplDecl {
+            trait_ref,
+            type_ref,
+            methods,
             span: start.join(end),
         }
     }
@@ -980,7 +1084,13 @@ impl Parser {
             if matches!(
                 self.current_keyword(),
                 Some(
-                    Keyword::From | Keyword::Enum | Keyword::Struct | Keyword::Fn | Keyword::Static,
+                    Keyword::From
+                        | Keyword::Enum
+                        | Keyword::Struct
+                        | Keyword::Trait
+                        | Keyword::Impl
+                        | Keyword::Fn
+                        | Keyword::Static,
                 )
             ) {
                 return;

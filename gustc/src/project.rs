@@ -440,13 +440,14 @@ fn item_export(item: &Item) -> Option<(&str, bool, Span)> {
     match item {
         Item::Enum(item) => Some((&item.name, false, item.span)),
         Item::Struct(item) => Some((&item.name, false, item.span)),
+        Item::Trait(item) => Some((&item.name, false, item.span)),
         Item::Function(item) => item.name.as_deref().map(|name| (name, false, item.span)),
         Item::Extension(item) => item
             .function
             .name
             .as_deref()
             .map(|name| (name, true, item.span)),
-        Item::Import(_) => None,
+        Item::Import(_) | Item::Impl(_) => None,
     }
 }
 
@@ -532,6 +533,26 @@ impl<'names, 'diagnostics> ModuleRewriter<'names, 'diagnostics> {
                     }
                 }
                 self.scopes.pop();
+            }
+            Item::Trait(item) => {
+                self.rewrite_declared_name(&mut item.name);
+                for method in &mut item.methods {
+                    for param in &mut method.params {
+                        if let Some(type_ref) = &mut param.type_ref {
+                            self.rewrite_type(type_ref);
+                        }
+                    }
+                    if let Some(return_type) = &mut method.return_type {
+                        self.rewrite_type(return_type);
+                    }
+                }
+            }
+            Item::Impl(item) => {
+                self.rewrite_type(&mut item.trait_ref);
+                self.rewrite_type(&mut item.type_ref);
+                for member in &mut item.methods {
+                    self.rewrite_function(&mut member.function);
+                }
             }
             Item::Function(function) => {
                 if let Some(name) = &mut function.name
@@ -875,6 +896,27 @@ fn shift_program(program: &mut Program, offset: usize) {
                             shift_function(function, offset);
                         }
                     }
+                }
+            }
+            Item::Trait(item) => {
+                shift_span(&mut item.span, offset);
+                for method in &mut item.methods {
+                    shift_span(&mut method.span, offset);
+                    for param in &mut method.params {
+                        shift_param(param, offset);
+                    }
+                    if let Some(return_type) = &mut method.return_type {
+                        shift_type(return_type, offset);
+                    }
+                }
+            }
+            Item::Impl(item) => {
+                shift_span(&mut item.span, offset);
+                shift_type(&mut item.trait_ref, offset);
+                shift_type(&mut item.type_ref, offset);
+                for member in &mut item.methods {
+                    shift_span(&mut member.span, offset);
+                    shift_function(&mut member.function, offset);
                 }
             }
             Item::Extension(item) => {

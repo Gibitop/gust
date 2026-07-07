@@ -580,6 +580,27 @@ impl Monomorphizer {
                 }
                 self.self_types.pop();
             }
+            Item::Trait(item) => {
+                for method in &mut item.methods {
+                    for param in &mut method.params {
+                        if let Some(type_ref) = &mut param.type_ref {
+                            self.rewrite_type(type_ref, substitutions);
+                        }
+                    }
+                    if let Some(return_type) = &mut method.return_type {
+                        self.rewrite_type(return_type, substitutions);
+                    }
+                }
+            }
+            Item::Impl(item) => {
+                self.rewrite_type(&mut item.trait_ref, substitutions);
+                self.rewrite_type(&mut item.type_ref, substitutions);
+                self.self_types.push(item.type_ref.clone());
+                for member in &mut item.methods {
+                    self.rewrite_function(&mut member.function, substitutions);
+                }
+                self.self_types.pop();
+            }
             Item::Extension(item) => {
                 self.rewrite_type(&mut item.type_ref, substitutions);
                 self.rewrite_function(&mut item.function, substitutions);
@@ -2628,7 +2649,11 @@ impl<'items> MethodReachability<'items> {
                         );
                     }
                 }
-                Item::Import(_) | Item::Enum(_) | Item::Extension(_) => {}
+                Item::Import(_)
+                | Item::Enum(_)
+                | Item::Trait(_)
+                | Item::Impl(_)
+                | Item::Extension(_) => {}
             }
         }
 
@@ -2660,7 +2685,16 @@ impl<'items> MethodReachability<'items> {
                 }
                 Item::Function(function) => self.visit_function(function, None, false),
                 Item::Extension(item) => self.visit_function(&item.function, None, false),
-                Item::Import(_) | Item::Enum(_) | Item::Struct(_) => {}
+                Item::Impl(item) => {
+                    for member in &item.methods {
+                        self.visit_function(
+                            &member.function,
+                            Some(&item.type_ref.name),
+                            !member.static_,
+                        );
+                    }
+                }
+                Item::Import(_) | Item::Enum(_) | Item::Struct(_) | Item::Trait(_) => {}
             }
         }
 

@@ -3456,3 +3456,137 @@ fn main() {}"#,
             .contains("unused type parameter `U` in method `invalid`")
     }));
 }
+
+#[test]
+fn traits_validate_and_dispatch_concrete_impl_methods() {
+    let result = check_source(
+        r#"impl Describe for Person {
+    fn describe() => self.name
+    fn update(mut self, name: String) {
+        self.name = name
+    }
+    static fn new(name: String) => Self { name: name }
+}
+
+trait Describe {
+    fn describe(): String
+    fn update(mut self, name: String): void
+    static fn new(name: String): Self
+}
+
+struct Person {
+    name: String
+}
+
+fn main() {
+    let mut person = Person.new("Gust")
+    person.update("John")
+    io.println(person.describe())
+}"#,
+    );
+
+    assert!(
+        !result.has_errors(),
+        "expected trait impl to validate, got {:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
+fn trait_impls_report_missing_extra_and_mismatched_methods() {
+    let missing = check_source(
+        r#"trait Describe {
+    fn describe(): String
+    static fn new(name: String): Self
+}
+
+struct Person {
+    name: String
+}
+
+impl Describe for Person {
+}
+
+fn main() {}"#,
+    );
+    assert!(missing.diagnostics.iter().any(|diagnostic| {
+        diagnostic
+            .message
+            .contains("impl of trait `Describe` for type `Person` is missing method `describe`")
+    }));
+    assert!(missing.diagnostics.iter().any(|diagnostic| {
+        diagnostic
+            .message
+            .contains("impl of trait `Describe` for type `Person` is missing static method `new`")
+    }));
+
+    let extra = check_source(
+        r#"trait Describe {
+    fn describe(): String
+    static fn new(name: String): Self
+}
+
+struct Person {
+    name: String
+}
+
+impl Describe for Person {
+    fn describe(): String => self.name
+    static fn new(name: String) => Self { name: name }
+    fn extra(): String => self.name
+}
+
+fn main() {}"#,
+    );
+    assert!(extra.diagnostics.iter().any(|diagnostic| {
+        diagnostic
+            .message
+            .contains("method `extra` is not declared in trait `Describe`")
+    }));
+
+    let explicit_mismatch = check_source(
+        r#"trait Describe {
+    fn describe(): String
+    static fn new(name: String): Self
+}
+
+struct Person {
+    name: String
+}
+
+impl Describe for Person {
+    fn describe(): i32 => 1
+    static fn new(name: String) => Self { name: name }
+}
+
+fn main() {}"#,
+    );
+    assert!(explicit_mismatch.diagnostics.iter().any(|diagnostic| {
+        diagnostic
+            .message
+            .contains("method `describe` does not match trait `Describe` for type `Person`")
+    }));
+
+    let inferred_mismatch = check_source(
+        r#"trait Describe {
+    fn describe(): String
+    static fn new(name: String): Self
+}
+
+struct Person {
+    name: String
+}
+
+impl Describe for Person {
+    fn describe() => 1
+    static fn new(name: String) => Self { name: name }
+}
+
+fn main() {}"#,
+    );
+    assert!(inferred_mismatch.diagnostics.iter().any(|diagnostic| {
+        diagnostic
+            .message
+            .contains("expected value of type `String`, got `i32`")
+    }));
+}

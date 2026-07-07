@@ -2436,3 +2436,44 @@ fn main() {
     assert!(c.contains("// Gust enum: Option<String>"));
     assert!(!c.contains(".unused"));
 }
+
+#[test]
+fn trait_impl_methods_lower_to_static_calls() {
+    let result = check_source(
+        r#"impl Describe for Person {
+    fn describe() => self.name
+    fn update(mut self, name: String) {
+        self.name = name
+    }
+    static fn new(name: String) => Self { name: name }
+}
+
+trait Describe {
+    fn describe(): String
+    fn update(mut self, name: String): void
+    static fn new(name: String): Self
+}
+
+struct Person {
+    name: String
+}
+
+fn main() {
+    let mut person = Person.new("Gust")
+    person.update("John")
+    io.println(person.describe())
+}"#,
+    );
+    assert!(
+        !result.has_errors(),
+        "expected trait impl to validate, got {:?}",
+        result.diagnostics
+    );
+
+    let lowered = lower_program(&result.program).expect("trait impl should lower");
+    let c = emit_c(&lowered);
+    assert!(c.contains("// Gust function: trait Person.describe"));
+    assert!(c.contains("// Gust function: trait Person.update"));
+    assert!(c.contains("// Gust function: static trait Person.new"));
+    assert!(c.contains("gust_fn_"));
+}

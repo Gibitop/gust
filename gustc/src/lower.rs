@@ -309,6 +309,14 @@ fn extension_name(type_name: &str, function_name: &str) -> String {
     format!("extension {type_name}.{function_name}")
 }
 
+fn trait_method_name(type_name: &str, function_name: &str) -> String {
+    format!("trait {type_name}.{function_name}")
+}
+
+fn static_trait_method_name(type_name: &str, function_name: &str) -> String {
+    format!("static trait {type_name}.{function_name}")
+}
+
 fn source_callable_name(name: &str) -> &str {
     name.rsplit_once("::").map_or(name, |(_, name)| name)
 }
@@ -333,7 +341,12 @@ fn callable_method_name(
         }
     }
 
-    let name = extension_name(&type_.name(), name);
+    let extension = extension_name(&type_.name(), name);
+    if signatures.contains_key(&extension) {
+        return Some(extension);
+    }
+
+    let name = trait_method_name(&type_.name(), source_callable_name(name));
     signatures.contains_key(&name).then_some(name)
 }
 
@@ -347,7 +360,12 @@ fn callable_static_name(
         return Some(method_name);
     }
 
-    let name = static_extension_name(&type_.name(), name);
+    let extension = static_extension_name(&type_.name(), name);
+    if signatures.contains_key(&extension) {
+        return Some(extension);
+    }
+
+    let name = static_trait_method_name(&type_.name(), source_callable_name(name));
     signatures.contains_key(&name).then_some(name)
 }
 
@@ -388,7 +406,11 @@ fn lower_monomorphized_program(program: &Program) -> Result<LoweredProgram, Vec<
                     },
                 );
             }
-            Item::Import(_) | Item::Extension(_) | Item::Function(_) => {}
+            Item::Import(_)
+            | Item::Trait(_)
+            | Item::Impl(_)
+            | Item::Extension(_)
+            | Item::Function(_) => {}
         }
     }
 
@@ -412,6 +434,8 @@ fn lower_monomorphized_program(program: &Program) -> Result<LoweredProgram, Vec<
                 }
             }
             Item::Function(_) => {}
+            Item::Trait(_) => {}
+            Item::Impl(_) => {}
             Item::Extension(_) => {}
             Item::Import(item) => diagnostics.push(Diagnostic::error(
                 item.span,
@@ -526,6 +550,54 @@ fn lower_monomorphized_program(program: &Program) -> Result<LoweredProgram, Vec<
                     !extension.static_,
                 ));
             }
+            Item::Impl(item) => {
+                let Some(self_type) = lower_value_type_ref(
+                    &item.type_ref,
+                    &structs,
+                    &enums,
+                    &mut diagnostics,
+                    "trait impls require a supported receiver type in executable builds",
+                ) else {
+                    continue;
+                };
+                for member in &item.methods {
+                    let function = &member.function;
+                    let Some(name) = &function.name else {
+                        continue;
+                    };
+                    let lowered_name = if member.static_ {
+                        static_trait_method_name(&self_type.name(), name)
+                    } else {
+                        trait_method_name(&self_type.name(), name)
+                    };
+                    let Some(mut signature) = lower_function_signature(
+                        function,
+                        Some(&self_type),
+                        !member.static_,
+                        &structs,
+                        &enums,
+                        &mut diagnostics,
+                    ) else {
+                        continue;
+                    };
+                    if !member.static_ {
+                        signature.params.insert(
+                            0,
+                            LoweredParamSignature {
+                                type_: self_type.clone(),
+                                mutable: false,
+                            },
+                        );
+                    }
+                    signatures.insert(lowered_name.clone(), signature);
+                    functions_to_lower.push((
+                        lowered_name,
+                        function,
+                        Some(self_type.clone()),
+                        !member.static_,
+                    ));
+                }
+            }
             Item::Function(function) => {
                 let Some(name) = &function.name else {
                     continue;
@@ -547,7 +619,7 @@ fn lower_monomorphized_program(program: &Program) -> Result<LoweredProgram, Vec<
                     functions_to_lower.push((name.clone(), function, None, false));
                 }
             }
-            Item::Import(_) | Item::Enum(_) => {}
+            Item::Import(_) | Item::Enum(_) | Item::Trait(_) => {}
         }
     }
 
