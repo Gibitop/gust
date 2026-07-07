@@ -77,6 +77,7 @@ pub struct StructDecl {
 #[derive(Debug, Clone)]
 pub struct TraitDecl {
     pub name: String,
+    pub type_params: Vec<String>,
     pub methods: Vec<TraitMethodDecl>,
     pub span: Span,
 }

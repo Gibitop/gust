@@ -2536,3 +2536,64 @@ fn main() {
     assert!(c.contains(".gust_vtable = &gust_vtable_"));
     assert!(c.contains(".gust_method_describe"));
 }
+
+#[test]
+fn generic_trait_typed_values_lower_to_dynamic_dispatch() {
+    let result = check_source(
+        r#"impl Named<String> for Person {
+    fn name() => self.name
+}
+
+trait Named<T> {
+    fn name(): T
+}
+
+struct Person {
+    name: String
+}
+
+fn main() {
+    let person = Person { name: "Gust" }
+    let named: Named<String> = person
+    io.println(named.name())
+}"#,
+    );
+    assert!(
+        !result.has_errors(),
+        "expected generic trait object program to validate, got {:?}",
+        result.diagnostics
+    );
+
+    let lowered = lower_program(&result.program).expect("generic trait object should lower");
+
+    assert!(
+        matches!(
+            lowered.statements[1],
+            LoweredStatement::Local {
+                ref value,
+                ..
+            } if matches!(&value.kind, LoweredExprKind::TraitObject { trait_name, .. } if trait_name == "Named<String>")
+        ),
+        "expected generic trait-typed local to lower as trait object, got {:?}",
+        lowered.statements
+    );
+    assert!(
+        matches!(
+            lowered.statements[2],
+            LoweredStatement::Println(LoweredExpr {
+                kind: LoweredExprKind::DynamicCall { ref object, .. },
+                ..
+            }) if matches!(
+                object.kind,
+                LoweredExprKind::Local(ref name) if name == "named"
+            ) && object.type_.name() == "Named<String>"
+        ),
+        "expected generic trait method call to lower as dynamic call, got {:?}",
+        lowered.statements
+    );
+
+    let c = emit_c(&lowered);
+    assert!(c.contains("// Gust function: trait Person.name"));
+    assert!(c.contains("gust_trait_thunk_"));
+    assert!(c.contains("Named_String"));
+}

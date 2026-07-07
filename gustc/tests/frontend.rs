@@ -3527,6 +3527,82 @@ fn main() {
 }
 
 #[test]
+fn generic_traits_validate_concrete_specializations() {
+    let result = check_source(
+        r#"impl Named<String> for Person {
+    fn name() => self.name
+}
+
+trait Named<T> {
+    fn name(): T
+}
+
+struct Person {
+    name: String
+}
+
+fn printName(value: Named<String>) {
+    io.println(value.name())
+}
+
+fn main() {
+    let person = Person { name: "Gust" }
+    let named: Named<String> = person
+    printName(person)
+    io.println(named.name())
+}"#,
+    );
+
+    assert!(
+        !result.has_errors(),
+        "expected generic trait specialization to validate, got {:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
+fn generic_traits_report_invalid_declarations_and_arguments() {
+    let invalid = check_source(
+        r#"trait Named<T, T, U> {
+    fn name(): T
+}
+
+fn main() {}"#,
+    );
+    assert!(invalid.diagnostics.iter().any(|diagnostic| {
+        diagnostic
+            .message
+            .contains("duplicate type parameter `T` in trait `Named`")
+    }));
+    assert!(invalid.diagnostics.iter().any(|diagnostic| {
+        diagnostic
+            .message
+            .contains("unused type parameter `U` in trait `Named`")
+    }));
+
+    let wrong_count = check_source(
+        r#"trait Named<T> {
+    fn name(): T
+}
+
+struct Person {
+    name: String
+}
+
+impl Named<String, i32> for Person {
+    fn name() => self.name
+}
+
+fn main() {}"#,
+    );
+    assert!(wrong_count.diagnostics.iter().any(|diagnostic| {
+        diagnostic
+            .message
+            .contains("generic trait `Named` expects 1 type arguments, got 2")
+    }));
+}
+
+#[test]
 fn trait_typed_values_require_impls() {
     let result = check_source(
         r#"trait Describe {

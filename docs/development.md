@@ -248,7 +248,13 @@ enum variant construction and generic struct literals participate in symbolic re
 so functions returning `Option.Some(value)`, `Option<T>.None`, or `Box { value: value }` do not
 require annotations.
 
-Generic bounds are not implemented yet.
+Traits may declare type parameters, such as `trait Named<T>`. Concrete uses of a generic trait,
+including `impl Named<String> for Person` and trait-typed values like `let value: Named<String>`,
+are monomorphized before semantic analysis and executable lowering. Each concrete specialization
+has its own trait object type and dynamic-dispatch vtable.
+
+Generic impl templates such as `impl<T> Named<T> for Box<T>` and generic bounds are not implemented
+yet.
 
 ## First-class functions
 

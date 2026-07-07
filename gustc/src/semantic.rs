@@ -519,13 +519,6 @@ impl Analyzer {
             return;
         };
 
-        if !item.trait_ref.args.is_empty() {
-            self.diagnostics.push(Diagnostic::error(
-                item.trait_ref.span,
-                "generic traits are not implemented yet",
-            ));
-        }
-
         if matches!(
             self_type,
             Type::Unknown | Type::Void | Type::Trait(_) | Type::Function { .. } | Type::Named(_)
@@ -881,13 +874,6 @@ impl Analyzer {
                 format!("unknown trait `{}`", item.trait_ref.name),
             ));
         }
-        if !item.trait_ref.args.is_empty() {
-            self.unsupported(
-                item.trait_ref.span,
-                "generic traits are not implemented yet",
-            );
-        }
-
         let self_type = self.validate_type(&item.type_ref);
         for member in &item.methods {
             let method = &member.function;
