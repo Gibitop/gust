@@ -6,6 +6,15 @@ fn addOne(value: i32) {
     return value + 1
 }
 
+fn makeCallCounter() {
+    let mut count = 0
+
+    return fn () {
+        count++
+        io.println(count.toString())
+    }
+}
+
 fn main() {
     let mut count = 0
     let increment = fn() => count++
@@ -17,4 +26,8 @@ fn main() {
     if count == 2 && apply(41, addOne) == 42 && apply(21, fn(value) => value * 2) == double(21) {
         io.println("first class functions capture locals")
     }
+
+    let callCounter = makeCallCounter()
+    callCounter()
+    callCounter()
 }

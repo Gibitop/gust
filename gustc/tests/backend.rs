@@ -457,6 +457,39 @@ fn main() {
 }
 
 #[test]
+fn inferred_closure_return_with_void_body_and_runtime_helpers_emit_c() {
+    let result = check_source(
+        r#"fn makeCallCounter() {
+    let mut count = 0
+
+    return fn () {
+        count++
+        io.println(count.toString())
+    }
+}
+
+fn main() {
+    let callCounter = makeCallCounter()
+    callCounter()
+    callCounter()
+}"#,
+    );
+
+    assert!(
+        !result.has_errors(),
+        "expected no frontend errors, got {:?}",
+        result.diagnostics
+    );
+
+    let lowered = lower_program(&result.program).expect("closure return should lower");
+    let source = emit_c(&lowered);
+
+    assert!(source.contains("static const char* gust_rt_i32_to_string("));
+    assert!(source.contains("gust_rt_io_println(gust_rt_i32_to_string("));
+    assert!(source.contains(".gust_call("));
+}
+
+#[test]
 fn incompatible_inferred_return_function_values_are_lowering_errors() {
     let result = check_source(
         r#"fn useString(f: fn(i32): String): String {

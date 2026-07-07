@@ -95,6 +95,7 @@ enum Type {
         params: Vec<FunctionTypeParam>,
         return_type: Box<Type>,
     },
+    Void,
     Named(String),
     Unknown,
 }
@@ -128,6 +129,7 @@ impl Type {
                     .join(", ");
                 format!("fn({params}): {}", return_type.name())
             }
+            Type::Void => "void".to_string(),
             Type::Named(name) => name.clone(),
             Type::Unknown => "unknown".to_string(),
         }
@@ -720,7 +722,7 @@ impl Analyzer {
                     let value_type =
                         self.validate_expr_with_context(value, Some(expected_type.clone()));
                     self.report_type_mismatch(value.span, expected_type, value_type);
-                } else if matches!(expected_type, Type::Basic(_)) {
+                } else if !matches!(expected_type, Type::Unknown | Type::Void) {
                     self.diagnostics.push(Diagnostic::error(
                         statement.span,
                         "return value required for this function",
@@ -846,6 +848,7 @@ impl Analyzer {
                 | Some(Type::Struct(_))
                 | Some(Type::Enum(_))
                 | Some(Type::Function { .. })
+                | Some(Type::Void)
                 | Some(Type::Named(_))
                 | None => Type::Basic(if number_literal_is_float(value) {
                     BasicType::F64
@@ -1512,11 +1515,18 @@ impl Analyzer {
                 return Type::Unknown;
             }
 
-            if self.lookup(name).is_none() {
+            let binding = self.lookup(name);
+            if binding.is_none() {
                 self.diagnostics.push(Diagnostic::error(
                     expr.span,
                     format!("unknown name `{name}`"),
                 ));
+            } else if binding.is_some_and(|binding| matches!(binding.type_, Type::Unknown)) {
+                for arg in args {
+                    self.validate_expr(arg);
+                }
+
+                return Type::Unknown;
             } else {
                 self.diagnostics.push(Diagnostic::error(
                     expr.span,
@@ -2129,7 +2139,7 @@ impl Analyzer {
                 return Type::Unknown;
             }
             Type::Named(_) => return Type::Unknown,
-            Type::Basic(_) | Type::Function { .. } => {
+            Type::Basic(_) | Type::Function { .. } | Type::Void => {
                 self.diagnostics.push(Diagnostic::error(
                     span,
                     "field access requires a struct value",
@@ -2154,7 +2164,7 @@ impl Analyzer {
     }
 
     fn validate_missing_return(&mut self, function: &FunctionDecl, return_type: Type) {
-        if matches!(return_type, Type::Unknown) {
+        if matches!(return_type, Type::Unknown | Type::Void) {
             return;
         }
 
@@ -2322,7 +2332,9 @@ impl Analyzer {
             Type::Struct(type_ref.name.clone())
         } else if self.enums.contains_key(&type_ref.name) {
             Type::Enum(type_ref.name.clone())
-        } else if type_ref.name != "void" && self.types.contains(&type_ref.name) {
+        } else if type_ref.name == "void" {
+            Type::Void
+        } else if self.types.contains(&type_ref.name) {
             Type::Named(type_ref.name.clone())
         } else {
             Type::Unknown
@@ -2377,7 +2389,9 @@ impl Analyzer {
             Type::Struct(type_ref.name.clone())
         } else if self.enums.contains_key(&type_ref.name) {
             Type::Enum(type_ref.name.clone())
-        } else if type_ref.name != "void" && self.types.contains(&type_ref.name) {
+        } else if type_ref.name == "void" {
+            Type::Void
+        } else if self.types.contains(&type_ref.name) {
             Type::Named(type_ref.name.clone())
         } else {
             Type::Unknown
