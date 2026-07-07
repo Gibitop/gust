@@ -15,8 +15,9 @@ struct Monomorphizer {
     enum_templates: HashMap<String, EnumDecl>,
     function_templates: HashMap<String, FunctionDecl>,
     concrete_structs: HashSet<String>,
+    concrete_struct_defs: HashMap<String, StructDecl>,
     concrete_enums: HashMap<String, EnumDecl>,
-    pending: VecDeque<(GenericKind, String, Vec<TypeRef>)>,
+    pending: VecDeque<PendingSpecialization>,
     emitted: HashSet<String>,
     specializations: HashMap<String, (String, Vec<TypeRef>)>,
     scopes: Vec<HashMap<String, TypeRef>>,
@@ -27,15 +28,21 @@ struct Monomorphizer {
     function_returns: HashMap<String, TypeRef>,
     function_params: HashMap<String, Vec<Option<TypeRef>>>,
     generic_function_returns: HashMap<String, TypeRef>,
+    generic_method_returns: HashMap<(String, String, bool), TypeRef>,
     expected_expr_types: HashMap<crate::span::Span, TypeRef>,
     diagnostics: Vec<Diagnostic>,
 }
 
-#[derive(Clone, Copy)]
-enum GenericKind {
-    Struct,
-    Enum,
-    Function,
+enum PendingSpecialization {
+    Struct(String, Vec<TypeRef>),
+    Enum(String, Vec<TypeRef>),
+    Function(String, Vec<TypeRef>),
+    Method {
+        receiver: String,
+        name: String,
+        static_: bool,
+        args: Vec<TypeRef>,
+    },
 }
 
 impl Monomorphizer {
@@ -80,6 +87,18 @@ impl Monomorphizer {
                     return None;
                 };
                 item.type_params.is_empty().then(|| item.name.clone())
+            })
+            .collect();
+        let concrete_struct_defs = program
+            .items
+            .iter()
+            .filter_map(|item| {
+                let Item::Struct(item) = item else {
+                    return None;
+                };
+                item.type_params
+                    .is_empty()
+                    .then(|| (item.name.clone(), item.clone()))
             })
             .collect();
         let concrete_enums = program
@@ -145,6 +164,7 @@ impl Monomorphizer {
             enum_templates,
             function_templates,
             concrete_structs,
+            concrete_struct_defs,
             concrete_enums,
             pending: VecDeque::new(),
             emitted: HashSet::new(),
@@ -157,6 +177,7 @@ impl Monomorphizer {
             function_returns,
             function_params,
             generic_function_returns,
+            generic_method_returns: HashMap::new(),
             expected_expr_types: HashMap::new(),
             diagnostics: Vec::new(),
         }
@@ -164,6 +185,7 @@ impl Monomorphizer {
 
     fn run(mut self, program: &Program) -> Result<Program, Vec<Diagnostic>> {
         self.infer_generic_function_returns();
+        self.infer_generic_method_returns();
         self.validate_templates();
 
         let mut items = Vec::new();
@@ -180,14 +202,13 @@ impl Monomorphizer {
             items.push(item);
         }
 
-        while let Some((kind, name, args)) = self.pending.pop_front() {
-            let specialized_name = specialized_name(&name, &args);
-            if !self.emitted.insert(specialized_name.clone()) {
-                continue;
-            }
-
-            match kind {
-                GenericKind::Struct => {
+        while let Some(pending) = self.pending.pop_front() {
+            match pending {
+                PendingSpecialization::Struct(name, args) => {
+                    let specialized_name = specialized_name(&name, &args);
+                    if !self.emitted.insert(specialized_name.clone()) {
+                        continue;
+                    }
                     let Some(template) = self.struct_templates.get(&name).cloned() else {
                         continue;
                     };
@@ -213,7 +234,9 @@ impl Monomorphizer {
                             }
                             StructMember::Method(function)
                             | StructMember::StaticMethod(function) => {
-                                self.rewrite_function(function, &substitutions);
+                                if function.type_params.is_empty() {
+                                    self.rewrite_function(function, &substitutions);
+                                }
                             }
                         }
                     }
@@ -221,7 +244,11 @@ impl Monomorphizer {
                     self.self_types.pop();
                     items.push(Item::Struct(specialized));
                 }
-                GenericKind::Enum => {
+                PendingSpecialization::Enum(name, args) => {
+                    let specialized_name = specialized_name(&name, &args);
+                    if !self.emitted.insert(specialized_name.clone()) {
+                        continue;
+                    }
                     let Some(template) = self.enum_templates.get(&name).cloned() else {
                         continue;
                     };
@@ -243,7 +270,11 @@ impl Monomorphizer {
                         .insert(specialized.name.clone(), specialized.clone());
                     items.push(Item::Enum(specialized));
                 }
-                GenericKind::Function => {
+                PendingSpecialization::Function(name, args) => {
+                    let specialized_name = specialized_name(&name, &args);
+                    if !self.emitted.insert(specialized_name.clone()) {
+                        continue;
+                    }
                     let Some(template) = self.function_templates.get(&name).cloned() else {
                         continue;
                     };
@@ -282,10 +313,24 @@ impl Monomorphizer {
                     self.rewrite_function(&mut specialized, &substitutions);
                     items.push(Item::Function(specialized));
                 }
+                PendingSpecialization::Method {
+                    receiver,
+                    name,
+                    static_,
+                    args,
+                } => {
+                    let method_name = specialized_name(&name, &args);
+                    let emitted_name = format!("{receiver}.{method_name}");
+                    if !self.emitted.insert(emitted_name) {
+                        continue;
+                    }
+                    self.emit_method_specialization(&mut items, &receiver, &name, static_, &args);
+                }
             }
         }
 
         prune_unused_generic_methods(&mut items, &self.emitted);
+        prune_generic_method_templates(&mut items);
 
         if self.diagnostics.is_empty() {
             Ok(Program { items })
@@ -295,7 +340,7 @@ impl Monomorphizer {
     }
 
     fn validate_templates(&mut self) {
-        for template in self.struct_templates.values() {
+        for template in self.struct_templates.values().cloned().collect::<Vec<_>>() {
             let mut names = HashSet::new();
             for name in &template.type_params {
                 if !names.insert(name) {
@@ -308,6 +353,15 @@ impl Monomorphizer {
                     ));
                 }
             }
+            self.validate_method_type_params(&template);
+        }
+        for template in self
+            .concrete_struct_defs
+            .values()
+            .cloned()
+            .collect::<Vec<_>>()
+        {
+            self.validate_method_type_params(&template);
         }
         for template in self.enum_templates.values() {
             let mut names = HashSet::new();
@@ -348,6 +402,129 @@ impl Monomorphizer {
                         format!("unused type parameter `{name}` in function `{function_name}`"),
                     ));
                 }
+            }
+        }
+    }
+
+    fn validate_method_type_params(&mut self, template: &StructDecl) {
+        let struct_params = template.type_params.iter().cloned().collect::<HashSet<_>>();
+        for member in &template.members {
+            let function = match member {
+                StructMember::Method(function) | StructMember::StaticMethod(function) => function,
+                StructMember::Field(_) => continue,
+            };
+            if function.type_params.is_empty() {
+                continue;
+            }
+            let function_name = function.name.as_deref().unwrap_or("<anonymous>");
+            let mut names = HashSet::new();
+            for name in &function.type_params {
+                if !names.insert(name) {
+                    self.diagnostics.push(Diagnostic::error(
+                        function.span,
+                        format!("duplicate type parameter `{name}` in method `{function_name}`"),
+                    ));
+                }
+                if struct_params.contains(name) {
+                    self.diagnostics.push(Diagnostic::error(
+                        function.span,
+                        format!(
+                            "type parameter `{name}` in method `{function_name}` conflicts with struct `{}`",
+                            template.name
+                        ),
+                    ));
+                }
+            }
+            let used = function
+                .params
+                .iter()
+                .filter_map(|param| param.type_ref.as_ref())
+                .chain(function.return_type.as_ref().or_else(|| {
+                    self.generic_method_returns.get(&(
+                        template.name.clone(),
+                        function_name.to_string(),
+                        matches!(member, StructMember::StaticMethod(_)),
+                    ))
+                }))
+                .flat_map(type_names)
+                .collect::<HashSet<_>>();
+            for name in &function.type_params {
+                if !used.contains(name.as_str()) {
+                    self.diagnostics.push(Diagnostic::error(
+                        function.span,
+                        format!("unused type parameter `{name}` in method `{function_name}`"),
+                    ));
+                }
+            }
+        }
+    }
+
+    fn infer_generic_method_returns(&mut self) {
+        let mut templates = Vec::new();
+        for template in self.struct_templates.values() {
+            for member in &template.members {
+                match member {
+                    StructMember::Method(function) | StructMember::StaticMethod(function)
+                        if !function.type_params.is_empty() =>
+                    {
+                        templates.push((
+                            template.name.clone(),
+                            function.clone(),
+                            matches!(member, StructMember::StaticMethod(_)),
+                        ));
+                    }
+                    StructMember::Field(_)
+                    | StructMember::Method(_)
+                    | StructMember::StaticMethod(_) => {}
+                }
+            }
+        }
+        for template in self.concrete_struct_defs.values() {
+            for member in &template.members {
+                match member {
+                    StructMember::Method(function) | StructMember::StaticMethod(function)
+                        if !function.type_params.is_empty() =>
+                    {
+                        templates.push((
+                            template.name.clone(),
+                            function.clone(),
+                            matches!(member, StructMember::StaticMethod(_)),
+                        ));
+                    }
+                    StructMember::Field(_)
+                    | StructMember::Method(_)
+                    | StructMember::StaticMethod(_) => {}
+                }
+            }
+        }
+
+        for (owner, function, static_) in &templates {
+            if let (Some(name), Some(return_type)) = (&function.name, &function.return_type) {
+                self.generic_method_returns
+                    .insert((owner.clone(), name.clone(), *static_), return_type.clone());
+            }
+        }
+
+        for _ in 0..templates.len() {
+            let mut changed = false;
+            for (owner, function, static_) in &templates {
+                let Some(name) = &function.name else {
+                    continue;
+                };
+                let key = (owner.clone(), name.clone(), *static_);
+                if self.generic_method_returns.contains_key(&key) {
+                    continue;
+                }
+                let Some(return_type) =
+                    self.infer_rewritten_function_return(function, owner, !static_)
+                else {
+                    continue;
+                };
+                self.generic_method_returns.insert(key, return_type);
+                changed = true;
+            }
+            if !changed {
+                break;
             }
         }
     }
@@ -395,7 +572,9 @@ impl Monomorphizer {
                             self.rewrite_type(&mut field.type_ref, substitutions);
                         }
                         StructMember::Method(function) | StructMember::StaticMethod(function) => {
-                            self.rewrite_function(function, substitutions);
+                            if function.type_params.is_empty() {
+                                self.rewrite_function(function, substitutions);
+                            }
                         }
                     }
                 }
@@ -662,6 +841,146 @@ impl Monomorphizer {
             return;
         }
 
+        let generic_method_call = match &expr.kind {
+            ExprKind::Call { callee, .. } => match &callee.kind {
+                ExprKind::GenericMember { object, name, args } => self
+                    .infer_type_expression_ref(object)
+                    .map(|receiver| {
+                        (
+                            object.clone(),
+                            receiver,
+                            name.clone(),
+                            true,
+                            Some(args.clone()),
+                        )
+                    })
+                    .or_else(|| {
+                        self.infer_expr_type(object).map(|receiver| {
+                            (
+                                object.clone(),
+                                receiver,
+                                name.clone(),
+                                false,
+                                Some(args.clone()),
+                            )
+                        })
+                    }),
+                ExprKind::Member { object, name } => self
+                    .infer_type_expression_ref(object)
+                    .and_then(|receiver| {
+                        self.method_template(&receiver, name, true)
+                            .filter(|(_, _, function)| !function.type_params.is_empty())
+                            .map(|_| (object.clone(), receiver, name.clone(), true, None))
+                    })
+                    .or_else(|| {
+                        self.infer_expr_type(object)
+                            .and_then(|receiver| {
+                                self.method_template(&receiver, name, false)
+                                    .filter(|(_, _, function)| !function.type_params.is_empty())
+                                    .map(|_| receiver)
+                            })
+                            .map(|receiver| (object.clone(), receiver, name.clone(), false, None))
+                    }),
+                _ => None,
+            },
+            _ => None,
+        };
+        if let Some((_, receiver, method_name, static_, explicit_args)) = generic_method_call {
+            let expected_return = self.expected_expr_types.remove(&expr.span);
+            let ExprKind::Call { callee, args } = &mut expr.kind else {
+                unreachable!("generic method call was matched above")
+            };
+            let mut args_rewritten = false;
+            let type_args = if let Some(mut type_args) = explicit_args {
+                for type_arg in &mut type_args {
+                    self.rewrite_type(type_arg, substitutions);
+                }
+                self.validate_method_type_arguments(
+                    &receiver,
+                    &method_name,
+                    static_,
+                    &type_args,
+                    expr.span,
+                )
+                .then_some(type_args)
+            } else {
+                match self.infer_method_type_arguments(
+                    &receiver,
+                    &method_name,
+                    static_,
+                    args,
+                    expected_return.as_ref(),
+                ) {
+                    Ok(mut type_args) => {
+                        for type_arg in &mut type_args {
+                            self.rewrite_type(type_arg, substitutions);
+                        }
+                        Some(type_args)
+                    }
+                    Err(_) => {
+                        for arg in args.iter_mut() {
+                            self.rewrite_expr(arg, substitutions);
+                        }
+                        args_rewritten = true;
+                        match self.infer_method_type_arguments(
+                            &receiver,
+                            &method_name,
+                            static_,
+                            args,
+                            expected_return.as_ref(),
+                        ) {
+                            Ok(mut type_args) => {
+                                for type_arg in &mut type_args {
+                                    self.rewrite_type(type_arg, substitutions);
+                                }
+                                Some(type_args)
+                            }
+                            Err(message) => {
+                                self.diagnostics.push(Diagnostic::error(expr.span, message));
+                                None
+                            }
+                        }
+                    }
+                }
+            };
+            if let Some(type_args) = type_args {
+                self.apply_generic_method_argument_contexts(
+                    &receiver,
+                    &method_name,
+                    static_,
+                    &type_args,
+                    args,
+                    substitutions,
+                );
+                if !args_rewritten {
+                    for arg in args.iter_mut() {
+                        self.rewrite_expr(arg, substitutions);
+                    }
+                }
+                if let Some((receiver, _, _)) =
+                    self.method_template(&receiver, &method_name, static_)
+                {
+                    self.specialize_method(&receiver.name, &method_name, static_, &type_args);
+                }
+                let mut object = match &mut callee.kind {
+                    ExprKind::Member { object, .. } | ExprKind::GenericMember { object, .. } => {
+                        (**object).clone()
+                    }
+                    _ => unreachable!("generic method call requires a member callee"),
+                };
+                self.rewrite_expr(&mut object, substitutions);
+                callee.kind = ExprKind::Member {
+                    object: Box::new(object),
+                    name: specialized_name(&method_name, &type_args),
+                };
+            } else if !args_rewritten {
+                for arg in args.iter_mut() {
+                    self.rewrite_expr(arg, substitutions);
+                }
+            }
+            return;
+        }
+
         if let ExprKind::GenericType { name, args } = &mut expr.kind {
             for arg in args.iter_mut() {
                 self.rewrite_type(arg, substitutions);
@@ -826,6 +1145,12 @@ impl Monomorphizer {
                 }
             }
             ExprKind::Member { object, .. } => self.rewrite_expr(object, substitutions),
+            ExprKind::GenericMember { object, args, .. } => {
+                self.rewrite_expr(object, substitutions);
+                for arg in args {
+                    self.rewrite_type(arg, substitutions);
+                }
+            }
             ExprKind::StructInit { name, args, fields } => {
                 for arg in args.iter_mut() {
                     self.rewrite_type(arg, substitutions);
@@ -980,6 +1305,9 @@ impl Monomorphizer {
                     StructMember::StaticMethod(function) => (function, true),
                     StructMember::Field(_) => continue,
                 };
+                if !function.type_params.is_empty() {
+                    continue;
+                }
                 if let Some(name) = &function.name
                     && let Some(return_type) = &function.return_type
                 {
@@ -995,6 +1323,9 @@ impl Monomorphizer {
                     StructMember::StaticMethod(function) => (function, true),
                     StructMember::Field(_) => continue,
                 };
+                if !function.type_params.is_empty() {
+                    continue;
+                }
                 if function.return_type.is_some() {
                     continue;
                 }
@@ -1334,6 +1665,329 @@ impl Monomorphizer {
         }
     }
 
+    fn infer_method_type_arguments(
+        &mut self,
+        receiver: &TypeRef,
+        method_name: &str,
+        static_: bool,
+        args: &[Expr],
+        expected_return: Option<&TypeRef>,
+    ) -> Result<Vec<TypeRef>, String> {
+        let (receiver, struct_substitutions, function) = self
+            .method_template(receiver, method_name, static_)
+            .ok_or_else(|| format!("unknown generic method `{method_name}`"))?;
+        let mut constraints = function
+            .params
+            .iter()
+            .filter(|param| !(param.name == "self" && param.type_ref.is_none()))
+            .zip(args)
+            .filter_map(|(param, arg)| {
+                let expected = param.type_ref.as_ref()?;
+                self.infer_expr_type(arg)
+                    .map(|actual| (substitute_type(expected, &struct_substitutions), actual))
+            })
+            .collect::<Vec<_>>();
+        let return_type = self.method_return_type(&receiver, &function, static_);
+        if let (Some(return_type), Some(expected_return)) = (return_type, expected_return) {
+            constraints.push((return_type, expected_return.clone()));
+        }
+        self.solve_type_arguments(method_name, &function.type_params, constraints)
+            .map_err(|reason| {
+                format!(
+                    "cannot infer type arguments for generic method `{}.{method_name}`: {reason}; write `.{method_name}<Type>(...)` or add a concrete expected type",
+                    receiver.name
+                )
+            })
+    }
+
+    fn apply_generic_method_argument_contexts(
+        &mut self,
+        receiver: &TypeRef,
+        method_name: &str,
+        static_: bool,
+        type_args: &[TypeRef],
+        args: &mut [Expr],
+        substitutions: &HashMap<String, TypeRef>,
+    ) {
+        let Some((_, mut method_substitutions, function)) =
+            self.method_template(receiver, method_name, static_)
+        else {
+            return;
+        };
+        method_substitutions.extend(
+            function
+                .type_params
+                .iter()
+                .cloned()
+                .zip(type_args.iter().cloned()),
+        );
+        for (param, arg) in function
+            .params
+            .iter()
+            .filter(|param| !(param.name == "self" && param.type_ref.is_none()))
+            .zip(args)
+        {
+            let Some(type_ref) = &param.type_ref else {
+                continue;
+            };
+            let mut expected = substitute_type(type_ref, &method_substitutions);
+            self.rewrite_type(&mut expected, substitutions);
+            self.apply_expr_context(arg, &expected);
+        }
+    }
+
+    fn validate_method_type_arguments(
+        &mut self,
+        receiver: &TypeRef,
+        method_name: &str,
+        static_: bool,
+        args: &[TypeRef],
+        span: crate::span::Span,
+    ) -> bool {
+        let Some((receiver, _, function)) = self.method_template(receiver, method_name, static_)
+        else {
+            self.diagnostics.push(Diagnostic::error(
+                span,
+                format!("unknown generic method `{method_name}`"),
+            ));
+            return false;
+        };
+        let expected = function.type_params.len();
+        if args.len() == expected {
+            return true;
+        }
+        self.diagnostics.push(Diagnostic::error(
+            span,
+            format!(
+                "generic method `{}.{method_name}` expects {expected} type arguments, got {}",
+                receiver.name,
+                args.len()
+            ),
+        ));
+        false
+    }
+
+    fn method_template(
+        &self,
+        receiver: &TypeRef,
+        method_name: &str,
+        static_: bool,
+    ) -> Option<(TypeRef, HashMap<String, TypeRef>, FunctionDecl)> {
+        let receiver = self.expanded_type(receiver);
+        if let Some((generic_name, args)) = self.specializations.get(&receiver.name) {
+            let template = self.struct_templates.get(generic_name)?;
+            let substitutions = template
+                .type_params
+                .iter()
+                .cloned()
+                .zip(args.iter().cloned())
+                .collect::<HashMap<_, _>>();
+            let mut function = template.members.iter().find_map(|member| match member {
+                StructMember::Method(function) if !static_ => {
+                    (function.name.as_deref() == Some(method_name)).then(|| function.clone())
+                }
+                StructMember::StaticMethod(function) if static_ => {
+                    (function.name.as_deref() == Some(method_name)).then(|| function.clone())
+                }
+                StructMember::Field(_)
+                | StructMember::Method(_)
+                | StructMember::StaticMethod(_) => None,
+            })?;
+            if function.return_type.is_none()
+                && let Some(return_type) = self.generic_method_returns.get(&(
+                    generic_name.clone(),
+                    method_name.to_string(),
+                    static_,
+                ))
+            {
+                function.return_type = Some(return_type.clone());
+            }
+            return Some((receiver, substitutions, function));
+        }
+
+        if !receiver.args.is_empty()
+            && let Some(template) = self.struct_templates.get(&receiver.name)
+        {
+            let substitutions = template
+                .type_params
+                .iter()
+                .cloned()
+                .zip(receiver.args.iter().cloned())
+                .collect::<HashMap<_, _>>();
+            let mut function = template.members.iter().find_map(|member| match member {
+                StructMember::Method(function) if !static_ => {
+                    (function.name.as_deref() == Some(method_name)).then(|| function.clone())
+                }
+                StructMember::StaticMethod(function) if static_ => {
+                    (function.name.as_deref() == Some(method_name)).then(|| function.clone())
+                }
+                StructMember::Field(_)
+                | StructMember::Method(_)
+                | StructMember::StaticMethod(_) => None,
+            })?;
+            if function.return_type.is_none()
+                && let Some(return_type) = self.generic_method_returns.get(&(
+                    receiver.name.clone(),
+                    method_name.to_string(),
+                    static_,
+                ))
+            {
+                function.return_type = Some(return_type.clone());
+            }
+            return Some((
+                TypeRef {
+                    name: specialized_name(&receiver.name, &receiver.args),
+                    args: Vec::new(),
+                    function: None,
+                    span: receiver.span,
+                },
+                substitutions,
+                function,
+            ));
+        }
+
+        let template = self.concrete_struct_defs.get(&receiver.name)?;
+        let mut function = template.members.iter().find_map(|member| match member {
+            StructMember::Method(function) if !static_ => {
+                (function.name.as_deref() == Some(method_name)).then(|| function.clone())
+            }
+            StructMember::StaticMethod(function) if static_ => {
+                (function.name.as_deref() == Some(method_name)).then(|| function.clone())
+            }
+            StructMember::Field(_) | StructMember::Method(_) | StructMember::StaticMethod(_) => {
+                None
+            }
+        })?;
+        if function.return_type.is_none()
+            && let Some(return_type) = self.generic_method_returns.get(&(
+                receiver.name.clone(),
+                method_name.to_string(),
+                static_,
+            ))
+        {
+            function.return_type = Some(return_type.clone());
+        }
+        Some((receiver, HashMap::new(), function))
+    }
+
+    fn method_return_type(
+        &mut self,
+        receiver: &TypeRef,
+        function: &FunctionDecl,
+        static_: bool,
+    ) -> Option<TypeRef> {
+        function
+            .return_type
+            .clone()
+            .or_else(|| self.infer_rewritten_function_return(function, &receiver.name, !static_))
+    }
+
+    fn specialize_method(
+        &mut self,
+        receiver: &str,
+        method_name: &str,
+        static_: bool,
+        args: &[TypeRef],
+    ) {
+        let specialized_method = specialized_name(method_name, args);
+        let key = (receiver.to_string(), specialized_method.clone(), static_);
+        if !self.member_returns.contains_key(&key) {
+            let receiver_type = TypeRef {
+                name: receiver.to_string(),
+                args: Vec::new(),
+                function: None,
+                span: args
+                    .first()
+                    .map_or_else(|| crate::span::Span::new(0, 0), |arg| arg.span),
+            };
+            if let Some((_, mut substitutions, function)) =
+                self.method_template(&receiver_type, method_name, static_)
+            {
+                substitutions.extend(
+                    function
+                        .type_params
+                        .iter()
+                        .cloned()
+                        .zip(args.iter().cloned()),
+                );
+                if let Some(return_type) =
+                    self.method_return_type(&receiver_type, &function, static_)
+                {
+                    self.member_returns
+                        .insert(key, substitute_type(&return_type, &substitutions));
+                }
+            }
+        }
+        self.pending.push_back(PendingSpecialization::Method {
+            receiver: receiver.to_string(),
+            name: method_name.to_string(),
+            static_,
+            args: args.to_vec(),
+        });
+    }
+
+    fn emit_method_specialization(
+        &mut self,
+        items: &mut [Item],
+        receiver: &str,
+        method_name: &str,
+        static_: bool,
+        args: &[TypeRef],
+    ) {
+        let receiver_type = TypeRef {
+            name: receiver.to_string(),
+            args: Vec::new(),
+            function: None,
+            span: args
+                .first()
+                .map_or_else(|| crate::span::Span::new(0, 0), |arg| arg.span),
+        };
+        let Some((_, mut substitutions, mut function)) =
+            self.method_template(&receiver_type, method_name, static_)
+        else {
+            return;
+        };
+        substitutions.extend(
+            function
+                .type_params
+                .iter()
+                .cloned()
+                .zip(args.iter().cloned()),
+        );
+        function.name = Some(specialized_name(method_name, args));
+        function.type_params.clear();
+        self.self_types.push(receiver_type.clone());
+        self.rewrite_function(&mut function, &substitutions);
+        self.self_types.pop();
+        if function.return_type.is_none()
+            && let Some(return_type) =
+                self.infer_rewritten_function_return(&function, receiver, !static_)
+        {
+            function.return_type = Some(return_type);
+        }
+        if let Some(return_type) = &function.return_type {
+            self.member_returns.insert(
+                (
+                    receiver.to_string(),
+                    function.name.clone().unwrap_or_default(),
+                    static_,
+                ),
+                return_type.clone(),
+            );
+        }
+        let Some(Item::Struct(struct_)) = items
+            .iter_mut()
+            .find(|item| matches!(item, Item::Struct(struct_) if struct_.name == receiver))
+        else {
+            return;
+        };
+        if static_ {
+            struct_.members.push(StructMember::StaticMethod(function));
+        } else {
+            struct_.members.push(StructMember::Method(function));
+        }
+    }
+
     fn validate_function_type_arguments(
         &mut self,
         function_name: &str,
@@ -1513,6 +2167,20 @@ impl Monomorphizer {
                 let object_type = self.infer_expr_type(object)?;
                 self.generic_member_type(&object_type, name, false)
             }
+            ExprKind::GenericMember { object, name, args } => {
+                let receiver = self.infer_expr_type(object)?;
+                let (_, mut substitutions, function) =
+                    self.method_template(&receiver, name, false)?;
+                substitutions.extend(
+                    function
+                        .type_params
+                        .iter()
+                        .cloned()
+                        .zip(args.iter().cloned()),
+                );
+                let return_type = function.return_type.as_ref()?;
+                Some(substitute_type(return_type, &substitutions))
+            }
             ExprKind::Call { callee, .. } => {
                 if let ExprKind::Member { object, name } = &callee.kind {
                     match &object.kind {
@@ -1578,6 +2246,20 @@ impl Monomorphizer {
                         .collect::<HashMap<_, _>>();
                     return Some(substitute_type(template_return, &substitutions));
                 }
+                if let ExprKind::GenericMember { object, name, args } = &callee.kind {
+                    let receiver = self.infer_expr_type(object)?;
+                    let (_, mut substitutions, function) =
+                        self.method_template(&receiver, name, false)?;
+                    substitutions.extend(
+                        function
+                            .type_params
+                            .iter()
+                            .cloned()
+                            .zip(args.iter().cloned()),
+                    );
+                    let return_type = function.return_type.as_ref()?;
+                    return Some(substitute_type(return_type, &substitutions));
+                }
                 let ExprKind::Member { object, name } = &callee.kind else {
                     return None;
                 };
@@ -1626,6 +2308,15 @@ impl Monomorphizer {
         member_name: &str,
         static_: bool,
     ) -> Option<TypeRef> {
+        if !receiver.args.is_empty() {
+            let concrete_name = specialized_name(&receiver.name, &receiver.args);
+            if let Some(return_type) =
+                self.member_returns
+                    .get(&(concrete_name, member_name.to_string(), static_))
+            {
+                return Some(return_type.clone());
+            }
+        }
         if let Some(return_type) =
             self.member_returns
                 .get(&(receiver.name.clone(), member_name.to_string(), static_))
@@ -1657,6 +2348,31 @@ impl Monomorphizer {
             return Some(receiver);
         }
         Some(substitute_type(&return_type, &substitutions))
+    }
+
+    fn infer_type_expression_ref(&self, expr: &Expr) -> Option<TypeRef> {
+        match &expr.kind {
+            ExprKind::Identifier(name)
+                if self.concrete_structs.contains(name)
+                    || self.struct_templates.contains_key(name) =>
+            {
+                Some(TypeRef {
+                    name: name.clone(),
+                    args: Vec::new(),
+                    function: None,
+                    span: expr.span,
+                })
+            }
+            ExprKind::GenericType { name, args } if self.struct_templates.contains_key(name) => {
+                Some(TypeRef {
+                    name: name.clone(),
+                    args: args.clone(),
+                    function: None,
+                    span: expr.span,
+                })
+            }
+            _ => None,
+        }
     }
 
     fn expanded_type(&self, type_ref: &TypeRef) -> TypeRef {
@@ -1721,8 +2437,10 @@ impl Monomorphizer {
             return;
         }
 
-        self.pending
-            .push_back((GenericKind::Struct, name.to_string(), args.to_vec()));
+        self.pending.push_back(PendingSpecialization::Struct(
+            name.to_string(),
+            args.to_vec(),
+        ));
         self.specializations.insert(
             specialized_name(name, args),
             (name.to_string(), args.to_vec()),
@@ -1743,7 +2461,7 @@ impl Monomorphizer {
         }
 
         self.pending
-            .push_back((GenericKind::Enum, name.to_string(), args.to_vec()));
+            .push_back(PendingSpecialization::Enum(name.to_string(), args.to_vec()));
         self.specializations.insert(
             specialized_name(name, args),
             (name.to_string(), args.to_vec()),
@@ -1784,8 +2502,10 @@ impl Monomorphizer {
                 );
             }
         }
-        self.pending
-            .push_back((GenericKind::Function, name.to_string(), args.to_vec()));
+        self.pending.push_back(PendingSpecialization::Function(
+            name.to_string(),
+            args.to_vec(),
+        ));
     }
 }
 
@@ -2063,6 +2783,7 @@ impl<'items> MethodReachability<'items> {
                 let object_type = self.visit_expr(object, locals)?;
                 self.structs.get(&object_type)?.fields.get(name).cloned()
             }
+            ExprKind::GenericMember { object, .. } => self.visit_expr(object, locals),
             ExprKind::Call { callee, args } => {
                 for arg in args {
                     self.visit_expr(arg, locals);
@@ -2209,11 +2930,33 @@ fn prune_unused_generic_methods(items: &mut [Item], generic_structs: &HashSet<St
     }
 }
 
+fn prune_generic_method_templates(items: &mut [Item]) {
+    for item in items {
+        let Item::Struct(item) = item else {
+            continue;
+        };
+        item.members.retain(|member| match member {
+            StructMember::Method(function) | StructMember::StaticMethod(function) => {
+                function.type_params.is_empty()
+            }
+            StructMember::Field(_) => true,
+        });
+    }
+}
+
 fn concrete_type_name(type_ref: &TypeRef) -> Option<String> {
     type_ref.args.is_empty().then(|| type_ref.name.clone())
 }
 
 fn type_names(type_ref: &TypeRef) -> Vec<&str> {
+    if let Some(function) = &type_ref.function {
+        let mut names = Vec::new();
+        for param in &function.params {
+            names.extend(type_names(&param.type_ref));
+        }
+        names.extend(type_names(&function.return_type));
+        return names;
+    }
     let mut names = vec![type_ref.name.as_str()];
     for arg in &type_ref.args {
         names.extend(type_names(arg));

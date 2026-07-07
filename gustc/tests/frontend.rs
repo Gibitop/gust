@@ -3341,3 +3341,118 @@ fn main() {}"#,
             .contains("unused type parameter `U` in function `invalid`")
     }));
 }
+
+#[test]
+fn generic_methods_infer_explicit_and_expected_type_arguments() {
+    let result = check_source(
+        r#"enum Option<T> {
+    Some(T)
+    None
+}
+
+struct Pair<A, B> {
+    first: A
+    second: B
+}
+
+struct Box<T> {
+    value: T
+
+    static fn make<U>(value: T, other: U) => Pair { first: value, second: other }
+
+    fn pair<U>(other: U) => Pair { first: self.value, second: other }
+
+    fn wrap<U>(other: U) => Option<U>.Some(other)
+
+    fn empty<U>() => Option<U>.None
+}
+
+fn main() {
+    let number = Box { value: 42 }
+    let pair = number.pair("answer")
+    let staticPair = Box<i32>.make<String>(7, "static")
+    let wrapped = number.wrap<String>("value")
+    let empty: Option<String> = number.empty()
+    io.println(pair.second)
+    io.println(staticPair.second)
+    match wrapped {
+        Option.Some(value) => io.println(value),
+        Option.None => io.println("missing"),
+    }
+    match empty {
+        Option.Some(value) => io.println(value),
+        Option.None => io.println("empty"),
+    }
+}"#,
+    );
+
+    assert!(
+        !result.has_errors(),
+        "expected generic methods to validate, got {:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
+fn generic_methods_report_inference_and_declaration_errors() {
+    let unresolved = check_source(
+        r#"struct Box<T> {
+    value: T
+
+    fn choose<U>(): U => self.value
+}
+
+fn main() {
+    let value = Box { value: 1 }
+    value.choose()
+}"#,
+    );
+    assert!(unresolved.diagnostics.iter().any(|diagnostic| {
+        diagnostic
+            .message
+            .contains("cannot infer type arguments for generic method")
+    }));
+
+    let invalid_count = check_source(
+        r#"struct Box<T> {
+    value: T
+
+    fn identity<U>(value: U): U => value
+}
+
+fn main() {
+    let value = Box { value: 1 }
+    value.identity<String, i32>("text")
+}"#,
+    );
+    assert!(invalid_count.diagnostics.iter().any(|diagnostic| {
+        diagnostic
+            .message
+            .contains("generic method `Box<i32>.identity` expects 1 type arguments, got 2")
+    }));
+
+    let declarations = check_source(
+        r#"struct Box<T> {
+    value: T
+
+    fn invalid<T, T, U>(value: T): T => value
+}
+
+fn main() {}"#,
+    );
+    assert!(declarations.diagnostics.iter().any(|diagnostic| {
+        diagnostic
+            .message
+            .contains("duplicate type parameter `T` in method `invalid`")
+    }));
+    assert!(declarations.diagnostics.iter().any(|diagnostic| {
+        diagnostic
+            .message
+            .contains("type parameter `T` in method `invalid` conflicts with struct `Box`")
+    }));
+    assert!(declarations.diagnostics.iter().any(|diagnostic| {
+        diagnostic
+            .message
+            .contains("unused type parameter `U` in method `invalid`")
+    }));
+}

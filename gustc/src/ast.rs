@@ -199,6 +199,11 @@ pub enum ExprKind {
         object: Box<Expr>,
         name: String,
     },
+    GenericMember {
+        object: Box<Expr>,
+        name: String,
+        args: Vec<TypeRef>,
+    },
     GenericType {
         name: String,
         args: Vec<TypeRef>,

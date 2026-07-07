@@ -2378,3 +2378,61 @@ fn main() {
     assert!(c.contains("identity<i32>"));
     assert!(c.contains("identity<String>"));
 }
+
+#[test]
+fn generic_method_specializations_emit_distinct_c_methods() {
+    let result = check_source(
+        r#"enum Option<T> {
+    Some(T)
+    None
+}
+
+struct Pair<A, B> {
+    first: A
+    second: B
+}
+
+struct Box<T> {
+    value: T
+
+    static fn make<U>(value: T, other: U) => Pair { first: value, second: other }
+
+    fn pair<U>(other: U) => Pair { first: self.value, second: other }
+
+    fn empty<U>() => Option<U>.None
+
+    fn unused<U>(value: U): U => value
+}
+
+fn describe(value: Option<String>): String {
+    return match value {
+        Option.Some(inner) => inner,
+        Option.None => "empty",
+    }
+}
+
+fn main() {
+    let number = Box { value: 42 }
+    let pair = number.pair("answer")
+    let staticPair = Box<i32>.make<String>(7, "static")
+    let empty: Option<String> = number.empty()
+    io.println(pair.second)
+    io.println(staticPair.second)
+    io.println(describe(empty))
+}"#,
+    );
+    assert!(
+        !result.has_errors(),
+        "expected generic methods to validate, got {:?}",
+        result.diagnostics
+    );
+
+    let lowered = lower_program(&result.program).expect("generic methods should lower");
+    let c = emit_c(&lowered);
+    assert!(c.contains("// Gust function: Box<i32>.pair<String>"));
+    assert!(c.contains("// Gust function: static Box<i32>.make<String>"));
+    assert!(c.contains("// Gust function: Box<i32>.empty<String>"));
+    assert!(c.contains("// Gust struct: Pair<i32, String>"));
+    assert!(c.contains("// Gust enum: Option<String>"));
+    assert!(!c.contains(".unused"));
+}
