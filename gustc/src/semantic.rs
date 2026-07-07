@@ -1,9 +1,9 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::ast::{
-    BasicType, BinaryOp, Block, ElseBranch, Expr, ExprKind, FunctionBody, FunctionDecl, Item,
-    MatchBranchBody, Pattern, Program, Stmt, StmtKind, StructDecl, StructInitField, StructMember,
-    TypeRef, UnaryOp, number_literal_is_float,
+    BasicType, BinaryOp, Block, ElseBranch, Expr, ExprKind, FunctionBody, FunctionDecl, ImplDecl,
+    Item, MatchBranchBody, Pattern, Program, Stmt, StmtKind, StructDecl, StructInitField,
+    StructMember, TraitDecl, TraitMethodDecl, TypeRef, UnaryOp, number_literal_is_float,
 };
 use crate::diagnostic::Diagnostic;
 use crate::span::Span;
@@ -23,6 +23,14 @@ fn extension_name(type_name: &str, function_name: &str) -> String {
     format!("extension {type_name}.{function_name}")
 }
 
+fn trait_method_name(type_name: &str, function_name: &str) -> String {
+    format!("trait {type_name}.{function_name}")
+}
+
+fn static_trait_method_name(type_name: &str, function_name: &str) -> String {
+    format!("static trait {type_name}.{function_name}")
+}
+
 fn source_callable_name(name: &str) -> &str {
     name.rsplit_once("::").map_or(name, |(_, name)| name)
 }
@@ -33,9 +41,13 @@ struct Analyzer {
     types: HashSet<String>,
     structs: HashMap<String, StructDefinition>,
     enums: HashMap<String, EnumDefinition>,
+    traits: HashMap<String, TraitDefinition>,
     functions: HashMap<String, FunctionSignature>,
     extensions: HashMap<String, FunctionSignature>,
     static_extensions: HashMap<String, FunctionSignature>,
+    trait_methods: HashMap<String, FunctionSignature>,
+    static_trait_methods: HashMap<String, FunctionSignature>,
+    trait_impls: HashSet<(String, String)>,
     imported_namespaces: HashSet<String>,
     unsupported_features: HashSet<&'static str>,
     scopes: Vec<HashMap<String, Binding>>,
@@ -67,6 +79,12 @@ struct StructDefinition {
 #[derive(Debug, Clone)]
 struct EnumDefinition {
     variants: HashMap<String, Option<Type>>,
+}
+
+#[derive(Debug, Clone)]
+struct TraitDefinition {
+    methods: HashMap<String, FunctionSignature>,
+    static_methods: HashMap<String, FunctionSignature>,
 }
 
 #[derive(Debug, Clone)]
@@ -147,9 +165,13 @@ impl Analyzer {
             types,
             structs: HashMap::new(),
             enums: HashMap::new(),
+            traits: HashMap::new(),
             functions: HashMap::new(),
             extensions: HashMap::new(),
             static_extensions: HashMap::new(),
+            trait_methods: HashMap::new(),
+            static_trait_methods: HashMap::new(),
+            trait_impls: HashSet::new(),
             imported_namespaces: HashSet::new(),
             unsupported_features: HashSet::new(),
             scopes: Vec::new(),
@@ -201,6 +223,17 @@ impl Analyzer {
                     );
                     self.insert_top_level(&mut names, &item.name, item.span);
                 }
+                Item::Trait(item) => {
+                    self.types.insert(item.name.clone());
+                    self.traits.insert(
+                        item.name.clone(),
+                        TraitDefinition {
+                            methods: HashMap::new(),
+                            static_methods: HashMap::new(),
+                        },
+                    );
+                    self.insert_top_level(&mut names, &item.name, item.span);
+                }
                 Item::Function(item) => {
                     if let Some(name) = &item.name {
                         if name == "main" {
@@ -211,6 +244,7 @@ impl Analyzer {
                         self.insert_top_level(&mut names, name, item.span);
                     }
                 }
+                Item::Impl(_) => {}
                 Item::Extension(_) => {}
             }
         }
@@ -219,6 +253,7 @@ impl Analyzer {
             match item {
                 Item::Struct(item) => self.collect_struct_definition(item),
                 Item::Enum(item) => self.collect_enum_definition(item),
+                Item::Trait(item) => self.collect_trait_definition(item),
                 Item::Function(item) => {
                     if let Some(name) = &item.name {
                         self.functions.insert(
@@ -240,8 +275,15 @@ impl Analyzer {
                         );
                     }
                 }
+                Item::Impl(_) => {}
                 Item::Extension(item) => self.collect_extension_definition(item),
                 Item::Import(_) => {}
+            }
+        }
+
+        for item in &program.items {
+            if let Item::Impl(item) = item {
+                self.collect_impl_definition(item);
             }
         }
 
@@ -406,6 +448,253 @@ impl Analyzer {
             .insert(item.name.clone(), EnumDefinition { variants });
     }
 
+    fn collect_trait_definition(&mut self, item: &TraitDecl) {
+        let mut methods = HashMap::new();
+        let mut static_methods = HashMap::new();
+
+        for method in &item.methods {
+            if method.name == "clone" {
+                self.diagnostics.push(Diagnostic::error(
+                    method.span,
+                    "trait method name `clone` is reserved for the built-in deep clone operation",
+                ));
+            }
+
+            if method.return_type.is_none() {
+                self.diagnostics.push(Diagnostic::error(
+                    method.span,
+                    format!(
+                        "trait method `{}.{}` must include a return type",
+                        item.name, method.name
+                    ),
+                ));
+            }
+
+            let target_methods = if method.static_ {
+                &mut static_methods
+            } else {
+                &mut methods
+            };
+
+            if target_methods
+                .insert(
+                    method.name.clone(),
+                    self.trait_method_signature(method, method.static_),
+                )
+                .is_some()
+            {
+                self.diagnostics.push(Diagnostic::error(
+                    method.span,
+                    format!(
+                        "duplicate {}method `{}` in trait `{}`",
+                        if method.static_ { "static " } else { "" },
+                        method.name,
+                        item.name
+                    ),
+                ));
+            }
+        }
+
+        self.traits.insert(
+            item.name.clone(),
+            TraitDefinition {
+                methods,
+                static_methods,
+            },
+        );
+    }
+
+    fn collect_impl_definition(&mut self, item: &ImplDecl) {
+        let trait_name = item.trait_ref.name.clone();
+        let self_type = self.type_ref_without_diagnostics(Some(&item.type_ref));
+        let self_type_name = self_type.name();
+
+        let Some(trait_) = self.traits.get(&trait_name).cloned() else {
+            self.diagnostics.push(Diagnostic::error(
+                item.trait_ref.span,
+                format!("unknown trait `{trait_name}`"),
+            ));
+            return;
+        };
+
+        if !item.trait_ref.args.is_empty() {
+            self.diagnostics.push(Diagnostic::error(
+                item.trait_ref.span,
+                "generic traits are not implemented yet",
+            ));
+        }
+
+        if matches!(
+            self_type,
+            Type::Unknown | Type::Void | Type::Function { .. } | Type::Named(_)
+        ) {
+            return;
+        }
+
+        if !self
+            .trait_impls
+            .insert((trait_name.clone(), self_type_name.clone()))
+        {
+            self.diagnostics.push(Diagnostic::error(
+                item.span,
+                format!("duplicate impl of trait `{trait_name}` for type `{self_type_name}`"),
+            ));
+        }
+
+        let mut impl_methods = HashMap::new();
+        let mut static_impl_methods = HashMap::new();
+        for member in &item.methods {
+            let method = &member.function;
+            let Some(name) = &method.name else {
+                continue;
+            };
+            if name == "clone" {
+                self.diagnostics.push(Diagnostic::error(
+                    method.span,
+                    "trait impl method name `clone` is reserved for the built-in deep clone operation",
+                ));
+            }
+
+            let expected = if member.static_ {
+                trait_.static_methods.get(name)
+            } else {
+                trait_.methods.get(name)
+            }
+            .map(|signature| signature_with_self_type(signature, &self_type));
+
+            let signature = FunctionSignature {
+                params: method
+                    .params
+                    .iter()
+                    .filter(|param| member.static_ || !is_self_param(param))
+                    .map(|param| ParamSignature {
+                        type_: self.type_ref_in_context(param.type_ref.as_ref(), &self_type),
+                        mutable: param.mutable,
+                    })
+                    .collect(),
+                return_type: method.return_type.as_ref().map_or_else(
+                    || {
+                        expected
+                            .as_ref()
+                            .map_or(Type::Unknown, |signature| signature.return_type.clone())
+                    },
+                    |return_type| self.type_ref_in_context(Some(return_type), &self_type),
+                ),
+                mutable_self: !member.static_ && has_mutable_receiver(method),
+            };
+
+            let target_impl_methods = if member.static_ {
+                &mut static_impl_methods
+            } else {
+                &mut impl_methods
+            };
+            if target_impl_methods
+                .insert(name.clone(), signature.clone())
+                .is_some()
+            {
+                self.diagnostics.push(Diagnostic::error(
+                    method.span,
+                    format!(
+                        "duplicate {}method `{name}` in impl of trait `{trait_name}` for type `{self_type_name}`",
+                        if member.static_ { "static " } else { "" },
+                    ),
+                ));
+            }
+
+            let Some(expected) = expected else {
+                self.diagnostics.push(Diagnostic::error(
+                    method.span,
+                    format!(
+                        "{}method `{name}` is not declared in trait `{trait_name}`",
+                        if member.static_ { "static " } else { "" },
+                    ),
+                ));
+                continue;
+            };
+
+            if !signatures_match(&expected, &signature) {
+                self.diagnostics.push(Diagnostic::error(
+                    method.span,
+                    format!(
+                        "method `{name}` does not match trait `{trait_name}` for type `{self_type_name}`"
+                    ),
+                ));
+            }
+
+            let trait_method_name = if member.static_ {
+                static_trait_method_name(&self_type_name, name)
+            } else {
+                trait_method_name(&self_type_name, name)
+            };
+            let trait_methods = if member.static_ {
+                &mut self.static_trait_methods
+            } else {
+                &mut self.trait_methods
+            };
+            if trait_methods.insert(trait_method_name, signature).is_some() {
+                self.diagnostics.push(Diagnostic::error(
+                    method.span,
+                    format!(
+                        "duplicate {}trait method `{name}` for type `{self_type_name}`",
+                        if member.static_ { "static " } else { "" },
+                    ),
+                ));
+            }
+        }
+
+        for name in trait_.methods.keys() {
+            if !impl_methods.contains_key(name) {
+                self.diagnostics.push(Diagnostic::error(
+                    item.span,
+                    format!(
+                        "impl of trait `{trait_name}` for type `{self_type_name}` is missing method `{name}`"
+                    ),
+                ));
+            }
+        }
+        for name in trait_.static_methods.keys() {
+            if !static_impl_methods.contains_key(name) {
+                self.diagnostics.push(Diagnostic::error(
+                    item.span,
+                    format!(
+                        "impl of trait `{trait_name}` for type `{self_type_name}` is missing static method `{name}`"
+                    ),
+                ));
+            }
+        }
+    }
+
+    fn trait_method_signature(&self, method: &TraitMethodDecl, static_: bool) -> FunctionSignature {
+        FunctionSignature {
+            params: method
+                .params
+                .iter()
+                .filter(|param| static_ || !is_self_param(param))
+                .map(|param| ParamSignature {
+                    type_: self.trait_type_ref_without_diagnostics(param.type_ref.as_ref()),
+                    mutable: param.mutable,
+                })
+                .collect(),
+            return_type: self.trait_type_ref_without_diagnostics(method.return_type.as_ref()),
+            mutable_self: !static_
+                && method
+                    .params
+                    .iter()
+                    .any(|param| is_self_param(param) && param.mutable && param.type_ref.is_none()),
+        }
+    }
+
+    fn trait_type_ref_without_diagnostics(&self, type_ref: Option<&TypeRef>) -> Type {
+        if let Some(type_ref) = type_ref
+            && type_ref.name == "Self"
+            && type_ref.args.is_empty()
+        {
+            Type::Named("Self".to_string())
+        } else {
+            self.type_ref_without_diagnostics(type_ref)
+        }
+    }
+
     fn collect_extension_definition(&mut self, item: &crate::ast::ExtensionDecl) {
         let Some(name) = &item.function.name else {
             return;
@@ -510,6 +799,8 @@ impl Analyzer {
                         }
                     }
                 }
+                Item::Trait(item) => self.validate_trait(item),
+                Item::Impl(item) => self.validate_impl(item),
                 Item::Function(function) => self.validate_function(function, None, false),
                 Item::Extension(item) => {
                     let self_type = self.validate_type(&item.type_ref);
@@ -519,11 +810,121 @@ impl Analyzer {
         }
     }
 
+    fn validate_trait(&mut self, item: &TraitDecl) {
+        let mut names = HashSet::new();
+        for method in &item.methods {
+            if !names.insert((method.static_, method.name.clone())) {
+                continue;
+            }
+
+            let self_params = method
+                .params
+                .iter()
+                .filter(|param| is_self_param(param))
+                .collect::<Vec<_>>();
+            if self_params.len() > 1 {
+                self.diagnostics.push(Diagnostic::error(
+                    self_params[1].span,
+                    "a trait method can declare only one `self` receiver",
+                ));
+            }
+            if let Some(param) = self_params.first() {
+                if method.static_ {
+                    self.diagnostics.push(Diagnostic::error(
+                        param.span,
+                        "`self` receivers are only allowed on instance trait methods",
+                    ));
+                } else if !param.mutable {
+                    self.diagnostics.push(Diagnostic::error(
+                        param.span,
+                        "immutable `self` is implicit; remove it from the parameter list",
+                    ));
+                }
+                if param.type_ref.is_some() {
+                    self.diagnostics.push(Diagnostic::error(
+                        param.span,
+                        "mutable receivers must be written `mut self` without a type annotation",
+                    ));
+                }
+            }
+
+            self.self_types.push(Type::Named("Self".to_string()));
+            for param in &method.params {
+                if is_self_param(param) {
+                    continue;
+                }
+                if let Some(type_ref) = &param.type_ref {
+                    self.validate_type(type_ref);
+                } else {
+                    self.diagnostics.push(Diagnostic::error(
+                        param.span,
+                        format!(
+                            "trait method `{}.{}` parameters must include type annotations",
+                            item.name, method.name
+                        ),
+                    ));
+                }
+            }
+            if let Some(return_type) = &method.return_type {
+                self.validate_type(return_type);
+            }
+            self.self_types.pop();
+        }
+    }
+
+    fn validate_impl(&mut self, item: &ImplDecl) {
+        if !self.traits.contains_key(&item.trait_ref.name) {
+            self.diagnostics.push(Diagnostic::error(
+                item.trait_ref.span,
+                format!("unknown trait `{}`", item.trait_ref.name),
+            ));
+        }
+        if !item.trait_ref.args.is_empty() {
+            self.unsupported(
+                item.trait_ref.span,
+                "generic traits are not implemented yet",
+            );
+        }
+
+        let self_type = self.validate_type(&item.type_ref);
+        for member in &item.methods {
+            let method = &member.function;
+            let expected_return_type = method.name.as_ref().and_then(|name| {
+                self.traits
+                    .get(&item.trait_ref.name)
+                    .and_then(|trait_| {
+                        if member.static_ {
+                            trait_.static_methods.get(name)
+                        } else {
+                            trait_.methods.get(name)
+                        }
+                    })
+                    .map(|signature| signature_with_self_type(signature, &self_type).return_type)
+            });
+            self.validate_function_with_return_type(
+                method,
+                Some(self_type.clone()),
+                !member.static_,
+                expected_return_type,
+            );
+        }
+    }
+
     fn validate_function(
         &mut self,
         function: &FunctionDecl,
         self_type: Option<Type>,
         has_self: bool,
+    ) {
+        self.validate_function_with_return_type(function, self_type, has_self, None);
+    }
+
+    fn validate_function_with_return_type(
+        &mut self,
+        function: &FunctionDecl,
+        self_type: Option<Type>,
+        has_self: bool,
+        inferred_return_type: Option<Type>,
     ) {
         self.push_scope();
 
@@ -579,10 +980,10 @@ impl Analyzer {
             self.define(&param.name, param.mutable, type_);
         }
 
-        let return_type = function
-            .return_type
-            .as_ref()
-            .map_or(Type::Unknown, |type_ref| self.validate_type(type_ref));
+        let return_type = function.return_type.as_ref().map_or_else(
+            || inferred_return_type.unwrap_or(Type::Unknown),
+            |type_ref| self.validate_type(type_ref),
+        );
         self.return_types.push(return_type.clone());
 
         match &function.body {
@@ -1664,11 +2065,17 @@ impl Analyzer {
         } else {
             None
         };
-        let signature = intrinsic.or_else(|| {
-            self.static_extensions
-                .get(&extension_name(&type_.name(), name))
-                .cloned()
-        });
+        let signature = intrinsic
+            .or_else(|| {
+                self.static_extensions
+                    .get(&extension_name(&type_.name(), name))
+                    .cloned()
+            })
+            .or_else(|| {
+                self.static_trait_methods
+                    .get(&static_trait_method_name(&type_.name(), source_name))
+                    .cloned()
+            });
         let Some(signature) = signature else {
             self.diagnostics.push(Diagnostic::error(
                 expr.span,
@@ -1751,11 +2158,17 @@ impl Analyzer {
         } else {
             None
         };
-        let signature = intrinsic.or_else(|| {
-            self.extensions
-                .get(&extension_name(&object_type.name(), name))
-                .cloned()
-        });
+        let signature = intrinsic
+            .or_else(|| {
+                self.extensions
+                    .get(&extension_name(&object_type.name(), name))
+                    .cloned()
+            })
+            .or_else(|| {
+                self.trait_methods
+                    .get(&trait_method_name(&object_type.name(), source_name))
+                    .cloned()
+            });
         let Some(signature) = signature else {
             if matches!(object_type, Type::Basic(_)) {
                 self.unsupported(expr.span, "methods on basic values are not implemented yet");
@@ -2469,10 +2882,18 @@ impl Analyzer {
                                     .or_else(|| {
                                         self.static_extensions
                                             .get(&extension_name(&type_.name(), name))
+                                    })
+                                    .or_else(|| {
+                                        self.static_trait_methods
+                                            .get(&static_trait_method_name(&type_.name(), name))
                                     }),
                                 _ => self
                                     .static_extensions
-                                    .get(&extension_name(&type_.name(), name)),
+                                    .get(&extension_name(&type_.name(), name))
+                                    .or_else(|| {
+                                        self.static_trait_methods
+                                            .get(&static_trait_method_name(&type_.name(), name))
+                                    }),
                             }
                         } else {
                             None
@@ -2558,6 +2979,54 @@ fn types_are_compatible(expected_type: &Type, value_type: &Type) -> bool {
                 && types_are_compatible(return_type, value_return_type)
         }
         _ => expected_type == value_type,
+    }
+}
+
+fn signatures_match(expected: &FunctionSignature, actual: &FunctionSignature) -> bool {
+    expected.mutable_self == actual.mutable_self
+        && expected.params.len() == actual.params.len()
+        && expected
+            .params
+            .iter()
+            .zip(&actual.params)
+            .all(|(expected, actual)| {
+                expected.mutable == actual.mutable && expected.type_ == actual.type_
+            })
+        && expected.return_type == actual.return_type
+}
+
+fn signature_with_self_type(signature: &FunctionSignature, self_type: &Type) -> FunctionSignature {
+    FunctionSignature {
+        params: signature
+            .params
+            .iter()
+            .map(|param| ParamSignature {
+                type_: type_with_self_type(&param.type_, self_type),
+                mutable: param.mutable,
+            })
+            .collect(),
+        return_type: type_with_self_type(&signature.return_type, self_type),
+        mutable_self: signature.mutable_self,
+    }
+}
+
+fn type_with_self_type(type_: &Type, self_type: &Type) -> Type {
+    match type_ {
+        Type::Named(name) if name == "Self" => self_type.clone(),
+        Type::Function {
+            params,
+            return_type,
+        } => Type::Function {
+            params: params
+                .iter()
+                .map(|param| FunctionTypeParam {
+                    type_: type_with_self_type(&param.type_, self_type),
+                    mutable: param.mutable,
+                })
+                .collect(),
+            return_type: Box::new(type_with_self_type(return_type, self_type)),
+        },
+        _ => type_.clone(),
     }
 }
 

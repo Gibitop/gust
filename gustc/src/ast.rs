@@ -10,6 +10,8 @@ pub enum Item {
     Import(ImportDecl),
     Enum(EnumDecl),
     Struct(StructDecl),
+    Trait(TraitDecl),
+    Impl(ImplDecl),
     Extension(ExtensionDecl),
     Function(FunctionDecl),
 }
@@ -20,6 +22,8 @@ impl Item {
             Item::Import(item) => item.span,
             Item::Enum(item) => item.span,
             Item::Struct(item) => item.span,
+            Item::Trait(item) => item.span,
+            Item::Impl(item) => item.span,
             Item::Extension(item) => item.span,
             Item::Function(item) => item.span,
         }
@@ -67,6 +71,37 @@ pub struct StructDecl {
     pub name: String,
     pub type_params: Vec<String>,
     pub members: Vec<StructMember>,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone)]
+pub struct TraitDecl {
+    pub name: String,
+    pub methods: Vec<TraitMethodDecl>,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone)]
+pub struct TraitMethodDecl {
+    pub name: String,
+    pub static_: bool,
+    pub params: Vec<Param>,
+    pub return_type: Option<TypeRef>,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone)]
+pub struct ImplDecl {
+    pub trait_ref: TypeRef,
+    pub type_ref: TypeRef,
+    pub methods: Vec<ImplMember>,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone)]
+pub struct ImplMember {
+    pub function: FunctionDecl,
+    pub static_: bool,
     pub span: Span,
 }
 

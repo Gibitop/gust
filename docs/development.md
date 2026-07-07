@@ -151,6 +151,28 @@ type declared by another module.
 Real type members take precedence over extension functions with the same name. The extension
 function name `clone` is reserved for the built-in deep clone operation.
 
+## Traits
+
+The first trait implementation supports concrete trait declarations and `impl Trait for Type`
+blocks with instance and static methods. Trait impl instance methods are statically dispatched on
+concrete receiver types and lower like methods whose first argument is the receiver. Trait impl
+static methods are called through the concrete type and lower like static functions.
+
+Trait instance methods may require `mut self`. Calling such a trait impl method requires the same
+mutable receiver capability as calling a mutable struct method.
+
+Impl method return types may be omitted when the trait method declares a return type. The trait
+method return type is used as the expected type for the impl body and for method-call typing.
+
+Trait declarations, receiver type declarations, and impl blocks are order-independent within the
+loaded module graph.
+
+Real type members take precedence over extension functions, and extension functions take
+precedence over trait impl methods with the same receiver and method name. Static functions follow
+the same precedence: real static functions, then static extensions, then static trait impl methods.
+
+Trait-typed values, dynamic dispatch, generic traits, and generic bounds are not implemented yet.
+
 ## Static functions
 
 A static function declared inside a type uses `static fn functionName(...)`. It is called through
