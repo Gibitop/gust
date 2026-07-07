@@ -171,7 +171,21 @@ Real type members take precedence over extension functions, and extension functi
 precedence over trait impl methods with the same receiver and method name. Static functions follow
 the same precedence: real static functions, then static extensions, then static trait impl methods.
 
-Trait-typed values, dynamic dispatch, generic traits, and generic bounds are not implemented yet.
+Generic traits and generic bounds are not implemented yet.
+
+## Trait-typed values and dynamic dispatch
+
+Trait names may be used as value types. A concrete struct value can initialize a trait-typed
+binding, return value, or argument when that struct implements the trait. Method calls on
+trait-typed values dispatch dynamically through the trait's instance-method vtable.
+
+The executable backend represents a trait-typed value as a fat value containing the concrete
+object pointer plus a pointer to a trait vtable. Each `impl Trait for Struct` emits one vtable and
+small thunks that cast the erased `void* self` pointer back to the concrete struct pointer before
+calling the existing statically lowered trait impl function.
+
+Dynamic dispatch currently supports struct implementors. Static trait methods remain available
+only through concrete types.
 
 ## Static functions
 

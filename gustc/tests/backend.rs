@@ -2477,3 +2477,62 @@ fn main() {
     assert!(c.contains("// Gust function: static trait Person.new"));
     assert!(c.contains("gust_fn_"));
 }
+
+#[test]
+fn trait_typed_values_lower_to_dynamic_dispatch() {
+    let result = check_source(
+        r#"impl Describe for Person {
+    fn describe() => self.name
+}
+
+trait Describe {
+    fn describe(): String
+}
+
+struct Person {
+    name: String
+}
+
+fn main() {
+    let person = Person { name: "Gust" }
+    let described: Describe = person
+    io.println(described.describe())
+}"#,
+    );
+    assert!(
+        !result.has_errors(),
+        "expected trait object program to validate, got {:?}",
+        result.diagnostics
+    );
+
+    let lowered = lower_program(&result.program).expect("trait object should lower");
+
+    assert!(
+        matches!(
+            lowered.statements[1],
+            LoweredStatement::Local {
+                ref value,
+                ..
+            } if matches!(value.kind, LoweredExprKind::TraitObject { .. })
+        ),
+        "expected trait-typed local to lower as trait object, got {:?}",
+        lowered.statements
+    );
+    assert!(
+        matches!(
+            lowered.statements[2],
+            LoweredStatement::Println(LoweredExpr {
+                kind: LoweredExprKind::DynamicCall { .. },
+                ..
+            })
+        ),
+        "expected trait method call to lower as dynamic call, got {:?}",
+        lowered.statements
+    );
+
+    let c = emit_c(&lowered);
+    assert!(c.contains("gust_vtable_"));
+    assert!(c.contains("gust_trait_thunk_"));
+    assert!(c.contains(".gust_vtable = &gust_vtable_"));
+    assert!(c.contains(".gust_method_describe"));
+}

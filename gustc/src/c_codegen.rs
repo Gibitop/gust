@@ -112,6 +112,8 @@ pub fn emit_c(program: &LoweredProgram) -> String {
         source.push_str(";\n\n");
     }
 
+    push_c_trait_dispatch_helpers(&mut source, program);
+
     for function in ordered_functions(&program.functions) {
         if function_calls_name(function, &function.name) {
             push_c_function_signature(&mut source, function);
@@ -281,11 +283,16 @@ fn expr_uses_type(expr: &LoweredExpr, type_: BasicType) -> bool {
                     })
             }
             LoweredExprKind::FieldAccess { object, .. }
+            | LoweredExprKind::TraitObject { value: object, .. }
             | LoweredExprKind::Clone(object)
             | LoweredExprKind::NumberToString(object) => expr_uses_type(object, type_),
-            LoweredExprKind::Call { args, .. } | LoweredExprKind::IndirectCall { args, .. } => {
-                args.iter().any(|arg| expr_uses_type(arg, type_))
-            }
+            LoweredExprKind::Call { args, .. } => args.iter().any(|arg| expr_uses_type(arg, type_)),
+            LoweredExprKind::IndirectCall { callee, args }
+            | LoweredExprKind::DynamicCall {
+                object: callee,
+                args,
+                ..
+            } => expr_uses_type(callee, type_) || args.iter().any(|arg| expr_uses_type(arg, type_)),
             LoweredExprKind::Void
             | LoweredExprKind::StringLiteral(_)
             | LoweredExprKind::BoolLiteral(_)
@@ -421,6 +428,7 @@ fn expr_uses_number_to_string(expr: &LoweredExpr, type_: BasicType) -> bool {
         | LoweredExprKind::FieldAccess {
             object: operand, ..
         }
+        | LoweredExprKind::TraitObject { value: operand, .. }
         | LoweredExprKind::Clone(operand) => expr_uses_number_to_string(operand, type_),
         LoweredExprKind::StructLiteral { fields, .. } => fields
             .iter()
@@ -440,9 +448,20 @@ fn expr_uses_number_to_string(expr: &LoweredExpr, type_: BasicType) -> bool {
                         || expr_uses_number_to_string(&branch.value, type_)
                 })
         }
-        LoweredExprKind::Call { args, .. } | LoweredExprKind::IndirectCall { args, .. } => args
+        LoweredExprKind::Call { args, .. } => args
             .iter()
             .any(|arg| expr_uses_number_to_string(arg, type_)),
+        LoweredExprKind::IndirectCall { callee, args }
+        | LoweredExprKind::DynamicCall {
+            object: callee,
+            args,
+            ..
+        } => {
+            expr_uses_number_to_string(callee, type_)
+                || args
+                    .iter()
+                    .any(|arg| expr_uses_number_to_string(arg, type_))
+        }
         LoweredExprKind::Void
         | LoweredExprKind::StringLiteral(_)
         | LoweredExprKind::BoolLiteral(_)
@@ -559,11 +578,16 @@ fn expr_uses_string_equality(expr: &LoweredExpr) -> bool {
                 })
         }
         LoweredExprKind::FieldAccess { object, .. }
+        | LoweredExprKind::TraitObject { value: object, .. }
         | LoweredExprKind::Clone(object)
         | LoweredExprKind::NumberToString(object) => expr_uses_string_equality(object),
-        LoweredExprKind::Call { args, .. } | LoweredExprKind::IndirectCall { args, .. } => {
-            args.iter().any(expr_uses_string_equality)
-        }
+        LoweredExprKind::Call { args, .. } => args.iter().any(expr_uses_string_equality),
+        LoweredExprKind::IndirectCall { callee, args }
+        | LoweredExprKind::DynamicCall {
+            object: callee,
+            args,
+            ..
+        } => expr_uses_string_equality(callee) || args.iter().any(expr_uses_string_equality),
         LoweredExprKind::Void
         | LoweredExprKind::StringLiteral(_)
         | LoweredExprKind::BoolLiteral(_)
@@ -650,11 +674,16 @@ fn expr_uses_string_concat(expr: &LoweredExpr) -> bool {
                 })
         }
         LoweredExprKind::FieldAccess { object, .. }
+        | LoweredExprKind::TraitObject { value: object, .. }
         | LoweredExprKind::Clone(object)
         | LoweredExprKind::NumberToString(object) => expr_uses_string_concat(object),
-        LoweredExprKind::Call { args, .. } | LoweredExprKind::IndirectCall { args, .. } => {
-            args.iter().any(expr_uses_string_concat)
-        }
+        LoweredExprKind::Call { args, .. } => args.iter().any(expr_uses_string_concat),
+        LoweredExprKind::IndirectCall { callee, args }
+        | LoweredExprKind::DynamicCall {
+            object: callee,
+            args,
+            ..
+        } => expr_uses_string_concat(callee) || args.iter().any(expr_uses_string_concat),
         LoweredExprKind::Void
         | LoweredExprKind::StringLiteral(_)
         | LoweredExprKind::BoolLiteral(_)
@@ -720,6 +749,7 @@ fn expr_uses_println(expr: &LoweredExpr) -> bool {
         | LoweredExprKind::FieldAccess {
             object: operand, ..
         }
+        | LoweredExprKind::TraitObject { value: operand, .. }
         | LoweredExprKind::Clone(operand)
         | LoweredExprKind::NumberToString(operand) => expr_uses_println(operand),
         LoweredExprKind::StructLiteral { fields, .. } => {
@@ -737,9 +767,13 @@ fn expr_uses_println(expr: &LoweredExpr) -> bool {
                         || expr_uses_println(&branch.value)
                 })
         }
-        LoweredExprKind::Call { args, .. } | LoweredExprKind::IndirectCall { args, .. } => {
-            args.iter().any(expr_uses_println)
-        }
+        LoweredExprKind::Call { args, .. } => args.iter().any(expr_uses_println),
+        LoweredExprKind::IndirectCall { callee, args }
+        | LoweredExprKind::DynamicCall {
+            object: callee,
+            args,
+            ..
+        } => expr_uses_println(callee) || args.iter().any(expr_uses_println),
         LoweredExprKind::Void
         | LoweredExprKind::StringLiteral(_)
         | LoweredExprKind::BoolLiteral(_)
@@ -875,6 +909,7 @@ fn expr_calls_name(expr: &LoweredExpr, name: &str) -> bool {
                 })
         }
         LoweredExprKind::FieldAccess { object, .. }
+        | LoweredExprKind::TraitObject { value: object, .. }
         | LoweredExprKind::Clone(object)
         | LoweredExprKind::NumberToString(object) => expr_calls_name(object, name),
         LoweredExprKind::Call {
@@ -883,6 +918,9 @@ fn expr_calls_name(expr: &LoweredExpr, name: &str) -> bool {
         } => called_name == name || args.iter().any(|arg| expr_calls_name(arg, name)),
         LoweredExprKind::IndirectCall { callee, args } => {
             expr_calls_name(callee, name) || args.iter().any(|arg| expr_calls_name(arg, name))
+        }
+        LoweredExprKind::DynamicCall { object, args, .. } => {
+            expr_calls_name(object, name) || args.iter().any(|arg| expr_calls_name(arg, name))
         }
         LoweredExprKind::Void
         | LoweredExprKind::StringLiteral(_)
@@ -918,6 +956,28 @@ fn push_c_struct(source: &mut String, struct_: &LoweredStruct) {
 fn push_c_type_definitions(source: &mut String, program: &LoweredProgram) {
     let mut emitted = HashSet::new();
     let mut remaining = program.structs.len() + program.enums.len();
+
+    for trait_ in &program.traits {
+        source.push_str("typedef struct ");
+        push_c_trait_vtable_name(source, &trait_.name);
+        source.push(' ');
+        push_c_trait_vtable_name(source, &trait_.name);
+        source.push_str(";\n");
+        source.push_str("typedef struct ");
+        push_c_trait_name(source, &trait_.name);
+        source.push_str(" {\n");
+        source.push_str("    void* gust_self;\n");
+        source.push_str("    const ");
+        push_c_trait_vtable_name(source, &trait_.name);
+        source.push_str("* gust_vtable;\n");
+        source.push_str("} ");
+        push_c_trait_name(source, &trait_.name);
+        source.push_str(";\n");
+    }
+
+    if !program.traits.is_empty() {
+        source.push('\n');
+    }
 
     for struct_ in &program.structs {
         source.push_str("typedef struct ");
@@ -975,6 +1035,25 @@ fn push_c_type_definitions(source: &mut String, program: &LoweredProgram) {
         if remaining == previous_remaining {
             break;
         }
+    }
+
+    for trait_ in &program.traits {
+        source.push_str("struct ");
+        push_c_trait_vtable_name(source, &trait_.name);
+        source.push_str(" {\n");
+        for method in &trait_.methods {
+            source.push_str("    ");
+            push_c_type(source, &method.return_type);
+            source.push_str(" (*");
+            push_c_trait_method_field_name(source, &method.name);
+            source.push_str(")(void*");
+            for param in &method.params {
+                source.push_str(", ");
+                push_c_type(source, &param.type_);
+            }
+            source.push_str(");\n");
+        }
+        source.push_str("};\n\n");
     }
 }
 
@@ -1134,6 +1213,7 @@ fn collect_expr_function_types(expr: &LoweredExpr, types: &mut Vec<LoweredType>)
         | LoweredExprKind::FieldAccess {
             object: operand, ..
         }
+        | LoweredExprKind::TraitObject { value: operand, .. }
         | LoweredExprKind::Clone(operand)
         | LoweredExprKind::NumberToString(operand) => collect_expr_function_types(operand, types),
         LoweredExprKind::StructLiteral { fields, .. } => {
@@ -1168,6 +1248,12 @@ fn collect_expr_function_types(expr: &LoweredExpr, types: &mut Vec<LoweredType>)
                 collect_expr_function_types(arg, types);
             }
         }
+        LoweredExprKind::DynamicCall { object, args, .. } => {
+            collect_expr_function_types(object, types);
+            for arg in args {
+                collect_expr_function_types(arg, types);
+            }
+        }
         LoweredExprKind::Void
         | LoweredExprKind::StringLiteral(_)
         | LoweredExprKind::BoolLiteral(_)
@@ -1184,6 +1270,7 @@ fn type_definition_is_emitted(type_: &LoweredType, emitted: &HashSet<String>) ->
     match type_ {
         LoweredType::Basic(_)
         | LoweredType::Struct(_)
+        | LoweredType::Trait(_)
         | LoweredType::Function { .. }
         | LoweredType::Void => true,
         LoweredType::Enum(name) => emitted.contains(&format!("enum:{name}")),
@@ -1275,7 +1362,10 @@ fn push_c_struct_runtime_helpers(source: &mut String, program: &LoweredProgram) 
                     push_c_local_name(source, &variant.name);
                     source.push_str(", entries);\n");
                 }
-                Some(LoweredType::Basic(_)) | Some(LoweredType::Function { .. }) | None => {}
+                Some(LoweredType::Basic(_))
+                | Some(LoweredType::Trait(_))
+                | Some(LoweredType::Function { .. })
+                | None => {}
                 Some(LoweredType::Void) => {
                     unreachable!("enum variants cannot contain void")
                 }
@@ -1534,6 +1624,90 @@ fn push_c_closure_function_signature(source: &mut String, function: &LoweredClos
     source.push(')');
 }
 
+fn push_c_trait_dispatch_helpers(source: &mut String, program: &LoweredProgram) {
+    if program.traits.is_empty() {
+        return;
+    }
+
+    for trait_ in &program.traits {
+        for impl_ in &trait_.impls {
+            for method in &impl_.methods {
+                let Some(function) = program
+                    .functions
+                    .iter()
+                    .find(|function| function.name == method.function_name)
+                else {
+                    continue;
+                };
+                push_c_function_signature(source, function);
+                source.push_str(";\n");
+            }
+        }
+    }
+    source.push('\n');
+
+    for trait_ in &program.traits {
+        for impl_ in &trait_.impls {
+            let type_name = impl_.self_type.name();
+            for method in &trait_.methods {
+                let Some(impl_method) = impl_
+                    .methods
+                    .iter()
+                    .find(|impl_method| impl_method.name == method.name)
+                else {
+                    continue;
+                };
+
+                source.push_str("static ");
+                push_c_type(source, &method.return_type);
+                source.push(' ');
+                push_c_trait_thunk_name(source, &trait_.name, &type_name, &method.name);
+                source.push_str("(void* gust_self");
+                for (index, param) in method.params.iter().enumerate() {
+                    source.push_str(", ");
+                    push_c_type(source, &param.type_);
+                    source.push(' ');
+                    source.push_str("gust_arg");
+                    source.push_str(&index.to_string());
+                }
+                source.push_str(") {\n");
+                source.push_str("    ");
+                if method.return_type != LoweredType::Void {
+                    source.push_str("return ");
+                }
+                push_c_function_name(source, &impl_method.function_name);
+                source.push('(');
+                let LoweredType::Struct(struct_name) = &impl_.self_type else {
+                    unreachable!("only struct trait impls use dynamic dispatch")
+                };
+                source.push('(');
+                push_c_struct_name(source, struct_name);
+                source.push_str("*)gust_self");
+                for index in 0..method.params.len() {
+                    source.push_str(", gust_arg");
+                    source.push_str(&index.to_string());
+                }
+                source.push_str(");\n");
+                source.push_str("}\n\n");
+            }
+
+            source.push_str("static const ");
+            push_c_trait_vtable_name(source, &trait_.name);
+            source.push(' ');
+            push_c_trait_impl_vtable_name(source, &trait_.name, &type_name);
+            source.push_str(" = {\n");
+            for method in &trait_.methods {
+                source.push_str("    .");
+                push_c_trait_method_field_name(source, &method.name);
+                source.push_str(" = ");
+                push_c_trait_thunk_name(source, &trait_.name, &type_name, &method.name);
+                source.push_str(",\n");
+            }
+            source.push_str("};\n\n");
+        }
+    }
+}
+
 fn push_c_statement(
     source: &mut String,
     statement: &LoweredStatement,
@@ -1597,6 +1771,7 @@ fn push_c_statement(
             | LoweredExprKind::Match { .. }
             | LoweredExprKind::NumberToString(_)
             | LoweredExprKind::Call { .. }
+            | LoweredExprKind::DynamicCall { .. }
             | LoweredExprKind::IndirectCall { .. } => {
                 push_c_indent(source, indent);
                 source.push_str("gust_rt_io_println(");
@@ -1610,6 +1785,7 @@ fn push_c_statement(
             | LoweredExprKind::Negate(_)
             | LoweredExprKind::Arithmetic { .. }
             | LoweredExprKind::StructLiteral { .. }
+            | LoweredExprKind::TraitObject { .. }
             | LoweredExprKind::Clone(_)
             | LoweredExprKind::Closure { .. }
             | LoweredExprKind::EnumLiteral { .. } => {
@@ -1790,6 +1966,51 @@ fn push_c_enum_name(source: &mut String, name: &str) {
     push_c_identifier_suffix(source, name);
 }
 
+fn push_c_trait_name(source: &mut String, name: &str) {
+    source.push_str("gust_trait_");
+    source.push_str(&format!("{:08x}_", stable_name_hash(name)));
+    push_c_identifier_suffix(source, name);
+}
+
+fn push_c_trait_vtable_name(source: &mut String, name: &str) {
+    push_c_trait_name(source, name);
+    source.push_str("_vtable");
+}
+
+fn push_c_trait_method_field_name(source: &mut String, name: &str) {
+    source.push_str("gust_method_");
+    push_c_identifier_suffix(source, name);
+}
+
+fn push_c_trait_impl_vtable_name(source: &mut String, trait_name: &str, type_name: &str) {
+    source.push_str("gust_vtable_");
+    source.push_str(&format!(
+        "{:08x}_",
+        stable_name_hash(&format!("{trait_name} for {type_name}"))
+    ));
+    push_c_identifier_suffix(source, trait_name);
+    source.push_str("_for_");
+    push_c_identifier_suffix(source, type_name);
+}
+
+fn push_c_trait_thunk_name(
+    source: &mut String,
+    trait_name: &str,
+    type_name: &str,
+    method_name: &str,
+) {
+    source.push_str("gust_trait_thunk_");
+    source.push_str(&format!(
+        "{:08x}_",
+        stable_name_hash(&format!("{trait_name} for {type_name}.{method_name}"))
+    ));
+    push_c_identifier_suffix(source, trait_name);
+    source.push_str("_");
+    push_c_identifier_suffix(source, type_name);
+    source.push_str("_");
+    push_c_identifier_suffix(source, method_name);
+}
+
 fn push_c_enum_clone_internal_name(source: &mut String, name: &str) {
     source.push_str("gust_rt_clone_");
     push_c_enum_name(source, name);
@@ -1829,7 +2050,9 @@ fn sanitized_name(name: &str) -> String {
 fn type_name_key(type_: &LoweredType) -> String {
     match type_ {
         LoweredType::Basic(type_) => type_.name().to_string(),
-        LoweredType::Struct(name) | LoweredType::Enum(name) => name.clone(),
+        LoweredType::Struct(name) | LoweredType::Enum(name) | LoweredType::Trait(name) => {
+            name.clone()
+        }
         LoweredType::Function {
             params,
             return_type,
@@ -1879,6 +2102,7 @@ fn push_c_type(source: &mut String, type_: &LoweredType) {
             source.push('*');
         }
         LoweredType::Enum(name) => push_c_enum_name(source, name),
+        LoweredType::Trait(name) => push_c_trait_name(source, name),
         LoweredType::Function { .. } => push_c_function_type_name(source, type_),
         LoweredType::Void => source.push_str("void"),
     }
@@ -2286,6 +2510,52 @@ fn push_c_value(source: &mut String, value: &LoweredExpr, structs: &[LoweredStru
             }
 
             source.push(')');
+        }
+        LoweredExprKind::TraitObject {
+            trait_name,
+            self_type,
+            value,
+        } => {
+            let LoweredType::Struct(type_name) = self_type else {
+                unreachable!("only struct values can be emitted as trait objects")
+            };
+            source.push('(');
+            push_c_trait_name(source, trait_name);
+            source.push_str("){ .gust_self = ");
+            push_c_value(source, value, structs);
+            source.push_str(", .gust_vtable = &");
+            push_c_trait_impl_vtable_name(source, trait_name, type_name);
+            source.push_str(" }");
+        }
+        LoweredExprKind::DynamicCall {
+            object,
+            method,
+            args,
+        } => {
+            let LoweredType::Trait(trait_name) = &object.type_ else {
+                unreachable!("dynamic calls require trait-typed receivers")
+            };
+            source.push_str("({\n    ");
+            push_c_trait_name(source, trait_name);
+            source.push_str(" gust_trait_value = ");
+            push_c_value(source, object, structs);
+            source.push_str(";\n    ");
+            if value.type_ != LoweredType::Void {
+                push_c_type(source, &value.type_);
+                source.push_str(" gust_trait_result = ");
+            }
+            source.push_str("gust_trait_value.gust_vtable->");
+            push_c_trait_method_field_name(source, method);
+            source.push_str("(gust_trait_value.gust_self");
+            for arg in args {
+                source.push_str(", ");
+                push_c_value(source, arg, structs);
+            }
+            source.push_str(");\n");
+            if value.type_ != LoweredType::Void {
+                source.push_str("    gust_trait_result;\n");
+            }
+            source.push_str("})");
         }
         LoweredExprKind::Closure { name, captures } => {
             let LoweredType::Function { .. } = &value.type_ else {
