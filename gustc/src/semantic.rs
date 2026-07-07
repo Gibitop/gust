@@ -860,6 +860,10 @@ impl Analyzer {
             ExprKind::Bool(_) => Type::Basic(BasicType::Bool),
             ExprKind::Missing => Type::Unknown,
             ExprKind::GenericType { .. } => Type::Unknown,
+            ExprKind::GenericMember { object, .. } => {
+                self.validate_expr(object);
+                Type::Unknown
+            }
             ExprKind::Array(items) => {
                 self.unsupported(
                     expr.span,
@@ -2432,6 +2436,7 @@ impl Analyzer {
         match &expr.kind {
             ExprKind::Identifier(name) => self.lookup(name).is_some_and(|binding| binding.mutable),
             ExprKind::Member { object, .. } => self.expr_has_mutable_capability(object),
+            ExprKind::GenericMember { object, .. } => self.expr_has_mutable_capability(object),
             ExprKind::StructInit { name, fields, .. } => {
                 let Some(definition) = self.structs.get(name) else {
                     return false;

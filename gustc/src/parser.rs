@@ -159,10 +159,11 @@ impl Parser {
                 let start = self.expect_keyword(Keyword::Static, "`static`").span;
                 self.expect_keyword(Keyword::Fn, "`fn`");
                 let name = self.expect_identifier("expected static function name");
+                let type_params = self.parse_type_params();
                 members.push(StructMember::StaticMethod(self.parse_function_tail(
                     start,
                     Some(name),
-                    Vec::new(),
+                    type_params,
                 )));
             } else if self.current_keyword() == Some(Keyword::Fn) {
                 members.push(StructMember::Method(self.parse_function(true)));
@@ -224,8 +225,13 @@ impl Parser {
         } else {
             None
         };
+        let type_params = if named {
+            self.parse_type_params()
+        } else {
+            Vec::new()
+        };
 
-        self.parse_function_tail(start, name, Vec::new())
+        self.parse_function_tail(start, name, type_params)
     }
 
     fn parse_top_level_function(&mut self) -> Item {
@@ -607,6 +613,31 @@ impl Parser {
                         name,
                     },
                 };
+            } else if self.check_kind(&TokenKind::Less)
+                && matches!(expr.kind, ExprKind::Member { .. })
+            {
+                let position = self.position;
+                let diagnostic_count = self.diagnostics.len();
+                let args = self.parse_type_args();
+                if let Some(args) = args {
+                    if self.check_kind(&TokenKind::LeftParen) && !args.is_empty() {
+                        let ExprKind::Member { object, name } = expr.kind else {
+                            unreachable!("generic member must start from a member expression")
+                        };
+                        expr = Expr {
+                            span: expr.span.join(self.previous_span()),
+                            kind: ExprKind::GenericMember { object, name, args },
+                        };
+                    } else {
+                        self.position = position;
+                        self.diagnostics.truncate(diagnostic_count);
+                        break;
+                    }
+                } else {
+                    self.position = position;
+                    self.diagnostics.truncate(diagnostic_count);
+                    break;
+                }
             } else if self.match_kind(&TokenKind::PlusPlus) {
                 expr = Expr {
                     span: expr.span.join(self.previous_span()),

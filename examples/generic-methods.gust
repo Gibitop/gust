@@ -1,0 +1,37 @@
+enum Option<T> {
+    Some(T)
+    None
+}
+
+struct Pair<A, B> {
+    first: A
+    second: B
+}
+
+struct Box<T> {
+    value: T
+
+    static fn make<U>(value: T, other: U) => Pair { first: value, second: other }
+
+    fn pair<U>(other: U) => Pair { first: self.value, second: other }
+
+    fn empty<U>() => Option<U>.None
+}
+
+fn describe(value: Option<String>): String {
+    return match value {
+        Option.Some(inner) => inner,
+        Option.None => "empty",
+    }
+}
+
+fn main() {
+    let number = Box { value: 42 }
+    let pair = number.pair("answer")
+    let staticPair = Box<i32>.make<String>(7, "static")
+    let empty: Option<String> = number.empty()
+
+    io.println(pair.second)
+    io.println(staticPair.second)
+    io.println(describe(empty))
+}

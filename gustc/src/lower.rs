@@ -1270,6 +1270,9 @@ fn infer_expr_type(
                 .find(|field| field.name == *name)
                 .map(|field| field.type_.clone())
         }
+        ExprKind::GenericMember { object, .. } => {
+            infer_expr_type(object, locals, signatures, structs, enums)
+        }
         ExprKind::Call { callee, .. } => {
             if let ExprKind::Member { object, name } = &callee.kind
                 && name == "clone"
@@ -1497,6 +1500,7 @@ fn expression_has_mutable_capability(expr: &Expr, locals: &HashMap<String, Lower
     match &expr.kind {
         ExprKind::Identifier(name) => locals.get(name).is_some_and(|local| local.mutable),
         ExprKind::Member { object, .. } => expression_has_mutable_capability(object, locals),
+        ExprKind::GenericMember { object, .. } => expression_has_mutable_capability(object, locals),
         ExprKind::StructInit { .. }
         | ExprKind::String(_)
         | ExprKind::Number(_)
@@ -1677,6 +1681,7 @@ fn collect_expr_captures(expr: &Expr, available: &HashSet<String>, captured: &mu
             }
         }
         ExprKind::Member { object, .. }
+        | ExprKind::GenericMember { object, .. }
         | ExprKind::Unary {
             operand: object, ..
         }
@@ -1849,6 +1854,7 @@ fn collect_lambda_expr_captures(
             }
         }
         ExprKind::Member { object, .. }
+        | ExprKind::GenericMember { object, .. }
         | ExprKind::Unary {
             operand: object, ..
         }

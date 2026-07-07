@@ -689,6 +689,12 @@ impl<'names, 'diagnostics> ModuleRewriter<'names, 'diagnostics> {
                 }
             }
             ExprKind::Member { object, .. } => self.rewrite_expr(object),
+            ExprKind::GenericMember { object, args, .. } => {
+                self.rewrite_expr(object);
+                for arg in args {
+                    self.rewrite_type(arg);
+                }
+            }
             ExprKind::GenericType { name, args } => {
                 if let Some(internal_name) = self.resolve_qualified_name(name, expr.span) {
                     *name = internal_name;
@@ -990,6 +996,12 @@ fn shift_expr(expr: &mut Expr, offset: usize) {
             }
         }
         ExprKind::Member { object, .. } => shift_expr(object, offset),
+        ExprKind::GenericMember { object, args, .. } => {
+            shift_expr(object, offset);
+            for arg in args {
+                shift_type(arg, offset);
+            }
+        }
         ExprKind::GenericType { args, .. } => {
             for arg in args {
                 shift_type(arg, offset);
