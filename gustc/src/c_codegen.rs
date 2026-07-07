@@ -22,6 +22,10 @@ pub fn emit_c(program: &LoweredProgram) -> String {
         || program
             .functions
             .iter()
+            .any(|function| function.statements.iter().any(statement_uses_println))
+        || program
+            .closure_functions
+            .iter()
             .any(|function| function.statements.iter().any(statement_uses_println));
 
     let mut source = String::new();
@@ -149,6 +153,10 @@ fn program_uses_type(program: &LoweredProgram, type_: BasicType) -> bool {
             .iter()
             .any(|function| function_uses_type(function, type_))
         || program
+            .closure_functions
+            .iter()
+            .any(|function| closure_function_uses_type(function, type_))
+        || program
             .statements
             .iter()
             .any(|statement| statement_uses_type(statement, type_))
@@ -167,6 +175,23 @@ fn function_uses_type(function: &LoweredFunction, type_: BasicType) -> bool {
             .params
             .iter()
             .any(|param| param.type_ == LoweredType::Basic(type_))
+        || function
+            .statements
+            .iter()
+            .any(|statement| statement_uses_type(statement, type_))
+        || expr_uses_type(&function.return_value, type_)
+}
+
+fn closure_function_uses_type(function: &LoweredClosureFunction, type_: BasicType) -> bool {
+    function.return_type == LoweredType::Basic(type_)
+        || function
+            .params
+            .iter()
+            .any(|param| param.type_ == LoweredType::Basic(type_))
+        || function
+            .captures
+            .iter()
+            .any(|capture| capture.type_ == LoweredType::Basic(type_))
         || function
             .statements
             .iter()
@@ -316,6 +341,12 @@ fn program_uses_number_to_string(program: &LoweredProgram, type_: BasicType) -> 
             .iter()
             .any(|statement| statement_uses_number_to_string(statement, type_))
             || expr_uses_number_to_string(&function.return_value, type_)
+    }) || program.closure_functions.iter().any(|function| {
+        function
+            .statements
+            .iter()
+            .any(|statement| statement_uses_number_to_string(statement, type_))
+            || expr_uses_number_to_string(&function.return_value, type_)
     }) || program
         .statements
         .iter()
@@ -429,11 +460,21 @@ fn program_uses_string_concat(program: &LoweredProgram) -> bool {
         .functions
         .iter()
         .any(|function| function_uses_string_concat(function))
+        || program
+            .closure_functions
+            .iter()
+            .any(|function| closure_function_uses_string_concat(function))
         || program.statements.iter().any(statement_uses_string_concat)
 }
 
 fn program_uses_string_equality(program: &LoweredProgram) -> bool {
     program.functions.iter().any(|function| {
+        function
+            .statements
+            .iter()
+            .any(statement_uses_string_equality)
+            || expr_uses_string_equality(&function.return_value)
+    }) || program.closure_functions.iter().any(|function| {
         function
             .statements
             .iter()
@@ -536,6 +577,11 @@ fn expr_uses_string_equality(expr: &LoweredExpr) -> bool {
 }
 
 fn function_uses_string_concat(function: &LoweredFunction) -> bool {
+    function.statements.iter().any(statement_uses_string_concat)
+        || expr_uses_string_concat(&function.return_value)
+}
+
+fn closure_function_uses_string_concat(function: &LoweredClosureFunction) -> bool {
     function.statements.iter().any(statement_uses_string_concat)
         || expr_uses_string_concat(&function.return_value)
 }
