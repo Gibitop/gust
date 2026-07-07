@@ -1,8 +1,8 @@
 use crate::ast::{
     BinaryOp, Block, ElseBranch, EnumDecl, EnumVariant, Expr, ExprKind, ExtensionDecl, FieldDecl,
-    FunctionBody, FunctionDecl, ImportDecl, ImportName, ImportNamespace, Item, MatchBranch,
-    MatchBranchBody, Param, Pattern, Program, Stmt, StmtKind, StructDecl, StructInitField,
-    StructMember, TypeRef, UnaryOp,
+    FunctionBody, FunctionDecl, FunctionTypeParam, FunctionTypeRef, ImportDecl, ImportName,
+    ImportNamespace, Item, MatchBranch, MatchBranchBody, Param, Pattern, Program, Stmt, StmtKind,
+    StructDecl, StructInitField, StructMember, TypeRef, UnaryOp,
 };
 use crate::diagnostic::Diagnostic;
 use crate::lexer::{Keyword, Token, TokenKind};
@@ -249,6 +249,7 @@ impl Parser {
             let type_ref = TypeRef {
                 name: first_name,
                 args: Vec::new(),
+                function: None,
                 span: name_span,
             };
 
@@ -837,6 +838,37 @@ impl Parser {
 
     fn parse_type(&mut self) -> Option<TypeRef> {
         let start = self.current().span;
+        if self.match_keyword(Keyword::Fn) {
+            self.expect_kind(&TokenKind::LeftParen, "`(`");
+            let mut params = Vec::new();
+            while !self.at_eof() && !self.check_kind(&TokenKind::RightParen) {
+                let mutable = self.match_keyword(Keyword::Mut);
+                let type_ref = self
+                    .parse_type()
+                    .unwrap_or_else(|| self.missing_type(self.current().span));
+                params.push(FunctionTypeParam { mutable, type_ref });
+
+                if !self.match_kind(&TokenKind::Comma) {
+                    break;
+                }
+            }
+            self.expect_kind(&TokenKind::RightParen, "`)`");
+            self.expect_kind(&TokenKind::Colon, "`:`");
+            let return_type = self
+                .parse_type()
+                .unwrap_or_else(|| self.missing_type(self.current().span));
+            let span = start.join(return_type.span);
+            return Some(TypeRef {
+                name: "fn".to_string(),
+                args: Vec::new(),
+                function: Some(FunctionTypeRef {
+                    params,
+                    return_type: Box::new(return_type),
+                }),
+                span,
+            });
+        }
+
         let mut name = if let Some(name) = self.consume_identifier() {
             name
         } else {
@@ -867,6 +899,7 @@ impl Parser {
         Some(TypeRef {
             name,
             args,
+            function: None,
             span: start.join(end),
         })
     }
@@ -906,6 +939,7 @@ impl Parser {
         TypeRef {
             name: "<missing>".to_string(),
             args: Vec::new(),
+            function: None,
             span,
         }
     }

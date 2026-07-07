@@ -213,3 +213,17 @@ so functions returning `Option.Some(value)`, `Option<T>.None`, or `Box { value: 
 require annotations.
 
 Generic bounds are not implemented yet.
+
+## First-class functions
+
+Function values are represented as closure pairs: an environment pointer plus a call pointer.
+Lambdas capture local bindings by shared cell, not by value snapshot, so mutations through the
+closure and mutations in the enclosing scope observe the same binding. The executable backend
+allocates captured cells and closure environments through `gust_rt_alloc` so the implementation can
+move to managed allocation when the runtime garbage collector is introduced.
+
+The first executable-backend implementation supports monomorphic function types. Lambda parameters
+are inferred from a function type context, or otherwise require annotations. Lambda return types are
+inferred from expression bodies and from consistent block returns when no return type is annotated.
+Captured `let` locals are supported; captured parameters and generic closure values are left for a
+later implementation step.

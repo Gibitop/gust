@@ -339,7 +339,20 @@ impl Pattern {
 pub struct TypeRef {
     pub name: String,
     pub args: Vec<TypeRef>,
+    pub function: Option<FunctionTypeRef>,
     pub span: Span,
+}
+
+#[derive(Debug, Clone)]
+pub struct FunctionTypeRef {
+    pub params: Vec<FunctionTypeParam>,
+    pub return_type: Box<TypeRef>,
+}
+
+#[derive(Debug, Clone)]
+pub struct FunctionTypeParam {
+    pub mutable: bool,
+    pub type_ref: TypeRef,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

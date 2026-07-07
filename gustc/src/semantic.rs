@@ -91,8 +91,18 @@ enum Type {
     Basic(BasicType),
     Struct(String),
     Enum(String),
+    Function {
+        params: Vec<FunctionTypeParam>,
+        return_type: Box<Type>,
+    },
     Named(String),
     Unknown,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct FunctionTypeParam {
+    type_: Type,
+    mutable: bool,
 }
 
 impl Type {
@@ -101,6 +111,23 @@ impl Type {
             Type::Basic(type_) => type_.name().to_string(),
             Type::Struct(name) => name.clone(),
             Type::Enum(name) => name.clone(),
+            Type::Function {
+                params,
+                return_type,
+            } => {
+                let params = params
+                    .iter()
+                    .map(|param| {
+                        if param.mutable {
+                            format!("mut {}", param.type_.name())
+                        } else {
+                            param.type_.name()
+                        }
+                    })
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!("fn({params}): {}", return_type.name())
+            }
             Type::Named(name) => name.clone(),
             Type::Unknown => "unknown".to_string(),
         }
@@ -785,6 +812,18 @@ impl Analyzer {
             ExprKind::Identifier(name) => {
                 if let Some(binding) = self.lookup(name) {
                     binding.type_
+                } else if let Some(signature) = self.functions.get(name) {
+                    Type::Function {
+                        params: signature
+                            .params
+                            .iter()
+                            .map(|param| FunctionTypeParam {
+                                type_: param.type_.clone(),
+                                mutable: param.mutable,
+                            })
+                            .collect(),
+                        return_type: Box::new(signature.return_type.clone()),
+                    }
                 } else if self.values.contains(name) {
                     Type::Unknown
                 } else {
@@ -806,6 +845,7 @@ impl Analyzer {
                 Some(Type::Basic(_))
                 | Some(Type::Struct(_))
                 | Some(Type::Enum(_))
+                | Some(Type::Function { .. })
                 | Some(Type::Named(_))
                 | None => Type::Basic(if number_literal_is_float(value) {
                     BasicType::F64
@@ -854,7 +894,14 @@ impl Analyzer {
                     return self.validate_method_call(expr, object, name, args);
                 }
 
-                self.validate_expr(callee);
+                let callee_type = self.validate_expr(callee);
+                if let Type::Function {
+                    params,
+                    return_type,
+                } = callee_type
+                {
+                    return self.validate_function_value_call(expr, &params, &return_type, args);
+                }
 
                 for arg in args {
                     self.validate_expr(arg);
@@ -1075,14 +1122,7 @@ impl Analyzer {
 
                 branch_type.unwrap_or(Type::Unknown)
             }
-            ExprKind::Lambda(function) => {
-                self.unsupported(
-                    expr.span,
-                    "lambda functions are parsed but closure lowering is not implemented yet",
-                );
-                self.validate_function(function, None, false);
-                Type::Unknown
-            }
+            ExprKind::Lambda(function) => self.validate_lambda(expr.span, function, expected_type),
             ExprKind::PostfixIncrement(target) => {
                 if matches!(target.kind, ExprKind::Member { .. }) {
                     return self.validate_member_increment(expr.span, target);
@@ -1452,6 +1492,18 @@ impl Analyzer {
 
     fn validate_call(&mut self, expr: &Expr, name: &str, args: &[Expr]) -> Type {
         let Some(signature) = self.functions.get(name).cloned() else {
+            if let Some(Binding {
+                type_:
+                    Type::Function {
+                        params,
+                        return_type,
+                    },
+                ..
+            }) = self.lookup(name)
+            {
+                return self.validate_function_value_call(expr, &params, &return_type, args);
+            }
+
             if self.values.contains(name) {
                 for arg in args {
                     self.validate_expr(arg);
@@ -1514,6 +1566,48 @@ impl Analyzer {
         }
 
         signature.return_type
+    }
+
+    fn validate_function_value_call(
+        &mut self,
+        expr: &Expr,
+        params: &[FunctionTypeParam],
+        return_type: &Type,
+        args: &[Expr],
+    ) -> Type {
+        if args.len() != params.len() {
+            self.diagnostics.push(Diagnostic::error(
+                expr.span,
+                format!(
+                    "function value expects {} arguments, got {}",
+                    params.len(),
+                    args.len()
+                ),
+            ));
+
+            for arg in args {
+                self.validate_expr(arg);
+            }
+
+            return return_type.clone();
+        }
+
+        for (arg, param) in args.iter().zip(params) {
+            let arg_type = self.validate_expr_with_context(arg, Some(param.type_.clone()));
+            self.report_type_mismatch(arg.span, param.type_.clone(), arg_type);
+
+            if param.mutable
+                && self.requires_mutable_capability(&param.type_)
+                && !self.expr_has_mutable_capability(arg)
+            {
+                self.diagnostics.push(Diagnostic::error(
+                    arg.span,
+                    "function value requires a mutable argument; use `.clone()` to pass an independent mutable object",
+                ));
+            }
+        }
+
+        return_type.clone()
     }
 
     fn resolve_type_expression(&self, expr: &Expr) -> Option<Type> {
@@ -1725,6 +1819,117 @@ impl Analyzer {
         signature.return_type
     }
 
+    fn validate_lambda(
+        &mut self,
+        span: Span,
+        function: &FunctionDecl,
+        expected_type: Option<Type>,
+    ) -> Type {
+        let expected_function = match expected_type {
+            Some(Type::Function {
+                params,
+                return_type,
+            }) => Some((params, *return_type)),
+            Some(Type::Unknown) | None => None,
+            Some(type_) => {
+                self.diagnostics.push(Diagnostic::error(
+                    span,
+                    format!("expected function type for lambda, got `{}`", type_.name()),
+                ));
+                None
+            }
+        };
+
+        let expected_params = expected_function
+            .as_ref()
+            .map(|(params, _)| params.as_slice())
+            .unwrap_or(&[]);
+
+        if !expected_params.is_empty() && function.params.len() != expected_params.len() {
+            self.diagnostics.push(Diagnostic::error(
+                span,
+                format!(
+                    "lambda expects {} parameters from context, got {}",
+                    expected_params.len(),
+                    function.params.len()
+                ),
+            ));
+        }
+
+        self.push_scope();
+        let mut params = Vec::new();
+        for (index, param) in function.params.iter().enumerate() {
+            let expected_param = expected_params.get(index);
+            let type_ = if let Some(type_ref) = &param.type_ref {
+                self.validate_type(type_ref)
+            } else if let Some(expected_param) = expected_param {
+                expected_param.type_.clone()
+            } else {
+                self.diagnostics.push(Diagnostic::error(
+                    param.span,
+                    "lambda parameters must include type annotations when no function type context is available",
+                ));
+                Type::Unknown
+            };
+
+            if let Some(expected_param) = expected_param {
+                self.report_type_mismatch(param.span, expected_param.type_.clone(), type_.clone());
+                if expected_param.mutable != param.mutable {
+                    self.diagnostics.push(Diagnostic::error(
+                        param.span,
+                        "lambda parameter mutability does not match function type context",
+                    ));
+                }
+            }
+
+            self.define(&param.name, param.mutable, type_.clone());
+            params.push(FunctionTypeParam {
+                type_,
+                mutable: param.mutable,
+            });
+        }
+
+        let expected_return = expected_function
+            .as_ref()
+            .map(|(_, return_type)| return_type.clone());
+        let annotated_return = function
+            .return_type
+            .as_ref()
+            .map(|type_ref| self.validate_type(type_ref));
+        let return_context = annotated_return
+            .clone()
+            .or_else(|| expected_return.clone())
+            .unwrap_or(Type::Unknown);
+        self.return_types.push(return_context.clone());
+
+        let return_type = match &function.body {
+            FunctionBody::Expr(expr) => {
+                let value_type =
+                    self.validate_expr_with_context(expr, Some(return_context.clone()));
+                if !matches!(return_context, Type::Unknown) {
+                    self.report_type_mismatch(expr.span, return_context.clone(), value_type);
+                    return_context
+                } else {
+                    value_type
+                }
+            }
+            FunctionBody::Block(block) => {
+                self.validate_block(block);
+                annotated_return
+                    .or(expected_return)
+                    .unwrap_or(Type::Unknown)
+            }
+        };
+
+        self.return_types.pop();
+        self.pop_scope();
+
+        Type::Function {
+            params,
+            return_type: Box::new(return_type),
+        }
+    }
+
     fn validate_clone(&mut self, span: Span, object: &Expr, args: &[Expr]) -> Type {
         if !args.is_empty() {
             self.diagnostics.push(Diagnostic::error(
@@ -1924,7 +2129,7 @@ impl Analyzer {
                 return Type::Unknown;
             }
             Type::Named(_) => return Type::Unknown,
-            Type::Basic(_) => {
+            Type::Basic(_) | Type::Function { .. } => {
                 self.diagnostics.push(Diagnostic::error(
                     span,
                     "field access requires a struct value",
@@ -1972,7 +2177,7 @@ impl Analyzer {
             return;
         }
 
-        if expected_type != value_type {
+        if !types_are_compatible(&expected_type, &value_type) {
             self.diagnostics.push(Diagnostic::error(
                 span,
                 format!(
@@ -2058,6 +2263,22 @@ impl Analyzer {
     }
 
     fn validate_type(&mut self, type_ref: &TypeRef) -> Type {
+        if let Some(function) = &type_ref.function {
+            let params = function
+                .params
+                .iter()
+                .map(|param| FunctionTypeParam {
+                    type_: self.validate_type(&param.type_ref),
+                    mutable: param.mutable,
+                })
+                .collect();
+            let return_type = Box::new(self.validate_type(&function.return_type));
+            return Type::Function {
+                params,
+                return_type,
+            };
+        }
+
         if type_ref.name == "Self" {
             let self_type = self.self_types.last().cloned();
             if self_type.is_none() {
@@ -2114,6 +2335,10 @@ impl Analyzer {
     }
 
     fn requires_unsupported_default(&self, type_ref: &TypeRef) -> bool {
+        if type_ref.function.is_some() {
+            return true;
+        }
+
         if BasicType::from_name(&type_ref.name).is_some() {
             return !type_ref.args.is_empty();
         }
@@ -2125,6 +2350,22 @@ impl Analyzer {
         let Some(type_ref) = type_ref else {
             return Type::Unknown;
         };
+
+        if let Some(function) = &type_ref.function {
+            return Type::Function {
+                params: function
+                    .params
+                    .iter()
+                    .map(|param| FunctionTypeParam {
+                        type_: self.type_ref_without_diagnostics(Some(&param.type_ref)),
+                        mutable: param.mutable,
+                    })
+                    .collect(),
+                return_type: Box::new(
+                    self.type_ref_without_diagnostics(Some(&function.return_type)),
+                ),
+            };
+        }
 
         if !type_ref.args.is_empty() {
             return Type::Unknown;
@@ -2144,6 +2385,24 @@ impl Analyzer {
     }
 
     fn type_ref_in_context(&self, type_ref: Option<&TypeRef>, self_type: &Type) -> Type {
+        if let Some(type_ref) = type_ref
+            && let Some(function) = &type_ref.function
+        {
+            return Type::Function {
+                params: function
+                    .params
+                    .iter()
+                    .map(|param| FunctionTypeParam {
+                        type_: self.type_ref_in_context(Some(&param.type_ref), self_type),
+                        mutable: param.mutable,
+                    })
+                    .collect(),
+                return_type: Box::new(
+                    self.type_ref_in_context(Some(&function.return_type), self_type),
+                ),
+            };
+        }
+
         if type_ref.is_some_and(|type_ref| type_ref.name == "Self" && type_ref.args.is_empty()) {
             self_type.clone()
         } else {
@@ -2256,6 +2515,30 @@ impl Analyzer {
 
     fn current_return_type(&self) -> Type {
         self.return_types.last().cloned().unwrap_or(Type::Unknown)
+    }
+}
+
+fn types_are_compatible(expected_type: &Type, value_type: &Type) -> bool {
+    match (expected_type, value_type) {
+        (Type::Unknown, _) | (_, Type::Unknown) => true,
+        (
+            Type::Function {
+                params,
+                return_type,
+            },
+            Type::Function {
+                params: value_params,
+                return_type: value_return_type,
+            },
+        ) => {
+            params.len() == value_params.len()
+                && params.iter().zip(value_params).all(|(param, value_param)| {
+                    param.mutable == value_param.mutable
+                        && types_are_compatible(&param.type_, &value_param.type_)
+                })
+                && types_are_compatible(return_type, value_return_type)
+        }
+        _ => expected_type == value_type,
     }
 }
 

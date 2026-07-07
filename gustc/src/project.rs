@@ -755,6 +755,14 @@ impl<'names, 'diagnostics> ModuleRewriter<'names, 'diagnostics> {
     }
 
     fn rewrite_type(&self, type_ref: &mut TypeRef) {
+        if let Some(function) = &mut type_ref.function {
+            for param in &mut function.params {
+                self.rewrite_type(&mut param.type_ref);
+            }
+            self.rewrite_type(&mut function.return_type);
+            return;
+        }
+
         if self.is_local(&type_ref.name) {
             return;
         }
@@ -896,6 +904,14 @@ fn shift_param(param: &mut Param, offset: usize) {
 
 fn shift_type(type_ref: &mut TypeRef, offset: usize) {
     shift_span(&mut type_ref.span, offset);
+    if let Some(function) = &mut type_ref.function {
+        for param in &mut function.params {
+            shift_type(&mut param.type_ref, offset);
+        }
+        shift_type(&mut function.return_type, offset);
+        return;
+    }
+
     for arg in &mut type_ref.args {
         shift_type(arg, offset);
     }

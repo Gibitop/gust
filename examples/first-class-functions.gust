@@ -1,0 +1,20 @@
+fn apply(value: i32, f: fn(i32): i32) {
+    return f(value)
+}
+
+fn addOne(value: i32) {
+    return value + 1
+}
+
+fn main() {
+    let mut count = 0
+    let increment = fn() => count++
+    let double = fn(value: i32) => value * 2
+
+    increment()
+    increment()
+
+    if count == 2 && apply(41, addOne) == 42 && apply(21, fn(value) => value * 2) == double(21) {
+        io.println("first class functions capture locals")
+    }
+}
