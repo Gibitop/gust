@@ -2855,3 +2855,44 @@ fn main() {
     assert!(c.contains("gust_trait_thunk_"));
     assert!(c.contains("Named_String"));
 }
+
+#[test]
+fn into_impls_lower_to_target_specific_trait_calls() {
+    let result = check_source(
+        r#"impl Into<UserId> for String {
+    fn into() => UserId { value: self }
+}
+
+impl Into<Label> for String {
+    fn into() => Label { value: self }
+}
+
+struct UserId {
+    value: String
+}
+
+struct Label {
+    value: String
+}
+
+fn main() {
+    let raw = "Gust"
+    let id: UserId = raw.into()
+    let label: Label = raw.into()
+    io.println(id.value)
+    io.println(label.value)
+}"#,
+    );
+    assert!(
+        !result.has_errors(),
+        "expected Into conversions to validate, got {:?}",
+        result.diagnostics
+    );
+
+    let lowered = lower_program(&result.program).expect("Into conversions should lower");
+    let c = emit_c(&lowered);
+
+    assert!(c.contains("// Gust function: trait Into<UserId> for String.into"));
+    assert!(c.contains("// Gust function: trait Into<Label> for String.into"));
+    assert!(c.contains("gust_fn_"));
+}

@@ -3771,6 +3771,46 @@ fn main() {
 }
 
 #[test]
+fn into_uses_expected_type_to_select_builtin_trait_impls() {
+    let result = check_source(
+        r#"impl Into<UserId> for String {
+    fn into() => UserId { value: self }
+}
+
+impl Into<Label> for String {
+    fn into() => Label { value: self }
+}
+
+struct UserId {
+    value: String
+}
+
+struct Label {
+    value: String
+}
+
+fn readUserId(value: UserId): String {
+    return value.value
+}
+
+fn main() {
+    let raw = "Gust"
+    let id: UserId = raw.into()
+    let label: Label = raw.into()
+    io.println(readUserId(raw.into()))
+    io.println(id.value)
+    io.println(label.value)
+}"#,
+    );
+
+    assert!(
+        !result.has_errors(),
+        "expected Into conversions to validate, got {:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
 fn generic_bounds_are_checked_at_concrete_use_sites() {
     let result = check_source(
         r#"struct Person {

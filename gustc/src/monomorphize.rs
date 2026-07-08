@@ -8,7 +8,43 @@ use crate::ast::{
 use crate::diagnostic::Diagnostic;
 
 pub fn monomorphize(program: &Program) -> Result<Program, Vec<Diagnostic>> {
-    Monomorphizer::new(program).run(program)
+    let program = program_with_builtins(program);
+    Monomorphizer::new(&program).run(&program)
+}
+
+fn program_with_builtins(program: &Program) -> Program {
+    let mut items = Vec::new();
+    if !program
+        .items
+        .iter()
+        .any(|item| matches!(item, Item::Trait(trait_) if trait_.name == "Into"))
+    {
+        items.push(builtin_into_trait());
+    }
+    items.extend(program.items.clone());
+    Program { items }
+}
+
+fn builtin_into_trait() -> Item {
+    let span = crate::span::Span::new(0, 0);
+    Item::Trait(TraitDecl {
+        name: "Into".to_string(),
+        type_params: vec!["T".to_string()],
+        type_param_bounds: Vec::new(),
+        methods: vec![crate::ast::TraitMethodDecl {
+            name: "into".to_string(),
+            static_: false,
+            params: Vec::new(),
+            return_type: Some(TypeRef {
+                name: "T".to_string(),
+                args: Vec::new(),
+                function: None,
+                span,
+            }),
+            span,
+        }],
+        span,
+    })
 }
 
 struct Monomorphizer {
@@ -1227,6 +1263,35 @@ impl Monomorphizer {
     }
 
     fn rewrite_expr(&mut self, expr: &mut Expr, substitutions: &HashMap<String, TypeRef>) {
+        let into_call = match &expr.kind {
+            ExprKind::Call { callee, args } if args.is_empty() => match &callee.kind {
+                ExprKind::Member { object, name } if name == "into" => self
+                    .expected_expr_types
+                    .get(&expr.span)
+                    .cloned()
+                    .map(|expected| (object.clone(), expected)),
+                _ => None,
+            },
+            _ => None,
+        };
+        if let Some((object, mut expected)) = into_call {
+            let ExprKind::Call { callee, .. } = &mut expr.kind else {
+                unreachable!("into call was matched above")
+            };
+            self.expected_expr_types.remove(&expr.span);
+            self.rewrite_type(&mut expected, substitutions);
+            if self.trait_templates.contains_key("Into") {
+                self.specialize_trait("Into", &[expected.clone()], expr.span);
+            }
+            let mut object = (*object).clone();
+            self.rewrite_expr(&mut object, substitutions);
+            callee.kind = ExprKind::Member {
+                object: Box::new(object),
+                name: format!("{}::into", specialized_name("Into", &[expected])),
+            };
+            return;
+        }
+
         let generic_function_call = match &expr.kind {
             ExprKind::Call { callee, .. } => match &callee.kind {
                 ExprKind::Identifier(name) if self.function_templates.contains_key(name) => {
