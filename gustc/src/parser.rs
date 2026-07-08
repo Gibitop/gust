@@ -1012,12 +1012,13 @@ impl Parser {
         if enum_name.is_empty() {
             self.error_here("expected `.` and enum variant in match pattern");
         }
-        let binding = if self.match_kind(&TokenKind::LeftParen) {
+        let (binding, binding_mutable) = if self.match_kind(&TokenKind::LeftParen) {
+            let binding_mutable = self.match_keyword(Keyword::Mut);
             let binding = self.expect_identifier("expected pattern binding");
             self.expect_kind(&TokenKind::RightParen, "`)`");
-            Some(binding)
+            (Some(binding), binding_mutable)
         } else {
-            None
+            (None, false)
         };
         let span = start.join(self.previous_span());
 
@@ -1025,6 +1026,7 @@ impl Parser {
             enum_name,
             variant,
             binding,
+            binding_mutable,
             span,
         }
     }

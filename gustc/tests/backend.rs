@@ -2186,6 +2186,52 @@ fn main() {
 }
 
 #[test]
+fn mutable_enum_payload_patterns_lower_to_payload_access() {
+    let result = check_source(
+        r#"struct StringContainer {
+    value: String
+
+    fn set(mut self, value: String) {
+        self.value = value
+    }
+}
+
+enum Option {
+    Some(StringContainer)
+    None
+
+    fn set(mut self, value: String) {
+        match self {
+            Option.Some(mut container) => container.set(value),
+            Option.None => {},
+        }
+    }
+}
+
+fn main() {
+    let mut option = Option.Some(StringContainer { value: "Hello, World!" })
+    option.set("Hello, Gust!")
+    match option {
+        Option.Some(container) => io.println(container.value),
+        Option.None => io.println("None"),
+    }
+}"#,
+    );
+
+    assert!(
+        !result.has_errors(),
+        "expected mutable payload pattern to validate, got {:?}",
+        result.diagnostics
+    );
+
+    let lowered = lower_program(&result.program).expect("mutable payload pattern should lower");
+    let source = emit_c(&lowered);
+
+    assert!(source.contains("// Gust function: StringContainer.set"));
+    assert!(source.contains(".gust_payload.gust_Some"));
+}
+
+#[test]
 fn block_bodied_match_expression_branches_emit_c() {
     let result = check_source(
         r#"enum Being {

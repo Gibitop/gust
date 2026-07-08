@@ -2528,6 +2528,151 @@ fn main() {
 }
 
 #[test]
+fn mutable_enum_payload_patterns_validate_for_mutable_match_values() {
+    let result = check_source(
+        r#"struct StringContainer {
+    value: String
+
+    fn set(mut self, value: String) {
+        self.value = value
+    }
+}
+
+enum Option {
+    Some(StringContainer)
+    None
+
+    fn set(mut self, value: String) {
+        match self {
+            Option.Some(mut container) => container.set(value),
+            Option.None => {},
+        }
+    }
+}
+
+fn main() {
+    let mut option = Option.Some(StringContainer { value: "Hello, World!" })
+    option.set("Hello, Gust!")
+}"#,
+    );
+
+    assert!(
+        !result.has_errors(),
+        "expected mutable payload pattern to validate, got {:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
+fn mutable_method_calls_on_match_payloads_suggest_mutable_payload_patterns() {
+    let result = check_source(
+        r#"struct StringContainer {
+    value: String
+
+    fn set(mut self, value: String) {
+        self.value = value
+    }
+}
+
+enum Option {
+    Some(StringContainer)
+    None
+
+    fn set(mut self, value: String) {
+        match self {
+            Option.Some(container) => container.set(value),
+            Option.None => {},
+        }
+    }
+}
+
+fn main() {}"#,
+    );
+
+    assert!(
+        result.diagnostics.iter().any(|diagnostic| {
+            diagnostic.severity == Severity::Error
+                && diagnostic.message.contains(
+                    "cannot call mutable function `StringContainer.set` through immutable match payload `container`; bind the payload as mutable with `Option.Some(mut container)`",
+                )
+        }),
+        "expected mutable payload pattern suggestion, got {:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
+fn mutable_method_calls_on_immutable_match_payloads_do_not_suggest_invalid_mut_patterns() {
+    let result = check_source(
+        r#"struct StringContainer {
+    value: String
+
+    fn set(mut self, value: String) {
+        self.value = value
+    }
+}
+
+enum Option {
+    Some(StringContainer)
+    None
+}
+
+fn main() {
+    let option = Option.Some(StringContainer { value: "Hello" })
+    match option {
+        Option.Some(container) => container.set("Hello, Gust!"),
+        Option.None => {},
+    }
+}"#,
+    );
+
+    assert!(
+        result.diagnostics.iter().any(|diagnostic| {
+            diagnostic.severity == Severity::Error
+                && diagnostic.message.contains(
+                    "cannot call mutable function `StringContainer.set` through immutable match payload `container`; `Option.Some(mut container)` requires matching a mutable value",
+                )
+        }),
+        "expected immutable match value note, got {:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
+fn mutable_enum_payload_patterns_require_mutable_match_values() {
+    let result = check_source(
+        r#"struct StringContainer {
+    value: String
+}
+
+enum Option {
+    Some(StringContainer)
+    None
+}
+
+fn main() {
+    let container = StringContainer { value: "Hello" }
+    let option = Option.Some(container)
+    match option {
+        Option.Some(mut value) => io.println(value.value),
+        Option.None => {},
+    }
+}"#,
+    );
+
+    assert!(
+        result.diagnostics.iter().any(|diagnostic| {
+            diagnostic.severity == Severity::Error
+                && diagnostic
+                    .message
+                    .contains("cannot bind mutable payload `value` from an immutable match value")
+        }),
+        "expected immutable match value error, got {:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
 fn enum_matches_must_be_exhaustive() {
     let result = check_source(
         r#"enum Status {

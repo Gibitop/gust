@@ -2926,11 +2926,7 @@ fn lower_expression_statement(
     diagnostics: &mut Vec<Diagnostic>,
     return_type: Option<&LoweredType>,
 ) -> Option<LoweredStatement> {
-    if let ExprKind::Match { branches, .. } = &expr.kind
-        && branches
-            .iter()
-            .any(|branch| matches!(&branch.body, MatchBranchBody::Block(_)))
-    {
+    if matches!(expr.kind, ExprKind::Match { .. }) {
         return lower_match_statement(
             expr,
             locals,
@@ -3035,6 +3031,7 @@ fn lower_match_statement(
     let ExprKind::Match { value, branches } = &expr.kind else {
         return None;
     };
+    let value_mutable = expression_has_mutable_capability(value, locals);
     let value = lower_expr(
         value,
         locals,
@@ -3064,6 +3061,7 @@ fn lower_match_statement(
         let pattern = lower_match_pattern(
             &branch.pattern,
             &value.type_,
+            value_mutable,
             &mut branch_locals,
             enums,
             diagnostics,
@@ -4639,6 +4637,7 @@ fn lower_expr(
             expected_type.clone(),
         )?,
         ExprKind::Match { value, branches } => {
+            let value_mutable = expression_has_mutable_capability(value, locals);
             let value = lower_expr(
                 value,
                 locals,
@@ -4669,6 +4668,7 @@ fn lower_expr(
                 let pattern = lower_match_pattern(
                     &branch.pattern,
                     &value.type_,
+                    value_mutable,
                     &mut branch_locals,
                     enums,
                     diagnostics,
@@ -5231,6 +5231,7 @@ fn find_qualified_variant<'a>(
 fn lower_match_pattern(
     pattern: &Pattern,
     value_type: &LoweredType,
+    value_mutable: bool,
     locals: &mut HashMap<String, LoweringLocal>,
     enums: &HashMap<String, LoweredEnum>,
     diagnostics: &mut Vec<Diagnostic>,
@@ -5242,6 +5243,7 @@ fn lower_match_pattern(
                 enum_name,
                 variant,
                 binding,
+                binding_mutable,
                 span,
             },
             LoweredType::Enum(value_enum_name),
@@ -5269,11 +5271,20 @@ fn lower_match_pattern(
             if let (Some(binding), Some(payload_type)) = (binding, &variant_definition.payload)
                 && binding != "_"
             {
+                if *binding_mutable && !value_mutable {
+                    diagnostics.push(Diagnostic::error(
+                        *span,
+                        format!(
+                            "cannot bind mutable payload `{binding}` from an immutable match value in executable build"
+                        ),
+                    ));
+                    return None;
+                }
                 locals.insert(
                     binding.clone(),
                     LoweringLocal {
                         type_: payload_type.clone(),
-                        mutable: false,
+                        mutable: *binding_mutable,
                         replacement: Some(LoweredExpr {
                             type_: payload_type.clone(),
                             kind: LoweredExprKind::EnumPayload {

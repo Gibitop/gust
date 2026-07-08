@@ -93,6 +93,17 @@ struct TraitDefinition {
 struct Binding {
     mutable: bool,
     type_: Type,
+    origin: BindingOrigin,
+}
+
+#[derive(Debug, Clone)]
+enum BindingOrigin {
+    Local,
+    MatchPayload {
+        enum_name: String,
+        variant: String,
+        mutable_available: bool,
+    },
 }
 
 fn is_self_param(param: &crate::ast::Param) -> bool {
@@ -1524,6 +1535,7 @@ impl Analyzer {
             }
             ExprKind::Match { value, branches } => {
                 let value_type = self.validate_expr(value);
+                let value_mutable = self.expr_has_mutable_capability(value);
                 let mut seen = HashSet::new();
                 let mut has_wildcard = false;
                 let mut branch_type = None;
@@ -1538,9 +1550,11 @@ impl Analyzer {
                     self.push_scope();
                     match (&value_type, &branch.pattern) {
                         (Type::Enum(enum_name), Pattern::Variant { .. }) => {
-                            if let Some(variant_name) =
-                                self.validate_pattern(&branch.pattern, Some(enum_name.as_str()))
-                                && !seen.insert(variant_name.clone())
+                            if let Some(variant_name) = self.validate_pattern(
+                                &branch.pattern,
+                                Some(enum_name.as_str()),
+                                value_mutable,
+                            ) && !seen.insert(variant_name.clone())
                             {
                                 self.diagnostics.push(Diagnostic::error(
                                     branch.pattern.span(),
@@ -1581,7 +1595,7 @@ impl Analyzer {
                             ));
                         }
                         (Type::Unknown, _) => {
-                            self.validate_pattern(&branch.pattern, None);
+                            self.validate_pattern(&branch.pattern, None, value_mutable);
                         }
                         (_, _) => {}
                     }
@@ -2325,14 +2339,40 @@ impl Analyzer {
         let qualified_name = format!("{}.{source_name}", object_type.name());
 
         if signature.mutable_self && !self.expr_has_mutable_capability(object) {
-            let message = if let Some(binding_name) = mutable_member_root(object)
-                && self
-                    .lookup(binding_name)
-                    .is_some_and(|binding| !binding.mutable)
-            {
-                format!(
-                    "cannot call mutable function `{qualified_name}` through immutable binding `{binding_name}`; declare it with `let mut {binding_name}` or call the function on a mutable clone"
-                )
+            let message = if let Some(binding_name) = mutable_member_root(object) {
+                if let Some(binding) = self.lookup(binding_name)
+                    && !binding.mutable
+                {
+                    match binding.origin {
+                        BindingOrigin::MatchPayload {
+                            enum_name,
+                            variant,
+                            mutable_available: true,
+                        } => {
+                            format!(
+                                "cannot call mutable function `{qualified_name}` through immutable match payload `{binding_name}`; bind the payload as mutable with `{enum_name}.{variant}(mut {binding_name})`"
+                            )
+                        }
+                        BindingOrigin::MatchPayload {
+                            enum_name,
+                            variant,
+                            mutable_available: false,
+                        } => {
+                            format!(
+                                "cannot call mutable function `{qualified_name}` through immutable match payload `{binding_name}`; `{enum_name}.{variant}(mut {binding_name})` requires matching a mutable value"
+                            )
+                        }
+                        BindingOrigin::Local => {
+                            format!(
+                                "cannot call mutable function `{qualified_name}` through immutable binding `{binding_name}`; declare it with `let mut {binding_name}` or call the function on a mutable clone"
+                            )
+                        }
+                    }
+                } else {
+                    format!(
+                        "mutable function `{qualified_name}` requires a mutable receiver; bind the value with `let mut` or call the function on a mutable clone"
+                    )
+                }
             } else {
                 format!(
                     "mutable function `{qualified_name}` requires a mutable receiver; bind the value with `let mut` or call the function on a mutable clone"
@@ -2749,12 +2789,18 @@ impl Analyzer {
         }
     }
 
-    fn validate_pattern(&mut self, pattern: &Pattern, enum_name: Option<&str>) -> Option<String> {
+    fn validate_pattern(
+        &mut self,
+        pattern: &Pattern,
+        enum_name: Option<&str>,
+        value_mutable: bool,
+    ) -> Option<String> {
         match pattern {
             Pattern::Variant {
                 enum_name: pattern_enum_name,
                 variant,
                 binding,
+                binding_mutable,
                 span,
             } => {
                 if enum_name.is_some_and(|enum_name| enum_name != pattern_enum_name) {
@@ -2783,7 +2829,22 @@ impl Analyzer {
 
                 match (binding, payload) {
                     (Some(binding), Some(payload)) if binding != "_" => {
-                        self.define(binding, false, payload)
+                        if *binding_mutable && !value_mutable {
+                            self.diagnostics.push(Diagnostic::error(
+                                *span,
+                                format!(
+                                    "cannot bind mutable payload `{binding}` from an immutable match value"
+                                ),
+                            ));
+                        }
+                        self.define_match_payload(
+                            binding,
+                            *binding_mutable,
+                            payload,
+                            pattern_enum_name,
+                            variant,
+                            value_mutable,
+                        )
                     }
                     (Some(_), Some(_)) => {}
                     (Some(_), None) => self.diagnostics.push(Diagnostic::error(
@@ -3109,7 +3170,39 @@ impl Analyzer {
 
     fn define(&mut self, name: &str, mutable: bool, type_: Type) {
         if let Some(scope) = self.scopes.last_mut() {
-            scope.insert(name.to_string(), Binding { mutable, type_ });
+            scope.insert(
+                name.to_string(),
+                Binding {
+                    mutable,
+                    type_,
+                    origin: BindingOrigin::Local,
+                },
+            );
+        }
+    }
+
+    fn define_match_payload(
+        &mut self,
+        name: &str,
+        mutable: bool,
+        type_: Type,
+        enum_name: &str,
+        variant: &str,
+        mutable_available: bool,
+    ) {
+        if let Some(scope) = self.scopes.last_mut() {
+            scope.insert(
+                name.to_string(),
+                Binding {
+                    mutable,
+                    type_,
+                    origin: BindingOrigin::MatchPayload {
+                        enum_name: enum_name.to_string(),
+                        variant: variant.to_string(),
+                        mutable_available,
+                    },
+                },
+            );
         }
     }
 

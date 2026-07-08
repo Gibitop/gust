@@ -147,6 +147,13 @@ receiver as their first argument.
 Generic enum methods are monomorphized with the enclosing enum specialization, so methods such as
 `Option<T>.unwrapOr(fallback: T): T` become concrete methods like `Option<i32>.unwrapOr`.
 
+## Match payload mutability
+
+Enum payload patterns may bind the payload with `mut`, such as `Option.Some(mut value)`.
+Mutable payload bindings are only valid when the matched value has mutable capability. This keeps
+immutable enum views from creating mutable access to nested managed values while allowing mutable
+enum methods to mutate struct payloads through `match self`.
+
 ## Extension functions
 
 An extension function is declared at the top level with `fn Type.functionName(...)`.
