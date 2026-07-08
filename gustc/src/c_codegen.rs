@@ -18,6 +18,7 @@ pub fn emit_c(program: &LoweredProgram) -> String {
     let uses_fixed_width_int = program_uses_fixed_width_int(program);
     let uses_string_concat = program_uses_string_concat(program);
     let uses_number_to_string = !number_to_string_types.is_empty();
+    let uses_enum_trait_object = program_uses_enum_trait_object(program);
     let uses_println = program.statements.iter().any(statement_uses_println)
         || program
             .functions
@@ -52,6 +53,7 @@ pub fn emit_c(program: &LoweredProgram) -> String {
 
     let uses_alloc = uses_string_concat
         || uses_number_to_string
+        || uses_enum_trait_object
         || !program.structs.is_empty()
         || !program.closure_functions.is_empty();
 
@@ -684,6 +686,138 @@ fn expr_uses_string_concat(expr: &LoweredExpr) -> bool {
             args,
             ..
         } => expr_uses_string_concat(callee) || args.iter().any(expr_uses_string_concat),
+        LoweredExprKind::Void
+        | LoweredExprKind::StringLiteral(_)
+        | LoweredExprKind::BoolLiteral(_)
+        | LoweredExprKind::NumberLiteral(_)
+        | LoweredExprKind::Local(_)
+        | LoweredExprKind::LocalCell(_)
+        | LoweredExprKind::CapturedLocal { .. }
+        | LoweredExprKind::Closure { .. }
+        | LoweredExprKind::MatchValue(_) => false,
+    }
+}
+
+fn program_uses_enum_trait_object(program: &LoweredProgram) -> bool {
+    program
+        .statements
+        .iter()
+        .any(statement_uses_enum_trait_object)
+        || program
+            .functions
+            .iter()
+            .any(function_uses_enum_trait_object)
+        || program
+            .closure_functions
+            .iter()
+            .any(closure_function_uses_enum_trait_object)
+}
+
+fn function_uses_enum_trait_object(function: &LoweredFunction) -> bool {
+    function
+        .statements
+        .iter()
+        .any(statement_uses_enum_trait_object)
+        || expr_uses_enum_trait_object(&function.return_value)
+}
+
+fn closure_function_uses_enum_trait_object(function: &LoweredClosureFunction) -> bool {
+    function
+        .statements
+        .iter()
+        .any(statement_uses_enum_trait_object)
+        || expr_uses_enum_trait_object(&function.return_value)
+}
+
+fn statement_uses_enum_trait_object(statement: &LoweredStatement) -> bool {
+    match statement {
+        LoweredStatement::Local { value, .. }
+        | LoweredStatement::LocalCell { value, .. }
+        | LoweredStatement::Println(value)
+        | LoweredStatement::Expr(value) => expr_uses_enum_trait_object(value),
+        LoweredStatement::Assignment { target, value } => {
+            expr_uses_enum_trait_object(target) || expr_uses_enum_trait_object(value)
+        }
+        LoweredStatement::Return(value) => value.as_ref().is_some_and(expr_uses_enum_trait_object),
+        LoweredStatement::If {
+            condition,
+            then_branch,
+            else_branch,
+        } => {
+            expr_uses_enum_trait_object(condition)
+                || then_branch.iter().any(statement_uses_enum_trait_object)
+                || else_branch.as_ref().is_some_and(|statements| {
+                    statements.iter().any(statement_uses_enum_trait_object)
+                })
+        }
+        LoweredStatement::While { condition, body } => {
+            expr_uses_enum_trait_object(condition)
+                || body.iter().any(statement_uses_enum_trait_object)
+        }
+        LoweredStatement::Break | LoweredStatement::Continue => false,
+        LoweredStatement::Match {
+            value, branches, ..
+        } => {
+            expr_uses_enum_trait_object(value)
+                || branches.iter().any(|branch| {
+                    branch
+                        .statements
+                        .iter()
+                        .any(statement_uses_enum_trait_object)
+                })
+        }
+    }
+}
+
+fn expr_uses_enum_trait_object(expr: &LoweredExpr) -> bool {
+    match &expr.kind {
+        LoweredExprKind::TraitObject {
+            self_type: LoweredType::Enum(_),
+            ..
+        } => true,
+        LoweredExprKind::TraitObject { value, .. } => expr_uses_enum_trait_object(value),
+        LoweredExprKind::PostfixIncrement(operand)
+        | LoweredExprKind::Not(operand)
+        | LoweredExprKind::Negate(operand)
+        | LoweredExprKind::EnumPayload {
+            object: operand, ..
+        }
+        | LoweredExprKind::FieldAccess {
+            object: operand, ..
+        }
+        | LoweredExprKind::Clone(operand)
+        | LoweredExprKind::NumberToString(operand) => expr_uses_enum_trait_object(operand),
+        LoweredExprKind::StringConcat(left, right)
+        | LoweredExprKind::Logical { left, right, .. }
+        | LoweredExprKind::Arithmetic { left, right, .. }
+        | LoweredExprKind::Comparison { left, right, .. } => {
+            expr_uses_enum_trait_object(left) || expr_uses_enum_trait_object(right)
+        }
+        LoweredExprKind::StructLiteral { fields, .. } => fields
+            .iter()
+            .any(|field| expr_uses_enum_trait_object(&field.value)),
+        LoweredExprKind::EnumLiteral { payload, .. } => payload
+            .as_ref()
+            .is_some_and(|payload| expr_uses_enum_trait_object(payload)),
+        LoweredExprKind::Match {
+            value, branches, ..
+        } => {
+            expr_uses_enum_trait_object(value)
+                || branches.iter().any(|branch| {
+                    branch
+                        .statements
+                        .iter()
+                        .any(statement_uses_enum_trait_object)
+                        || expr_uses_enum_trait_object(&branch.value)
+                })
+        }
+        LoweredExprKind::Call { args, .. } => args.iter().any(expr_uses_enum_trait_object),
+        LoweredExprKind::IndirectCall { callee, args }
+        | LoweredExprKind::DynamicCall {
+            object: callee,
+            args,
+            ..
+        } => expr_uses_enum_trait_object(callee) || args.iter().any(expr_uses_enum_trait_object),
         LoweredExprKind::Void
         | LoweredExprKind::StringLiteral(_)
         | LoweredExprKind::BoolLiteral(_)
@@ -1677,12 +1811,19 @@ fn push_c_trait_dispatch_helpers(source: &mut String, program: &LoweredProgram) 
                 }
                 push_c_function_name(source, &impl_method.function_name);
                 source.push('(');
-                let LoweredType::Struct(struct_name) = &impl_.self_type else {
-                    unreachable!("only struct trait impls use dynamic dispatch")
-                };
-                source.push('(');
-                push_c_struct_name(source, struct_name);
-                source.push_str("*)gust_self");
+                match &impl_.self_type {
+                    LoweredType::Struct(struct_name) => {
+                        source.push('(');
+                        push_c_struct_name(source, struct_name);
+                        source.push_str("*)gust_self");
+                    }
+                    LoweredType::Enum(enum_name) => {
+                        source.push_str("*((");
+                        push_c_enum_name(source, enum_name);
+                        source.push_str("*)gust_self)");
+                    }
+                    _ => unreachable!("only struct and enum trait impls use dynamic dispatch"),
+                }
                 for index in 0..method.params.len() {
                     source.push_str(", gust_arg");
                     source.push_str(&index.to_string());
@@ -2515,18 +2656,31 @@ fn push_c_value(source: &mut String, value: &LoweredExpr, structs: &[LoweredStru
             trait_name,
             self_type,
             value,
-        } => {
-            let LoweredType::Struct(type_name) = self_type else {
-                unreachable!("only struct values can be emitted as trait objects")
-            };
-            source.push('(');
-            push_c_trait_name(source, trait_name);
-            source.push_str("){ .gust_self = ");
-            push_c_value(source, value, structs);
-            source.push_str(", .gust_vtable = &");
-            push_c_trait_impl_vtable_name(source, trait_name, type_name);
-            source.push_str(" }");
-        }
+        } => match self_type {
+            LoweredType::Struct(type_name) => {
+                source.push('(');
+                push_c_trait_name(source, trait_name);
+                source.push_str("){ .gust_self = ");
+                push_c_value(source, value, structs);
+                source.push_str(", .gust_vtable = &");
+                push_c_trait_impl_vtable_name(source, trait_name, type_name);
+                source.push_str(" }");
+            }
+            LoweredType::Enum(type_name) => {
+                source.push_str("({\n    ");
+                push_c_enum_name(source, type_name);
+                source.push_str("* gust_trait_self = gust_rt_alloc(sizeof(");
+                push_c_enum_name(source, type_name);
+                source.push_str("));\n    *gust_trait_self = ");
+                push_c_value(source, value, structs);
+                source.push_str(";\n    (");
+                push_c_trait_name(source, trait_name);
+                source.push_str("){ .gust_self = gust_trait_self, .gust_vtable = &");
+                push_c_trait_impl_vtable_name(source, trait_name, type_name);
+                source.push_str(" };\n})");
+            }
+            _ => unreachable!("only struct and enum values can be emitted as trait objects"),
+        },
         LoweredExprKind::DynamicCall {
             object,
             method,

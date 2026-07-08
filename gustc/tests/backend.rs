@@ -2591,6 +2591,118 @@ fn main() {
 }
 
 #[test]
+fn enum_trait_typed_values_lower_to_dynamic_dispatch() {
+    let result = check_source(
+        r#"impl Describe for Mood {
+    fn describe(): String {
+        return match self {
+            Mood.Happy => "happy",
+            Mood.Sad => "sad",
+        }
+    }
+}
+
+trait Describe {
+    fn describe(): String
+}
+
+enum Mood {
+    Happy
+    Sad
+}
+
+fn printDescription(value: Describe) {
+    io.println(value.describe())
+}
+
+fn current(): Describe {
+    return Mood.Happy
+}
+
+fn main() {
+    let described: Describe = Mood.Happy
+    io.println(described.describe())
+    printDescription(Mood.Sad)
+    io.println(current().describe())
+}"#,
+    );
+    assert!(
+        !result.has_errors(),
+        "expected enum trait object program to validate, got {:?}",
+        result.diagnostics
+    );
+
+    let lowered = lower_program(&result.program).expect("enum trait object should lower");
+
+    assert!(
+        matches!(
+            lowered.statements[0],
+            LoweredStatement::Local {
+                ref value,
+                ..
+            } if matches!(
+                &value.kind,
+                LoweredExprKind::TraitObject {
+                    self_type: LoweredType::Enum(name),
+                    ..
+                } if name == "Mood"
+            )
+        ),
+        "expected enum trait-typed local to lower as trait object, got {:?}",
+        lowered.statements
+    );
+    assert!(
+        matches!(
+            lowered.statements[1],
+            LoweredStatement::Println(LoweredExpr {
+                kind: LoweredExprKind::DynamicCall { .. },
+                ..
+            })
+        ),
+        "expected enum trait method call to lower as dynamic call, got {:?}",
+        lowered.statements
+    );
+    assert!(
+        matches!(
+            lowered.statements[2],
+            LoweredStatement::Expr(LoweredExpr {
+                kind: LoweredExprKind::Call { ref args, .. },
+                ..
+            }) if matches!(
+                args.first().map(|arg| &arg.kind),
+                Some(LoweredExprKind::TraitObject {
+                    self_type: LoweredType::Enum(name),
+                    ..
+                }) if name == "Mood"
+            )
+        ),
+        "expected enum trait-typed argument to lower as trait object, got {:?}",
+        lowered.statements
+    );
+    assert!(
+        lowered.functions.iter().any(|function| {
+            function.name == "current"
+                && matches!(
+                    &function.return_value.kind,
+                    LoweredExprKind::TraitObject {
+                        self_type: LoweredType::Enum(name),
+                        ..
+                    } if name == "Mood"
+                )
+        }),
+        "expected enum trait-typed return to lower as trait object, got {:?}",
+        lowered.functions
+    );
+
+    let c = emit_c(&lowered);
+    assert!(c.contains("gust_trait_self = gust_rt_alloc(sizeof(gust_enum_"));
+    assert!(c.contains("*(("));
+    assert!(c.contains("*)gust_self)"));
+    assert!(c.contains(".gust_vtable = &gust_vtable_"));
+    assert!(c.contains(".gust_method_describe"));
+}
+
+#[test]
 fn generic_trait_typed_values_lower_to_dynamic_dispatch() {
     let result = check_source(
         r#"impl Named<String> for Person {
