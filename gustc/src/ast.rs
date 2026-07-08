@@ -369,6 +369,7 @@ pub enum Pattern {
         enum_name: String,
         variant: String,
         binding: Option<String>,
+        binding_mutable: bool,
         span: Span,
     },
     String {
