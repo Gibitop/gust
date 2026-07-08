@@ -1,0 +1,27 @@
+impl Describe for Mood {
+    fn describe() {
+        return match self {
+            Mood.Happy => "happy",
+            Mood.Sad => "sad",
+        }
+    }
+}
+
+trait Describe {
+    fn describe(): String
+}
+
+enum Mood {
+    Happy
+    Sad
+}
+
+fn printDescription(value: Describe) {
+    io.println(value.describe())
+}
+
+fn main() {
+    let described: Describe = Mood.Happy
+    io.println(described.describe())
+    printDescription(Mood.Sad)
+}

@@ -721,7 +721,7 @@ fn lower_monomorphized_program(program: &Program) -> Result<LoweredProgram, Vec<
                     }
                 }
 
-                if let LoweredType::Struct(_) = &self_type
+                if matches!(self_type, LoweredType::Struct(_) | LoweredType::Enum(_))
                     && let Some(trait_) = traits.get_mut(&item.trait_ref.name)
                 {
                     trait_.impls.push(LoweredTraitImpl {
@@ -4116,58 +4116,58 @@ fn lower_expr(
                     return None;
                 }
 
-                return Some(LoweredExpr {
+                LoweredExpr {
                     type_: LoweredType::Enum(enum_name.clone()),
                     kind: LoweredExprKind::EnumLiteral {
                         enum_name: enum_name.clone(),
                         variant: name.clone(),
                         payload: None,
                     },
-                });
-            }
+                }
+            } else {
+                let object = lower_expr(
+                    object,
+                    locals,
+                    signatures,
+                    structs,
+                    enums,
+                    traits,
+                    diagnostics,
+                    None,
+                    "expected supported field access object in executable builds",
+                )?;
 
-            let object = lower_expr(
-                object,
-                locals,
-                signatures,
-                structs,
-                enums,
-                traits,
-                diagnostics,
-                None,
-                "expected supported field access object in executable builds",
-            )?;
+                let LoweredType::Struct(struct_name) = &object.type_ else {
+                    diagnostics.push(Diagnostic::error(
+                        expr.span,
+                        "field access requires a struct value in executable builds",
+                    ));
+                    return None;
+                };
 
-            let LoweredType::Struct(struct_name) = &object.type_ else {
-                diagnostics.push(Diagnostic::error(
-                    expr.span,
-                    "field access requires a struct value in executable builds",
-                ));
-                return None;
-            };
+                let Some(struct_) = structs.get(struct_name) else {
+                    diagnostics.push(Diagnostic::error(
+                        expr.span,
+                        format!("unknown struct `{struct_name}` in executable build"),
+                    ));
+                    return None;
+                };
 
-            let Some(struct_) = structs.get(struct_name) else {
-                diagnostics.push(Diagnostic::error(
-                    expr.span,
-                    format!("unknown struct `{struct_name}` in executable build"),
-                ));
-                return None;
-            };
+                let Some(field) = struct_.fields.iter().find(|field| field.name == *name) else {
+                    diagnostics.push(Diagnostic::error(
+                        expr.span,
+                        format!("unknown field `{name}` for struct `{struct_name}`"),
+                    ));
+                    return None;
+                };
 
-            let Some(field) = struct_.fields.iter().find(|field| field.name == *name) else {
-                diagnostics.push(Diagnostic::error(
-                    expr.span,
-                    format!("unknown field `{name}` for struct `{struct_name}`"),
-                ));
-                return None;
-            };
-
-            LoweredExpr {
-                type_: field.type_.clone(),
-                kind: LoweredExprKind::FieldAccess {
-                    object: Box::new(object),
-                    field: name.clone(),
-                },
+                LoweredExpr {
+                    type_: field.type_.clone(),
+                    kind: LoweredExprKind::FieldAccess {
+                        object: Box::new(object),
+                        field: name.clone(),
+                    },
+                }
             }
         }
         ExprKind::Call { callee, args } => {
@@ -4738,11 +4738,11 @@ fn lower_expr(
             && lowered.type_ != expected_type
             && lowered_type_implements_trait(traits, trait_name, &lowered.type_)
         {
-            if !matches!(lowered.type_, LoweredType::Struct(_)) {
+            if !matches!(lowered.type_, LoweredType::Struct(_) | LoweredType::Enum(_)) {
                 diagnostics.push(Diagnostic::error(
                     expr.span,
                     format!(
-                        "only struct values can be coerced to trait `{trait_name}` in executable builds"
+                        "only struct and enum values can be coerced to trait `{trait_name}` in executable builds"
                     ),
                 ));
                 return None;

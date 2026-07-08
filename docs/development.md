@@ -185,17 +185,18 @@ Generic trait declarations and impls may use type parameters and bounds.
 
 ## Trait-typed values and dynamic dispatch
 
-Trait names may be used as value types. A concrete struct value can initialize a trait-typed
-binding, return value, or argument when that struct implements the trait. Method calls on
+Trait names may be used as value types. A concrete struct or enum value can initialize a trait-typed
+binding, return value, or argument when that type implements the trait. Method calls on
 trait-typed values dispatch dynamically through the trait's instance-method vtable.
 
-The executable backend represents a trait-typed value as a fat value containing the concrete
-object pointer plus a pointer to a trait vtable. Each `impl Trait for Struct` emits one vtable and
-small thunks that cast the erased `void* self` pointer back to the concrete struct pointer before
-calling the existing statically lowered trait impl function.
+The executable backend represents a trait-typed value as a fat value containing an erased concrete
+value pointer plus a pointer to a trait vtable. Each `impl Trait for Struct` and
+`impl Trait for Enum` emits one vtable and small thunks that cast the erased `void* self` pointer
+back to the concrete receiver before calling the existing statically lowered trait impl function.
+Struct trait objects store the existing managed struct pointer. Enum trait objects box a copy of
+the enum value with `gust_rt_alloc` so the erased pointer remains stable.
 
-Dynamic dispatch currently supports struct implementors. Static trait methods remain available
-only through concrete types.
+Static trait methods remain available only through concrete types.
 
 ## Static functions
 
