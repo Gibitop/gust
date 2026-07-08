@@ -190,6 +190,12 @@ the same precedence: real static functions, then static extensions, then static 
 
 Generic trait declarations and impls may use type parameters and bounds.
 
+`Into<T>` is a built-in generic trait with `fn into(): T`. Until blanket impls are introduced,
+conversions are implemented directly with `impl Into<Target> for Source`. Calls to `.into()` use
+the expected result type from annotations, function arguments, returns, assignments, and field
+contexts to select the concrete `Into<Target>` impl. The conversion does not imply Rust-style
+move semantics; it is an explicit typed conversion under Gust's managed-value model.
+
 ## Trait-typed values and dynamic dispatch
 
 Trait names may be used as value types. A concrete struct or enum value can initialize a trait-typed

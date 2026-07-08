@@ -353,12 +353,21 @@ fn trait_method_name(type_name: &str, function_name: &str) -> String {
     format!("trait {type_name}.{function_name}")
 }
 
+fn qualified_trait_method_name(trait_name: &str, type_name: &str, function_name: &str) -> String {
+    format!("trait {trait_name} for {type_name}.{function_name}")
+}
+
 fn static_trait_method_name(type_name: &str, function_name: &str) -> String {
     format!("static trait {type_name}.{function_name}")
 }
 
 fn source_callable_name(name: &str) -> &str {
     name.rsplit_once("::").map_or(name, |(_, name)| name)
+}
+
+fn requested_trait_name(name: &str) -> Option<&str> {
+    name.rsplit_once("::")
+        .and_then(|(trait_name, _)| trait_name.starts_with("Into<").then_some(trait_name))
 }
 
 fn static_method_name(type_name: &str, function_name: &str) -> String {
@@ -387,6 +396,12 @@ fn callable_method_name(
     let extension = extension_name(&type_.name(), name);
     if signatures.contains_key(&extension) {
         return Some(extension);
+    }
+
+    if let Some(trait_name) = requested_trait_name(name) {
+        let name =
+            qualified_trait_method_name(trait_name, &type_.name(), source_callable_name(name));
+        return signatures.contains_key(&name).then_some(name);
     }
 
     let name = trait_method_name(&type_.name(), source_callable_name(name));
@@ -682,6 +697,8 @@ fn lower_monomorphized_program(program: &Program) -> Result<LoweredProgram, Vec<
                     };
                     let lowered_name = if member.static_ {
                         static_trait_method_name(&self_type.name(), name)
+                    } else if item.trait_ref.name.starts_with("Into<") && name == "into" {
+                        qualified_trait_method_name(&item.trait_ref.name, &self_type.name(), name)
                     } else {
                         trait_method_name(&self_type.name(), name)
                     };
@@ -707,7 +724,7 @@ fn lower_monomorphized_program(program: &Program) -> Result<LoweredProgram, Vec<
                     }
                     signatures.insert(lowered_name.clone(), signature);
                     functions_to_lower.push((
-                        lowered_name,
+                        lowered_name.clone(),
                         function,
                         Some(self_type.clone()),
                         !member.static_,
@@ -716,7 +733,7 @@ fn lower_monomorphized_program(program: &Program) -> Result<LoweredProgram, Vec<
                     if !member.static_ {
                         trait_impl_methods.push(LoweredTraitImplMethod {
                             name: name.clone(),
-                            function_name: trait_method_name(&self_type.name(), name),
+                            function_name: lowered_name.clone(),
                         });
                     }
                 }

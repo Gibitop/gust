@@ -1,0 +1,29 @@
+impl Into<UserId> for String {
+    fn into() => UserId { value: self }
+}
+
+impl Into<Label> for String {
+    fn into() => Label { value: self }
+}
+
+struct UserId {
+    value: String
+}
+
+struct Label {
+    value: String
+}
+
+fn printUserId(value: UserId) {
+    io.println(value.value)
+}
+
+fn main() {
+    let raw = "gust"
+    let id: UserId = raw.into()
+    let label: Label = "gust".into()
+
+    printUserId(raw.into())
+    io.println(id.value)
+    io.println(label.value)
+}

@@ -27,12 +27,21 @@ fn trait_method_name(type_name: &str, function_name: &str) -> String {
     format!("trait {type_name}.{function_name}")
 }
 
+fn qualified_trait_method_name(trait_name: &str, type_name: &str, function_name: &str) -> String {
+    format!("trait {trait_name} for {type_name}.{function_name}")
+}
+
 fn static_trait_method_name(type_name: &str, function_name: &str) -> String {
     format!("static trait {type_name}.{function_name}")
 }
 
 fn source_callable_name(name: &str) -> &str {
     name.rsplit_once("::").map_or(name, |(_, name)| name)
+}
+
+fn requested_trait_name(name: &str) -> Option<&str> {
+    name.rsplit_once("::")
+        .and_then(|(trait_name, _)| trait_name.starts_with("Into<").then_some(trait_name))
 }
 
 struct Analyzer {
@@ -46,6 +55,7 @@ struct Analyzer {
     extensions: HashMap<String, FunctionSignature>,
     static_extensions: HashMap<String, FunctionSignature>,
     trait_methods: HashMap<String, FunctionSignature>,
+    qualified_trait_methods: HashMap<String, FunctionSignature>,
     static_trait_methods: HashMap<String, FunctionSignature>,
     trait_impls: HashSet<(String, String)>,
     imported_namespaces: HashSet<String>,
@@ -185,6 +195,7 @@ impl Analyzer {
             extensions: HashMap::new(),
             static_extensions: HashMap::new(),
             trait_methods: HashMap::new(),
+            qualified_trait_methods: HashMap::new(),
             static_trait_methods: HashMap::new(),
             trait_impls: HashSet::new(),
             imported_namespaces: HashSet::new(),
@@ -737,7 +748,25 @@ impl Analyzer {
             } else {
                 &mut self.trait_methods
             };
-            if trait_methods.insert(trait_method_name, signature).is_some() {
+            if !member.static_ {
+                let qualified_name =
+                    qualified_trait_method_name(&trait_name, &self_type_name, name);
+                if self
+                    .qualified_trait_methods
+                    .insert(qualified_name, signature.clone())
+                    .is_some()
+                {
+                    self.diagnostics.push(Diagnostic::error(
+                        method.span,
+                        format!(
+                            "duplicate trait method `{name}` for type `{self_type_name}` in trait `{trait_name}`"
+                        ),
+                    ));
+                }
+            }
+            let skip_unqualified =
+                !member.static_ && trait_name.starts_with("Into<") && name == "into";
+            if !skip_unqualified && trait_methods.insert(trait_method_name, signature).is_some() {
                 self.diagnostics.push(Diagnostic::error(
                     method.span,
                     format!(
@@ -2261,8 +2290,10 @@ impl Analyzer {
         }
 
         let source_name = source_callable_name(name);
+        let requested_trait = requested_trait_name(name);
         if matches!(&object_type, Type::Basic(type_) if type_.is_numeric())
             && source_name == "toString"
+            && requested_trait.is_none()
         {
             if !args.is_empty() {
                 self.diagnostics.push(Diagnostic::error(
@@ -2281,39 +2312,53 @@ impl Analyzer {
             return Type::Basic(BasicType::String);
         }
 
-        let intrinsic = match &object_type {
-            Type::Struct(struct_name) => self
-                .structs
-                .get(struct_name)
-                .and_then(|struct_| struct_.methods.get(source_name))
-                .cloned(),
-            Type::Enum(enum_name) => self
-                .enums
-                .get(enum_name)
-                .and_then(|enum_| enum_.methods.get(source_name))
-                .cloned(),
-            Type::Trait(trait_name) => self
-                .traits
-                .get(trait_name)
-                .and_then(|trait_| trait_.methods.get(source_name))
-                .cloned(),
-            _ => None,
+        let intrinsic = if requested_trait.is_none() {
+            match &object_type {
+                Type::Struct(struct_name) => self
+                    .structs
+                    .get(struct_name)
+                    .and_then(|struct_| struct_.methods.get(source_name))
+                    .cloned(),
+                Type::Enum(enum_name) => self
+                    .enums
+                    .get(enum_name)
+                    .and_then(|enum_| enum_.methods.get(source_name))
+                    .cloned(),
+                Type::Trait(trait_name) => self
+                    .traits
+                    .get(trait_name)
+                    .and_then(|trait_| trait_.methods.get(source_name))
+                    .cloned(),
+                _ => None,
+            }
+        } else {
+            None
         };
-        let signature = intrinsic
-            .or_else(|| {
-                self.extensions
-                    .get(&extension_name(&object_type.name(), name))
-                    .cloned()
-            })
-            .or_else(|| {
-                if matches!(object_type, Type::Trait(_)) {
-                    None
-                } else {
-                    self.trait_methods
-                        .get(&trait_method_name(&object_type.name(), source_name))
+        let signature = if let Some(trait_name) = requested_trait {
+            self.qualified_trait_methods
+                .get(&qualified_trait_method_name(
+                    trait_name,
+                    &object_type.name(),
+                    source_name,
+                ))
+                .cloned()
+        } else {
+            intrinsic
+                .or_else(|| {
+                    self.extensions
+                        .get(&extension_name(&object_type.name(), name))
                         .cloned()
-                }
-            });
+                })
+                .or_else(|| {
+                    if matches!(object_type, Type::Trait(_)) {
+                        None
+                    } else {
+                        self.trait_methods
+                            .get(&trait_method_name(&object_type.name(), source_name))
+                            .cloned()
+                    }
+                })
+        };
         let Some(signature) = signature else {
             if matches!(object_type, Type::Basic(_)) {
                 self.unsupported(expr.span, "methods on basic values are not implemented yet");
