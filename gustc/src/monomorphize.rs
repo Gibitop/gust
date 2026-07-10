@@ -36,6 +36,7 @@ struct Monomorphizer {
     generic_function_returns: HashMap<String, TypeRef>,
     generic_method_returns: HashMap<(String, String, bool), TypeRef>,
     expected_expr_types: HashMap<crate::span::Span, TypeRef>,
+    inferred_expr_types: HashMap<crate::span::Span, TypeRef>,
     impl_receiver_types: Vec<TypeRef>,
     bound_checks: Vec<BoundCheck>,
     diagnostics: Vec<Diagnostic>,
@@ -52,6 +53,7 @@ struct GenericTraitMethodResolution {
     trait_name: String,
     trait_args: Vec<TypeRef>,
     params: Vec<TypeRef>,
+    return_type: TypeRef,
     impl_type_params: Vec<String>,
     impl_type_param_bounds: Vec<TypeParamBound>,
     impl_type_args: Vec<TypeRef>,
@@ -275,6 +277,7 @@ impl Monomorphizer {
             generic_function_returns,
             generic_method_returns: HashMap::new(),
             expected_expr_types: HashMap::new(),
+            inferred_expr_types: HashMap::new(),
             impl_receiver_types: Vec::new(),
             bound_checks: Vec::new(),
             diagnostics: Vec::new(),
@@ -1563,6 +1566,7 @@ impl Monomorphizer {
                     for type_arg in &mut resolution.impl_type_args {
                         self.rewrite_type(type_arg, substitutions);
                     }
+                    self.rewrite_type(&mut resolution.return_type, substitutions);
                     self.record_type_param_bound_checks(
                         format!(
                             "impl `{} for {}`",
@@ -1595,6 +1599,8 @@ impl Monomorphizer {
                             specialized_name(&resolution.trait_name, &resolution.trait_args)
                         ),
                     };
+                    self.inferred_expr_types
+                        .insert(expr.span, resolution.return_type);
                     return;
                 }
                 Ok(None) => {}
@@ -2295,6 +2301,9 @@ impl Monomorphizer {
             else {
                 continue;
             };
+            let Some(method_return_type) = &method.return_type else {
+                continue;
+            };
             let method_params = method
                 .params
                 .iter()
@@ -2368,6 +2377,10 @@ impl Monomorphizer {
                         )
                     })
                     .collect(),
+                return_type: substitute_type(
+                    &substitute_type(method_return_type, &trait_substitutions),
+                    &impl_substitutions,
+                ),
                 impl_type_params: impl_.type_params.clone(),
                 impl_type_param_bounds: impl_.type_param_bounds.clone(),
                 impl_type_args: type_args,
@@ -2853,6 +2866,9 @@ impl Monomorphizer {
     }
 
     fn infer_expr_type(&self, expr: &Expr) -> Option<TypeRef> {
+        if let Some(type_ref) = self.inferred_expr_types.get(&expr.span) {
+            return Some(type_ref.clone());
+        }
         let inferred = |name: &str| TypeRef {
             name: name.to_string(),
             args: Vec::new(),
@@ -3060,7 +3076,8 @@ impl Monomorphizer {
                     }
                 }
                 let object_type = self.infer_expr_type(object)?;
-                self.generic_member_type(&object_type, name, false)
+                self.generic_trait_member_type(&object_type, name)
+                    .or_else(|| self.generic_member_type(&object_type, name, false))
             }
             ExprKind::Unary { operand, .. } | ExprKind::PostfixIncrement(operand) => {
                 self.infer_expr_type(operand)
@@ -3134,6 +3151,26 @@ impl Monomorphizer {
             return Some(receiver);
         }
         Some(substitute_type(&return_type, &substitutions))
+    }
+
+    fn generic_trait_member_type(&self, receiver: &TypeRef, member_name: &str) -> Option<TypeRef> {
+        let receiver = self.expanded_type(receiver);
+        let trait_ = self.trait_templates.get(&receiver.name)?;
+        let return_type = trait_
+            .methods
+            .iter()
+            .find(|method| method.name == member_name && !method.static_)?
+            .return_type
+            .as_ref()?;
+        let mut substitutions = trait_
+            .type_params
+            .iter()
+            .cloned()
+            .zip(receiver.args.iter().cloned())
+            .collect::<HashMap<_, _>>();
+        substitutions.insert("Self".to_string(), receiver);
+
+        Some(substitute_type(return_type, &substitutions))
     }
 
     fn infer_type_expression_ref(&self, expr: &Expr) -> Option<TypeRef> {

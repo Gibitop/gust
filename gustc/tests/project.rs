@@ -102,6 +102,48 @@ fn directory_entry_uses_main_gust() {
 }
 
 #[test]
+fn root_standard_library_modules_link_through_relative_imports() {
+    let project = TempProject::new();
+    project.write("std/option.gust", include_str!("../../std/option.gust"));
+    project.write("std/iter.gust", include_str!("../../std/iter.gust"));
+    project.write(
+        "examples/main.gust",
+        r#"from ../std/iter import { Iterator }
+from ../std/option import { Option }
+
+struct Counter {
+    value: i32
+}
+
+impl Iterator<i32> for Counter {
+    fn next(mut self): Option<i32> {
+        let value = self.value
+        self.value++
+        return Option.Some(value)
+    }
+}
+
+fn main() {
+    let mut iterator: Iterator<i32> = Counter { value: 1 }
+    let message = match iterator.next() {
+        Option.Some(value) => value.toString(),
+        Option.None => "empty",
+    }
+    io.println(message)
+}"#,
+    );
+
+    let result = check_project(&project.path("examples/main.gust")).expect("project should load");
+    assert!(
+        result.diagnostics.is_empty(),
+        "expected root standard library modules to validate, got {:?}",
+        result.diagnostics
+    );
+
+    lower_program(&result.program).expect("root standard library modules should lower");
+}
+
+#[test]
 fn enum_methods_survive_project_linking() {
     let project = TempProject::new();
     project.write(

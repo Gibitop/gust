@@ -1,0 +1,30 @@
+from ../std/iter import { Iterator }
+from ../std/option import { Option }
+
+struct Counter {
+    value: i32
+    end: i32
+}
+
+impl Iterator<i32> for Counter {
+    fn next(mut self): Option<i32> {
+        if self.value < self.end {
+            let value = self.value
+            self.value++
+            return Option.Some(value)
+        }
+
+        return Option<i32>.None
+    }
+}
+
+fn main() {
+    let mut counter = Counter { value: 1, end: 10 }
+
+    while true {
+        match counter.next() {
+            Option.Some(value) => io.println(value.toString())
+            Option.None => break
+        }
+    }
+}

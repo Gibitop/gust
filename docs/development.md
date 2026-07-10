@@ -27,6 +27,13 @@ that module's scope. Extension functions follow the same rule and retain real-me
 
 Package module resolution is not implemented yet. Import cycles are rejected.
 
+## Standard library development
+
+The source-level standard library lives in the repository-root `std` directory. Until package
+module resolution is introduced, Gust code in this repository imports standard-library modules
+through ordinary relative paths, such as `from ../std/iter import { Iterator }`. Import paths use
+`/` as their separator. Standard-library modules may import one another using relative paths.
+
 ## Syntax
 
 Syntax is very similar to Rust. Notable differences:
