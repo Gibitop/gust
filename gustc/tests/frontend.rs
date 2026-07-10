@@ -295,6 +295,24 @@ fn main() {
 }
 
 #[test]
+fn for_loops_require_iterator_or_iterable_values() {
+    let result = check_source(
+        r#"fn main() {
+    for value in 1 {
+        io.println(value.toString())
+    }
+}"#,
+    );
+
+    assert!(result.diagnostics.iter().any(|diagnostic| {
+        diagnostic.severity == Severity::Error
+            && diagnostic
+                .message
+                .contains("`for` requires an `Iterator<T>` or `Iterable<T>`")
+    }));
+}
+
+#[test]
 fn while_condition_must_be_bool() {
     let result = check_source(
         r#"

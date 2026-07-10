@@ -87,8 +87,17 @@ Struct and enum equality will be introduced with trait-based equality rather tha
 `while` conditions must be boolean. A `while` body has block scope, so bindings declared inside
 the body do not escape. `break` and `continue` are statements and may only be used inside loop
 bodies. Executable builds lower `while`, `break`, and `continue` directly to C control flow.
-Iterable `for` loops remain separate and will be implemented once collection and iterator
-semantics are available.
+
+## Iterable for loops
+
+`for value in iterable` accepts a value that implements either `Iterator<T>` or `Iterable<T>`.
+An iterator is used directly; an iterable first produces one through `iterator()`. The compiler
+evaluates the iterable expression once, keeps the resulting iterator in a hidden mutable binding,
+and repeatedly matches `next()` against `Option.Some(value)` and `Option.None`. Loop bindings are
+immutable and scoped to the loop body. Iterating an `Iterator<T>` directly requires a
+mutable-capable expression because `next()` advances it; an `Iterable<T>` may be iterated through
+an immutable binding because it produces the iterator. `break` and `continue` apply to the
+generated loop.
 
 ## Numeric literals
 

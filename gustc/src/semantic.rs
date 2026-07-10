@@ -47,6 +47,13 @@ fn source_callable_name(name: &str) -> &str {
     name.rsplit_once("::").map_or(name, |(_, name)| name)
 }
 
+fn generic_trait_item_type_name<'a>(trait_name: &'a str, protocol: &str) -> Option<&'a str> {
+    let (trait_head, item_type) = trait_name.split_once('<')?;
+    (source_callable_name(trait_head) == protocol)
+        .then(|| item_type.strip_suffix('>'))
+        .flatten()
+}
+
 fn requested_trait_name(name: &str) -> Option<&str> {
     name.rsplit_once("::").map(|(trait_name, _)| trait_name)
 }
@@ -1344,14 +1351,28 @@ impl Analyzer {
                 iterable,
                 body,
             } => {
-                self.unsupported(
-                    statement.span,
-                    "for loops are parsed but iteration lowering is not implemented yet",
-                );
-                self.validate_expr(iterable);
+                let iterable_type = self.validate_expr(iterable);
+                let item_type = self.for_item_type(&iterable_type);
+                if item_type.is_none() && !matches!(iterable_type, Type::Unknown) {
+                    self.diagnostics.push(Diagnostic::error(
+                        iterable.span,
+                        format!(
+                            "`for` requires an `Iterator<T>` or `Iterable<T>`, got `{}`",
+                            iterable_type.name()
+                        ),
+                    ));
+                }
+                if self.for_uses_iterator_directly(&iterable_type)
+                    && !self.expr_has_mutable_capability(iterable)
+                {
+                    self.diagnostics.push(Diagnostic::error(
+                        iterable.span,
+                        "cannot advance an iterator through an immutable binding; declare it with `let mut` or iterate an `Iterable<T>` instead",
+                    ));
+                }
                 self.loop_depth += 1;
                 self.push_scope();
-                self.define(name, false, Type::Unknown);
+                self.define(name, false, item_type.unwrap_or(Type::Unknown));
 
                 for statement in &body.statements {
                     self.validate_statement(statement);
@@ -2985,6 +3006,57 @@ impl Analyzer {
                     && self.types_are_compatible(return_type, value_return_type)
             }
             _ => expected_type == value_type,
+        }
+    }
+
+    fn for_item_type(&self, iterable_type: &Type) -> Option<Type> {
+        let trait_names = self.for_trait_names(iterable_type);
+
+        trait_names
+            .iter()
+            .find_map(|trait_name| generic_trait_item_type_name(trait_name, "Iterator"))
+            .or_else(|| {
+                trait_names
+                    .iter()
+                    .find_map(|trait_name| generic_trait_item_type_name(trait_name, "Iterable"))
+            })
+            .map(|item_type_name| self.type_from_name(item_type_name))
+    }
+
+    fn for_uses_iterator_directly(&self, iterable_type: &Type) -> bool {
+        self.for_trait_names(iterable_type)
+            .iter()
+            .any(|trait_name| generic_trait_item_type_name(trait_name, "Iterator").is_some())
+    }
+
+    fn for_trait_names(&self, iterable_type: &Type) -> Vec<String> {
+        let iterable_name = iterable_type.name();
+        match iterable_type {
+            Type::Trait(trait_name) => vec![trait_name.clone()],
+            Type::Basic(_) | Type::Struct(_) | Type::Enum(_) => self
+                .trait_impls
+                .iter()
+                .filter_map(|(trait_name, self_type)| {
+                    (self_type == &iterable_name).then(|| trait_name.clone())
+                })
+                .collect(),
+            Type::Function { .. } | Type::Void | Type::Named(_) | Type::Unknown => Vec::new(),
+        }
+    }
+
+    fn type_from_name(&self, name: &str) -> Type {
+        if let Some(type_) = BasicType::from_name(name) {
+            Type::Basic(type_)
+        } else if self.structs.contains_key(name) {
+            Type::Struct(name.to_string())
+        } else if self.enums.contains_key(name) {
+            Type::Enum(name.to_string())
+        } else if self.traits.contains_key(name) {
+            Type::Trait(name.to_string())
+        } else if name == "void" {
+            Type::Void
+        } else {
+            Type::Unknown
         }
     }
 
