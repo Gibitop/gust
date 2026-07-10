@@ -190,11 +190,13 @@ the same precedence: real static functions, then static extensions, then static 
 
 Generic trait declarations and impls may use type parameters and bounds.
 
-`Into<T>` is a built-in generic trait with `fn into(): T`. Until blanket impls are introduced,
-conversions are implemented directly with `impl Into<Target> for Source`. Calls to `.into()` use
-the expected result type from annotations, function arguments, returns, assignments, and field
-contexts to select the concrete `Into<Target>` impl. The conversion does not imply Rust-style
-move semantics; it is an explicit typed conversion under Gust's managed-value model.
+Generic trait methods use ordinary type inference to select a concrete trait specialization from
+the receiver, arguments, and expected return type. This supports conversion methods without
+compiler knowledge of trait or method names.
+
+`From<T>`, `Into<T>`, and the bounded blanket impl `impl<T, U: From<T>> Into<U> for T` belong in the
+Gust standard library and are not compiler built-ins. The conversion does not imply Rust-style move
+semantics; it is an explicit typed conversion under Gust's managed-value model.
 
 ## Trait-typed values and dynamic dispatch
 
@@ -281,9 +283,16 @@ Generic impl templates such as `impl<T> Named<T> for Box<T>` are monomorphized w
 type and trait can be resolved to concrete types. The generated concrete impl is validated like an
 ordinary impl and participates in static trait-method dispatch and dynamic trait-object dispatch.
 
+Trait impls follow Rust-style overlap rules. Two impl declarations are rejected when their trait
+and receiver types can be unified, including blanket impls that overlap only for a future concrete
+specialization. Bounds do not make otherwise-overlapping impls disjoint because a type may satisfy
+multiple bounds. Gust does not support specialization, so a concrete impl may not overlap a more
+general blanket impl.
+
 Bounds are written inside type parameter lists, such as `fn getName<T: Named>(value: T): String`,
 `struct Box<T: Clone>`, or `impl<T: Named<String>> Display for Box<T>`. Multiple bounds use `+`.
 Concrete specializations must satisfy their bounds through an available concrete or generated impl.
+Bounds remain inline; Gust does not have `where` clause syntax.
 
 ## First-class functions
 

@@ -357,6 +357,14 @@ fn qualified_trait_method_name(trait_name: &str, type_name: &str, function_name:
     format!("trait {trait_name} for {type_name}.{function_name}")
 }
 
+fn qualified_static_trait_method_name(
+    trait_name: &str,
+    type_name: &str,
+    function_name: &str,
+) -> String {
+    format!("static trait {trait_name} for {type_name}.{function_name}")
+}
+
 fn static_trait_method_name(type_name: &str, function_name: &str) -> String {
     format!("static trait {type_name}.{function_name}")
 }
@@ -366,8 +374,7 @@ fn source_callable_name(name: &str) -> &str {
 }
 
 fn requested_trait_name(name: &str) -> Option<&str> {
-    name.rsplit_once("::")
-        .and_then(|(trait_name, _)| trait_name.starts_with("Into<").then_some(trait_name))
+    name.rsplit_once("::").map(|(trait_name, _)| trait_name)
 }
 
 fn static_method_name(type_name: &str, function_name: &str) -> String {
@@ -399,9 +406,11 @@ fn callable_method_name(
     }
 
     if let Some(trait_name) = requested_trait_name(name) {
-        let name =
+        let qualified_name =
             qualified_trait_method_name(trait_name, &type_.name(), source_callable_name(name));
-        return signatures.contains_key(&name).then_some(name);
+        if signatures.contains_key(&qualified_name) {
+            return Some(qualified_name);
+        }
     }
 
     let name = trait_method_name(&type_.name(), source_callable_name(name));
@@ -421,6 +430,17 @@ fn callable_static_name(
     let extension = static_extension_name(&type_.name(), name);
     if signatures.contains_key(&extension) {
         return Some(extension);
+    }
+
+    if let Some(trait_name) = requested_trait_name(name) {
+        let qualified_name = qualified_static_trait_method_name(
+            trait_name,
+            &type_.name(),
+            source_callable_name(name),
+        );
+        if signatures.contains_key(&qualified_name) {
+            return Some(qualified_name);
+        }
     }
 
     let name = static_trait_method_name(&type_.name(), source_callable_name(name));
@@ -695,10 +715,22 @@ fn lower_monomorphized_program(program: &Program) -> Result<LoweredProgram, Vec<
                     let Some(name) = &function.name else {
                         continue;
                     };
-                    let lowered_name = if member.static_ {
+                    let lowered_name = if item.trait_ref.name.contains('<') {
+                        if member.static_ {
+                            qualified_static_trait_method_name(
+                                &item.trait_ref.name,
+                                &self_type.name(),
+                                name,
+                            )
+                        } else {
+                            qualified_trait_method_name(
+                                &item.trait_ref.name,
+                                &self_type.name(),
+                                name,
+                            )
+                        }
+                    } else if member.static_ {
                         static_trait_method_name(&self_type.name(), name)
-                    } else if item.trait_ref.name.starts_with("Into<") && name == "into" {
-                        qualified_trait_method_name(&item.trait_ref.name, &self_type.name(), name)
                     } else {
                         trait_method_name(&self_type.name(), name)
                     };

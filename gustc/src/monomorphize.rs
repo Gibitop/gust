@@ -8,50 +8,16 @@ use crate::ast::{
 use crate::diagnostic::Diagnostic;
 
 pub fn monomorphize(program: &Program) -> Result<Program, Vec<Diagnostic>> {
-    let program = program_with_builtins(program);
-    Monomorphizer::new(&program).run(&program)
-}
-
-fn program_with_builtins(program: &Program) -> Program {
-    let mut items = Vec::new();
-    if !program
-        .items
-        .iter()
-        .any(|item| matches!(item, Item::Trait(trait_) if trait_.name == "Into"))
-    {
-        items.push(builtin_into_trait());
-    }
-    items.extend(program.items.clone());
-    Program { items }
-}
-
-fn builtin_into_trait() -> Item {
-    let span = crate::span::Span::new(0, 0);
-    Item::Trait(TraitDecl {
-        name: "Into".to_string(),
-        type_params: vec!["T".to_string()],
-        type_param_bounds: Vec::new(),
-        methods: vec![crate::ast::TraitMethodDecl {
-            name: "into".to_string(),
-            static_: false,
-            params: Vec::new(),
-            return_type: Some(TypeRef {
-                name: "T".to_string(),
-                args: Vec::new(),
-                function: None,
-                span,
-            }),
-            span,
-        }],
-        span,
-    })
+    Monomorphizer::new(program).run(program)
 }
 
 struct Monomorphizer {
     struct_templates: HashMap<String, StructDecl>,
     enum_templates: HashMap<String, EnumDecl>,
     trait_templates: HashMap<String, TraitDecl>,
+    impl_declarations: Vec<ImplDecl>,
     impl_templates: Vec<ImplDecl>,
+    extensions: Vec<crate::ast::ExtensionDecl>,
     function_templates: HashMap<String, FunctionDecl>,
     concrete_structs: HashSet<String>,
     concrete_struct_defs: HashMap<String, StructDecl>,
@@ -70,6 +36,7 @@ struct Monomorphizer {
     generic_function_returns: HashMap<String, TypeRef>,
     generic_method_returns: HashMap<(String, String, bool), TypeRef>,
     expected_expr_types: HashMap<crate::span::Span, TypeRef>,
+    impl_receiver_types: Vec<TypeRef>,
     bound_checks: Vec<BoundCheck>,
     diagnostics: Vec<Diagnostic>,
 }
@@ -79,6 +46,15 @@ struct BoundCheck {
     type_ref: TypeRef,
     trait_ref: TypeRef,
     span: crate::span::Span,
+}
+
+struct GenericTraitMethodResolution {
+    trait_name: String,
+    trait_args: Vec<TypeRef>,
+    params: Vec<TypeRef>,
+    impl_type_params: Vec<String>,
+    impl_type_param_bounds: Vec<TypeParamBound>,
+    impl_type_args: Vec<TypeRef>,
 }
 
 enum PendingSpecialization {
@@ -162,6 +138,26 @@ impl Monomorphizer {
                     return None;
                 };
                 (!item.type_params.is_empty()).then(|| item.clone())
+            })
+            .collect();
+        let impl_declarations = program
+            .items
+            .iter()
+            .filter_map(|item| {
+                let Item::Impl(item) = item else {
+                    return None;
+                };
+                Some(item.clone())
+            })
+            .collect();
+        let extensions = program
+            .items
+            .iter()
+            .filter_map(|item| {
+                let Item::Extension(item) = item else {
+                    return None;
+                };
+                Some(item.clone())
             })
             .collect();
         let concrete_structs = program
@@ -258,7 +254,9 @@ impl Monomorphizer {
             struct_templates,
             enum_templates,
             trait_templates,
+            impl_declarations,
             impl_templates,
+            extensions,
             function_templates,
             concrete_structs,
             concrete_struct_defs,
@@ -277,6 +275,7 @@ impl Monomorphizer {
             generic_function_returns,
             generic_method_returns: HashMap::new(),
             expected_expr_types: HashMap::new(),
+            impl_receiver_types: Vec::new(),
             bound_checks: Vec::new(),
             diagnostics: Vec::new(),
         }
@@ -286,6 +285,7 @@ impl Monomorphizer {
         self.infer_generic_function_returns();
         self.infer_generic_method_returns();
         self.validate_templates();
+        self.validate_impl_coherence(program);
 
         let mut items = Vec::new();
         for item in &program.items {
@@ -509,7 +509,8 @@ impl Monomorphizer {
     }
 
     fn instantiate_generic_impl_templates(&mut self, items: &mut Vec<Item>) -> bool {
-        let concrete_types = concrete_type_refs(items);
+        let mut concrete_types = concrete_type_refs(items);
+        concrete_types.extend(self.impl_receiver_types.clone());
         let concrete_traits = concrete_trait_refs(items);
         let mut changed = false;
 
@@ -812,6 +813,34 @@ impl Monomorphizer {
                     self.diagnostics.push(Diagnostic::error(
                         template.span,
                         format!("unused type parameter `{name}` in impl `{impl_name}`"),
+                    ));
+                }
+            }
+        }
+    }
+
+    fn validate_impl_coherence(&mut self, program: &Program) {
+        let impls = program
+            .items
+            .iter()
+            .filter_map(|item| {
+                let Item::Impl(item) = item else {
+                    return None;
+                };
+                Some(item)
+            })
+            .collect::<Vec<_>>();
+
+        for (index, impl_) in impls.iter().enumerate() {
+            for previous in &impls[..index] {
+                if impl_headers_overlap(previous, impl_) {
+                    self.diagnostics.push(Diagnostic::error(
+                        impl_.span,
+                        format!(
+                            "conflicting implementations of trait `{}` for type `{}`",
+                            type_name(&impl_.trait_ref),
+                            type_name(&impl_.type_ref)
+                        ),
                     ));
                 }
             }
@@ -1263,35 +1292,6 @@ impl Monomorphizer {
     }
 
     fn rewrite_expr(&mut self, expr: &mut Expr, substitutions: &HashMap<String, TypeRef>) {
-        let into_call = match &expr.kind {
-            ExprKind::Call { callee, args } if args.is_empty() => match &callee.kind {
-                ExprKind::Member { object, name } if name == "into" => self
-                    .expected_expr_types
-                    .get(&expr.span)
-                    .cloned()
-                    .map(|expected| (object.clone(), expected)),
-                _ => None,
-            },
-            _ => None,
-        };
-        if let Some((object, mut expected)) = into_call {
-            let ExprKind::Call { callee, .. } = &mut expr.kind else {
-                unreachable!("into call was matched above")
-            };
-            self.expected_expr_types.remove(&expr.span);
-            self.rewrite_type(&mut expected, substitutions);
-            if self.trait_templates.contains_key("Into") {
-                self.specialize_trait("Into", &[expected.clone()], expr.span);
-            }
-            let mut object = (*object).clone();
-            self.rewrite_expr(&mut object, substitutions);
-            callee.kind = ExprKind::Member {
-                object: Box::new(object),
-                name: format!("{}::into", specialized_name("Into", &[expected])),
-            };
-            return;
-        }
-
         let generic_function_call = match &expr.kind {
             ExprKind::Call { callee, .. } => match &callee.kind {
                 ExprKind::Identifier(name) if self.function_templates.contains_key(name) => {
@@ -1514,6 +1514,96 @@ impl Monomorphizer {
                 }
             }
             return;
+        }
+
+        let generic_trait_call = match &expr.kind {
+            ExprKind::Call { callee, args } => {
+                let ExprKind::Member { object, name } = &callee.kind else {
+                    return self.rewrite_expr_children(expr, substitutions);
+                };
+                let mut object = (**object).clone();
+                if let ExprKind::Identifier(type_param) = &object.kind
+                    && let Some(substitution) = substitutions.get(type_param)
+                {
+                    let mut type_ref = substitution.clone();
+                    self.rewrite_type(&mut type_ref, substitutions);
+                    object.kind = ExprKind::Identifier(type_ref.name);
+                } else {
+                    self.rewrite_expr(&mut object, substitutions);
+                }
+                self.infer_type_expression_ref(&object)
+                    .map(|receiver| (object.clone(), receiver, name.clone(), true, args))
+                    .or_else(|| {
+                        self.infer_expr_type(&object)
+                            .map(|receiver| (object.clone(), receiver, name.clone(), false, args))
+                    })
+            }
+            _ => None,
+        };
+        if let Some((object, receiver, method_name, static_, source_args)) = generic_trait_call
+            && !self.has_real_or_extension_method(&receiver, &method_name, static_)
+        {
+            let mut expected_return = self.expected_expr_types.get(&expr.span).cloned();
+            if let Some(expected_return) = &mut expected_return {
+                self.rewrite_type(expected_return, substitutions);
+            }
+            match self.resolve_generic_trait_method(
+                &receiver,
+                &method_name,
+                static_,
+                source_args,
+                expected_return.as_ref(),
+            ) {
+                Ok(Some(mut resolution)) => {
+                    self.expected_expr_types.remove(&expr.span);
+                    self.impl_receiver_types.push(receiver.clone());
+                    for type_arg in &mut resolution.trait_args {
+                        self.rewrite_type(type_arg, substitutions);
+                    }
+                    for type_arg in &mut resolution.impl_type_args {
+                        self.rewrite_type(type_arg, substitutions);
+                    }
+                    self.record_type_param_bound_checks(
+                        format!(
+                            "impl `{} for {}`",
+                            specialized_name(&resolution.trait_name, &resolution.trait_args),
+                            type_name(&receiver)
+                        ),
+                        &resolution.impl_type_params,
+                        &resolution.impl_type_param_bounds,
+                        &resolution.impl_type_args,
+                        expr.span,
+                    );
+                    self.specialize_trait(
+                        &resolution.trait_name,
+                        &resolution.trait_args,
+                        expr.span,
+                    );
+
+                    let ExprKind::Call { callee, args } = &mut expr.kind else {
+                        unreachable!("generic trait method call was matched above")
+                    };
+                    for (param, arg) in resolution.params.iter_mut().zip(args.iter_mut()) {
+                        self.rewrite_type(param, substitutions);
+                        self.apply_expr_context(arg, param);
+                        self.rewrite_expr(arg, substitutions);
+                    }
+                    callee.kind = ExprKind::Member {
+                        object: Box::new(object),
+                        name: format!(
+                            "{}::{method_name}",
+                            specialized_name(&resolution.trait_name, &resolution.trait_args)
+                        ),
+                    };
+                    return;
+                }
+                Ok(None) => {}
+                Err(message) => {
+                    self.diagnostics.push(Diagnostic::error(expr.span, message));
+                    self.rewrite_expr_children(expr, substitutions);
+                    return;
+                }
+            }
         }
 
         if let ExprKind::GenericType { name, args } = &mut expr.kind {
@@ -2161,6 +2251,136 @@ impl Monomorphizer {
                     "cannot infer type arguments for generic enum `{type_name}`: {reason}; write `{type_name}<Type>.{variant_name}(...)` or add a concrete expected type"
                 )
             })
+    }
+
+    fn has_real_or_extension_method(
+        &self,
+        receiver: &TypeRef,
+        method_name: &str,
+        static_: bool,
+    ) -> bool {
+        if self
+            .method_template(receiver, method_name, static_)
+            .is_some()
+        {
+            return true;
+        }
+
+        let receiver = self.expanded_type(receiver);
+        self.extensions.iter().any(|extension| {
+            extension.static_ == static_
+                && extension.function.name.as_deref() == Some(method_name)
+                && type_name(&self.expanded_type(&extension.type_ref)) == type_name(&receiver)
+        })
+    }
+
+    fn resolve_generic_trait_method(
+        &self,
+        receiver: &TypeRef,
+        method_name: &str,
+        static_: bool,
+        args: &[Expr],
+        expected_return: Option<&TypeRef>,
+    ) -> Result<Option<GenericTraitMethodResolution>, String> {
+        let mut candidates = Vec::new();
+
+        for impl_ in &self.impl_declarations {
+            let Some(trait_) = self.trait_templates.get(&impl_.trait_ref.name) else {
+                continue;
+            };
+            let Some(method) = trait_
+                .methods
+                .iter()
+                .find(|method| method.name == method_name && method.static_ == static_)
+            else {
+                continue;
+            };
+            let method_params = method
+                .params
+                .iter()
+                .filter(|param| static_ || param.name != "self")
+                .collect::<Vec<_>>();
+            if method_params.len() != args.len() {
+                continue;
+            }
+
+            let mut trait_substitutions = trait_
+                .type_params
+                .iter()
+                .cloned()
+                .zip(impl_.trait_ref.args.iter().cloned())
+                .collect::<HashMap<_, _>>();
+            trait_substitutions.insert("Self".to_string(), impl_.type_ref.clone());
+
+            let mut constraints = vec![(impl_.type_ref.clone(), receiver.clone())];
+            for (param, arg) in method_params.iter().zip(args) {
+                let Some(expected) = &param.type_ref else {
+                    continue;
+                };
+                let Some(actual) = self.infer_expr_type(arg) else {
+                    continue;
+                };
+                constraints.push((substitute_type(expected, &trait_substitutions), actual));
+            }
+            if let (Some(return_type), Some(expected_return)) =
+                (&method.return_type, expected_return)
+            {
+                constraints.push((
+                    substitute_type(return_type, &trait_substitutions),
+                    expected_return.clone(),
+                ));
+            }
+
+            let Ok(type_args) =
+                self.solve_type_arguments("trait method", &impl_.type_params, constraints.clone())
+            else {
+                continue;
+            };
+            let impl_substitutions = impl_
+                .type_params
+                .iter()
+                .cloned()
+                .zip(type_args.iter().cloned())
+                .collect::<HashMap<_, _>>();
+            if !constraints.iter().all(|(pattern, actual)| {
+                let pattern = self.expanded_type(&substitute_type(pattern, &impl_substitutions));
+                let actual = self.expanded_type(actual);
+                type_name(&pattern) == type_name(&actual)
+            }) {
+                continue;
+            }
+
+            candidates.push(GenericTraitMethodResolution {
+                trait_name: trait_.name.clone(),
+                trait_args: impl_
+                    .trait_ref
+                    .args
+                    .iter()
+                    .map(|arg| substitute_type(arg, &impl_substitutions))
+                    .collect(),
+                params: method_params
+                    .iter()
+                    .filter_map(|param| param.type_ref.as_ref())
+                    .map(|param| {
+                        substitute_type(
+                            &substitute_type(param, &trait_substitutions),
+                            &impl_substitutions,
+                        )
+                    })
+                    .collect(),
+                impl_type_params: impl_.type_params.clone(),
+                impl_type_param_bounds: impl_.type_param_bounds.clone(),
+                impl_type_args: type_args,
+            });
+        }
+
+        if candidates.len() > 1 {
+            return Err(format!(
+                "generic trait method `{method_name}` is ambiguous for type `{}`",
+                type_name(receiver)
+            ));
+        }
+        Ok(candidates.pop())
     }
 
     fn infer_function_type_arguments(
@@ -3755,6 +3975,180 @@ fn concrete_impl_exists(items: &[Item], trait_ref: &TypeRef, type_ref: &TypeRef)
                 if type_name(&item.trait_ref) == trait_name && type_name(&item.type_ref) == self_type_name
         )
     })
+}
+
+#[derive(Clone, PartialEq, Eq)]
+enum ImplHeaderType {
+    Variable(usize, String),
+    Named(String, Vec<ImplHeaderType>),
+    Function {
+        params: Vec<(bool, ImplHeaderType)>,
+        return_type: Box<ImplHeaderType>,
+    },
+}
+
+fn impl_headers_overlap(left: &ImplDecl, right: &ImplDecl) -> bool {
+    let left_params = left.type_params.iter().cloned().collect::<HashSet<_>>();
+    let right_params = right.type_params.iter().cloned().collect::<HashSet<_>>();
+    let mut substitutions = HashMap::new();
+
+    unify_impl_header_types(
+        impl_header_type(&left.trait_ref, 0, &left_params),
+        impl_header_type(&right.trait_ref, 1, &right_params),
+        &mut substitutions,
+    ) && unify_impl_header_types(
+        impl_header_type(&left.type_ref, 0, &left_params),
+        impl_header_type(&right.type_ref, 1, &right_params),
+        &mut substitutions,
+    )
+}
+
+fn impl_header_type(
+    type_ref: &TypeRef,
+    impl_index: usize,
+    type_params: &HashSet<String>,
+) -> ImplHeaderType {
+    if type_ref.function.is_none()
+        && type_ref.args.is_empty()
+        && type_params.contains(&type_ref.name)
+    {
+        return ImplHeaderType::Variable(impl_index, type_ref.name.clone());
+    }
+
+    if let Some(function) = &type_ref.function {
+        return ImplHeaderType::Function {
+            params: function
+                .params
+                .iter()
+                .map(|param| {
+                    (
+                        param.mutable,
+                        impl_header_type(&param.type_ref, impl_index, type_params),
+                    )
+                })
+                .collect(),
+            return_type: Box::new(impl_header_type(
+                &function.return_type,
+                impl_index,
+                type_params,
+            )),
+        };
+    }
+
+    ImplHeaderType::Named(
+        type_ref.name.clone(),
+        type_ref
+            .args
+            .iter()
+            .map(|arg| impl_header_type(arg, impl_index, type_params))
+            .collect(),
+    )
+}
+
+fn unify_impl_header_types(
+    left: ImplHeaderType,
+    right: ImplHeaderType,
+    substitutions: &mut HashMap<(usize, String), ImplHeaderType>,
+) -> bool {
+    let left = resolve_impl_header_type(left, substitutions);
+    let right = resolve_impl_header_type(right, substitutions);
+
+    if left == right {
+        return true;
+    }
+
+    match (left, right) {
+        (ImplHeaderType::Variable(index, name), type_)
+        | (type_, ImplHeaderType::Variable(index, name)) => {
+            bind_impl_header_variable((index, name), type_, substitutions)
+        }
+        (
+            ImplHeaderType::Named(left_name, left_args),
+            ImplHeaderType::Named(right_name, right_args),
+        ) => {
+            left_name == right_name
+                && left_args.len() == right_args.len()
+                && left_args
+                    .into_iter()
+                    .zip(right_args)
+                    .all(|(left, right)| unify_impl_header_types(left, right, substitutions))
+        }
+        (
+            ImplHeaderType::Function {
+                params: left_params,
+                return_type: left_return,
+            },
+            ImplHeaderType::Function {
+                params: right_params,
+                return_type: right_return,
+            },
+        ) => {
+            left_params.len() == right_params.len()
+                && left_params.into_iter().zip(right_params).all(
+                    |((left_mutable, left), (right_mutable, right))| {
+                        left_mutable == right_mutable
+                            && unify_impl_header_types(left, right, substitutions)
+                    },
+                )
+                && unify_impl_header_types(*left_return, *right_return, substitutions)
+        }
+        _ => false,
+    }
+}
+
+fn resolve_impl_header_type(
+    type_: ImplHeaderType,
+    substitutions: &HashMap<(usize, String), ImplHeaderType>,
+) -> ImplHeaderType {
+    let ImplHeaderType::Variable(index, name) = &type_ else {
+        return type_;
+    };
+    let Some(substitution) = substitutions.get(&(*index, name.clone())) else {
+        return type_;
+    };
+    resolve_impl_header_type(substitution.clone(), substitutions)
+}
+
+fn bind_impl_header_variable(
+    variable: (usize, String),
+    type_: ImplHeaderType,
+    substitutions: &mut HashMap<(usize, String), ImplHeaderType>,
+) -> bool {
+    if impl_header_type_contains_variable(&type_, &variable, substitutions) {
+        return false;
+    }
+    substitutions.insert(variable, type_);
+    true
+}
+
+fn impl_header_type_contains_variable(
+    type_: &ImplHeaderType,
+    variable: &(usize, String),
+    substitutions: &HashMap<(usize, String), ImplHeaderType>,
+) -> bool {
+    match type_ {
+        ImplHeaderType::Variable(index, name) => {
+            let key = (*index, name.clone());
+            if &key == variable {
+                true
+            } else {
+                substitutions.get(&key).is_some_and(|substitution| {
+                    impl_header_type_contains_variable(substitution, variable, substitutions)
+                })
+            }
+        }
+        ImplHeaderType::Named(_, args) => args
+            .iter()
+            .any(|arg| impl_header_type_contains_variable(arg, variable, substitutions)),
+        ImplHeaderType::Function {
+            params,
+            return_type,
+        } => {
+            params.iter().any(|(_, param)| {
+                impl_header_type_contains_variable(param, variable, substitutions)
+            }) || impl_header_type_contains_variable(return_type, variable, substitutions)
+        }
+    }
 }
 
 fn type_names(type_ref: &TypeRef) -> Vec<&str> {
