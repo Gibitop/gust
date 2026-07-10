@@ -266,7 +266,7 @@ impl Parser {
         } else {
             (self.expect_keyword(Keyword::Fn, "`fn`").span, false)
         };
-        let name = self.expect_identifier("expected trait method name");
+        let name = self.expect_callable_name("expected trait method name");
         self.expect_kind(&TokenKind::LeftParen, "`(`");
         let params = self.parse_params();
         self.expect_kind(&TokenKind::RightParen, "`)`");
@@ -304,7 +304,7 @@ impl Parser {
                 let (function, static_) = if self.current_keyword() == Some(Keyword::Static) {
                     let start = self.expect_keyword(Keyword::Static, "`static`").span;
                     self.expect_keyword(Keyword::Fn, "`fn`");
-                    let name = self.expect_identifier("expected impl method name");
+                    let name = self.expect_callable_name("expected impl method name");
                     (
                         self.parse_function_tail(start, Some(name), Vec::new(), Vec::new()),
                         true,
@@ -375,7 +375,7 @@ impl Parser {
     fn parse_function(&mut self, named: bool) -> FunctionDecl {
         let start = self.expect_keyword(Keyword::Fn, "`fn`").span;
         let name = if named {
-            Some(self.expect_identifier("expected function name"))
+            Some(self.expect_callable_name("expected function name"))
         } else {
             None
         };
@@ -404,7 +404,7 @@ impl Parser {
         let first_name = self.expect_identifier("expected function or extension type name");
 
         if self.match_kind(&TokenKind::Dot) {
-            let function_name = self.expect_identifier("expected extension function name");
+            let function_name = self.expect_callable_name("expected extension function name");
             let function =
                 self.parse_function_tail(start, Some(function_name), Vec::new(), Vec::new());
             let type_ref = TypeRef {
@@ -767,7 +767,7 @@ impl Parser {
                 };
             } else if self.match_kind(&TokenKind::Dot) {
                 let name_span = self.current().span;
-                let name = self.expect_identifier("expected member name");
+                let name = self.expect_callable_name("expected member name");
                 expr = Expr {
                     span: expr.span.join(name_span),
                     kind: ExprKind::Member {
@@ -1167,6 +1167,14 @@ impl Parser {
 
         self.error_here(message);
         "<missing>".to_string()
+    }
+
+    fn expect_callable_name(&mut self, message: &str) -> String {
+        if self.current_keyword() == Some(Keyword::From) {
+            self.advance();
+            return "from".to_string();
+        }
+        self.expect_identifier(message)
     }
 
     fn consume_identifier(&mut self) -> Option<String> {

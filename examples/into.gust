@@ -1,9 +1,13 @@
-impl Into<UserId> for String {
-    fn into() => UserId { value: self }
+trait From<T> {
+    static fn from(value: T): Self
 }
 
-impl Into<Label> for String {
-    fn into() => Label { value: self }
+trait Into<T> {
+    fn into(): T
+}
+
+impl<T, U: From<T>> Into<U> for T {
+    fn into() => U.from(self)
 }
 
 struct UserId {
@@ -12,6 +16,14 @@ struct UserId {
 
 struct Label {
     value: String
+}
+
+impl From<String> for UserId {
+    static fn from(value: String) => UserId { value: value }
+}
+
+impl From<String> for Label {
+    static fn from(value: String) => Label { value: value }
 }
 
 fn printUserId(value: UserId) {

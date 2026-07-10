@@ -31,6 +31,14 @@ fn qualified_trait_method_name(trait_name: &str, type_name: &str, function_name:
     format!("trait {trait_name} for {type_name}.{function_name}")
 }
 
+fn qualified_static_trait_method_name(
+    trait_name: &str,
+    type_name: &str,
+    function_name: &str,
+) -> String {
+    format!("static trait {trait_name} for {type_name}.{function_name}")
+}
+
 fn static_trait_method_name(type_name: &str, function_name: &str) -> String {
     format!("static trait {type_name}.{function_name}")
 }
@@ -40,8 +48,7 @@ fn source_callable_name(name: &str) -> &str {
 }
 
 fn requested_trait_name(name: &str) -> Option<&str> {
-    name.rsplit_once("::")
-        .and_then(|(trait_name, _)| trait_name.starts_with("Into<").then_some(trait_name))
+    name.rsplit_once("::").map(|(trait_name, _)| trait_name)
 }
 
 struct Analyzer {
@@ -57,6 +64,7 @@ struct Analyzer {
     trait_methods: HashMap<String, FunctionSignature>,
     qualified_trait_methods: HashMap<String, FunctionSignature>,
     static_trait_methods: HashMap<String, FunctionSignature>,
+    qualified_static_trait_methods: HashMap<String, FunctionSignature>,
     trait_impls: HashSet<(String, String)>,
     imported_namespaces: HashSet<String>,
     unsupported_features: HashSet<&'static str>,
@@ -197,6 +205,7 @@ impl Analyzer {
             trait_methods: HashMap::new(),
             qualified_trait_methods: HashMap::new(),
             static_trait_methods: HashMap::new(),
+            qualified_static_trait_methods: HashMap::new(),
             trait_impls: HashSet::new(),
             imported_namespaces: HashSet::new(),
             unsupported_features: HashSet::new(),
@@ -748,24 +757,29 @@ impl Analyzer {
             } else {
                 &mut self.trait_methods
             };
-            if !member.static_ {
-                let qualified_name =
-                    qualified_trait_method_name(&trait_name, &self_type_name, name);
-                if self
-                    .qualified_trait_methods
-                    .insert(qualified_name, signature.clone())
-                    .is_some()
-                {
-                    self.diagnostics.push(Diagnostic::error(
-                        method.span,
-                        format!(
-                            "duplicate trait method `{name}` for type `{self_type_name}` in trait `{trait_name}`"
-                        ),
-                    ));
-                }
+            let (qualified_name, qualified_trait_methods) = if member.static_ {
+                (
+                    qualified_static_trait_method_name(&trait_name, &self_type_name, name),
+                    &mut self.qualified_static_trait_methods,
+                )
+            } else {
+                (
+                    qualified_trait_method_name(&trait_name, &self_type_name, name),
+                    &mut self.qualified_trait_methods,
+                )
+            };
+            if qualified_trait_methods
+                .insert(qualified_name, signature.clone())
+                .is_some()
+            {
+                self.diagnostics.push(Diagnostic::error(
+                    method.span,
+                    format!(
+                        "duplicate trait method `{name}` for type `{self_type_name}` in trait `{trait_name}`"
+                    ),
+                ));
             }
-            let skip_unqualified =
-                !member.static_ && trait_name.starts_with("Into<") && name == "into";
+            let skip_unqualified = trait_name.contains('<');
             if !skip_unqualified && trait_methods.insert(trait_method_name, signature).is_some() {
                 self.diagnostics.push(Diagnostic::error(
                     method.span,
@@ -2212,30 +2226,46 @@ impl Analyzer {
         args: &[Expr],
     ) -> Type {
         let source_name = source_callable_name(name);
-        let intrinsic = match &type_ {
-            Type::Struct(struct_name) => self
-                .structs
-                .get(struct_name)
-                .and_then(|struct_| struct_.static_methods.get(source_name))
-                .cloned(),
-            Type::Enum(enum_name) => self
-                .enums
-                .get(enum_name)
-                .and_then(|enum_| enum_.static_methods.get(source_name))
-                .cloned(),
-            _ => None,
+        let requested_trait =
+            requested_trait_name(name).filter(|trait_name| self.traits.contains_key(*trait_name));
+        let intrinsic = if requested_trait.is_none() {
+            match &type_ {
+                Type::Struct(struct_name) => self
+                    .structs
+                    .get(struct_name)
+                    .and_then(|struct_| struct_.static_methods.get(source_name))
+                    .cloned(),
+                Type::Enum(enum_name) => self
+                    .enums
+                    .get(enum_name)
+                    .and_then(|enum_| enum_.static_methods.get(source_name))
+                    .cloned(),
+                _ => None,
+            }
+        } else {
+            None
         };
-        let signature = intrinsic
-            .or_else(|| {
-                self.static_extensions
-                    .get(&extension_name(&type_.name(), name))
-                    .cloned()
-            })
-            .or_else(|| {
-                self.static_trait_methods
-                    .get(&static_trait_method_name(&type_.name(), source_name))
-                    .cloned()
-            });
+        let signature = if let Some(trait_name) = requested_trait {
+            self.qualified_static_trait_methods
+                .get(&qualified_static_trait_method_name(
+                    trait_name,
+                    &type_.name(),
+                    source_name,
+                ))
+                .cloned()
+        } else {
+            intrinsic
+                .or_else(|| {
+                    self.static_extensions
+                        .get(&extension_name(&type_.name(), name))
+                        .cloned()
+                })
+                .or_else(|| {
+                    self.static_trait_methods
+                        .get(&static_trait_method_name(&type_.name(), source_name))
+                        .cloned()
+                })
+        };
         let Some(signature) = signature else {
             self.diagnostics.push(Diagnostic::error(
                 expr.span,
@@ -2290,7 +2320,8 @@ impl Analyzer {
         }
 
         let source_name = source_callable_name(name);
-        let requested_trait = requested_trait_name(name);
+        let requested_trait =
+            requested_trait_name(name).filter(|trait_name| self.traits.contains_key(*trait_name));
         if matches!(&object_type, Type::Basic(type_) if type_.is_numeric())
             && source_name == "toString"
             && requested_trait.is_none()

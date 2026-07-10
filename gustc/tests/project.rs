@@ -548,6 +548,58 @@ impl<T> Named<T> for Box<T> {
     lower_program(&result.program).expect("imported generic trait impl template should lower");
 }
 
+#[test]
+fn overlapping_trait_impls_are_rejected_across_modules() {
+    let project = TempProject::new();
+    project.write(
+        "main.gust",
+        r#"from ./first import { first }
+from ./second import { second }
+
+fn main() {
+    first()
+    second()
+}"#,
+    );
+    project.write(
+        "model.gust",
+        r#"trait Describe {
+    fn describe(): String
+}
+
+struct Person {
+    name: String
+}"#,
+    );
+    project.write(
+        "first.gust",
+        r#"from ./model import { Describe }
+
+impl<T> Describe for T {
+    fn describe() => "value"
+}
+
+fn first() {}"#,
+    );
+    project.write(
+        "second.gust",
+        r#"from ./model import { Describe, Person }
+
+impl Describe for Person {
+    fn describe() => self.name
+}
+
+fn second() {}"#,
+    );
+
+    let result = check_project(&project.path("main.gust")).expect("project should load");
+    assert!(result.diagnostics.iter().any(|diagnostic| {
+        diagnostic
+            .message
+            .contains("conflicting implementations of trait")
+    }));
+}
+
 fn path_suffix(path: &str) -> &str {
     Path::new(path).to_str().expect("test path should be UTF-8")
 }

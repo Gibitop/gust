@@ -3771,14 +3771,129 @@ fn main() {
 }
 
 #[test]
-fn into_uses_expected_type_to_select_builtin_trait_impls() {
-    let result = check_source(
-        r#"impl Into<UserId> for String {
-    fn into() => UserId { value: self }
+fn overlapping_trait_impls_are_rejected_before_specialization() {
+    let concrete_overlap = check_source(
+        r#"trait Describe {
+    fn describe(): String
 }
 
-impl Into<Label> for String {
-    fn into() => Label { value: self }
+struct Person {
+    name: String
+}
+
+impl<T> Describe for T {
+    fn describe() => "value"
+}
+
+impl Describe for Person {
+    fn describe() => self.name
+}
+
+fn main() {}"#,
+    );
+    assert!(concrete_overlap.diagnostics.iter().any(|diagnostic| {
+        diagnostic
+            .message
+            .contains("conflicting implementations of trait `Describe` for type `Person`")
+    }));
+
+    let bounded_overlap = check_source(
+        r#"trait Named {
+    fn name(): String
+}
+
+trait Labeled {
+    fn label(): String
+}
+
+trait Describe {
+    fn describe(): String
+}
+
+impl<T: Named> Describe for T {
+    fn describe() => self.name()
+}
+
+impl<T: Labeled> Describe for T {
+    fn describe() => self.label()
+}
+
+fn main() {}"#,
+    );
+    assert!(bounded_overlap.diagnostics.iter().any(|diagnostic| {
+        diagnostic
+            .message
+            .contains("conflicting implementations of trait `Describe` for type `T`")
+    }));
+
+    let nested_overlap = check_source(
+        r#"trait Describe {
+    fn describe(): String
+}
+
+struct Box<T> {
+    value: T
+}
+
+impl<T> Describe for T {
+    fn describe() => "value"
+}
+
+impl<T> Describe for Box<T> {
+    fn describe() => "box"
+}
+
+fn main() {}"#,
+    );
+    assert!(nested_overlap.diagnostics.iter().any(|diagnostic| {
+        diagnostic
+            .message
+            .contains("conflicting implementations of trait `Describe` for type `Box<T>`")
+    }));
+}
+
+#[test]
+fn disjoint_generic_trait_impls_are_allowed() {
+    let result = check_source(
+        r#"trait Convert<T> {
+    fn convert(): T
+}
+
+struct Box<T> {
+    value: T
+}
+
+impl<T> Convert<i32> for Box<T> {
+    fn convert() => 1
+}
+
+impl<T> Convert<String> for Box<T> {
+    fn convert() => "value"
+}
+
+fn main() {}"#,
+    );
+
+    assert!(
+        !result.has_errors(),
+        "expected disjoint generic impls to validate, got {:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
+fn generic_trait_methods_use_expected_types_without_builtin_names() {
+    let result = check_source(
+        r#"trait Convert<T> {
+    fn convert(): T
+}
+
+impl Convert<UserId> for String {
+    fn convert() => UserId { value: self }
+}
+
+impl Convert<Label> for String {
+    fn convert() => Label { value: self }
 }
 
 struct UserId {
@@ -3795,9 +3910,9 @@ fn readUserId(value: UserId): String {
 
 fn main() {
     let raw = "Gust"
-    let id: UserId = raw.into()
-    let label: Label = raw.into()
-    io.println(readUserId(raw.into()))
+    let id: UserId = raw.convert()
+    let label: Label = raw.convert()
+    io.println(readUserId(raw.convert()))
     io.println(id.value)
     io.println(label.value)
 }"#,
@@ -3805,9 +3920,48 @@ fn main() {
 
     assert!(
         !result.has_errors(),
-        "expected Into conversions to validate, got {:?}",
+        "expected generic trait conversions to validate, got {:?}",
         result.diagnostics
     );
+}
+
+#[test]
+fn gust_defined_into_blanket_impl_uses_from_bound() {
+    let source = include_str!("../../examples/into.gust");
+    let result = check_source(source);
+
+    assert!(
+        !result.has_errors(),
+        "expected Gust-defined From and Into traits to validate, got {:?}",
+        result.diagnostics
+    );
+
+    let missing_from = check_source(
+        r#"trait From<T> {
+    static fn from(value: T): Self
+}
+
+trait Into<T> {
+    fn into(): T
+}
+
+impl<T, U: From<T>> Into<U> for T {
+    fn into() => U.from(self)
+}
+
+struct Missing {
+    value: String
+}
+
+fn main() {
+    let missing: Missing = "value".into()
+}"#,
+    );
+    assert!(missing_from.diagnostics.iter().any(|diagnostic| {
+        diagnostic
+            .message
+            .contains("does not satisfy bound `Missing: From<String>`")
+    }));
 }
 
 #[test]
