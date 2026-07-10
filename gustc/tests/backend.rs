@@ -163,6 +163,135 @@ fn main() {
 }
 
 #[test]
+fn iterator_for_loop_lowers_and_emits_c() {
+    let result = check_source(
+        r#"enum Option<T> {
+    Some(T)
+    None
+}
+
+trait Iterator<T> {
+    fn next(mut self): Option<T>
+}
+
+struct Counter {
+    value: i32
+    end: i32
+}
+
+impl Iterator<i32> for Counter {
+    fn next(mut self): Option<i32> {
+        if self.value < self.end {
+            let value = self.value
+            self.value++
+            return Option.Some(value)
+        }
+
+        return Option<i32>.None
+    }
+}
+
+fn main() {
+    let mut counter = Counter { value: 1, end: 5 }
+
+    for value in counter {
+        if value == 2 {
+            continue
+        }
+
+        if value == 4 {
+            break
+        }
+
+        io.println(value.toString())
+    }
+}"#,
+    );
+
+    assert!(
+        !result.has_errors(),
+        "expected no frontend errors, got {:?}",
+        result.diagnostics
+    );
+
+    let lowered = lower_program(&result.program).expect("iterator for loop should lower");
+    let source = emit_c(&lowered);
+
+    assert!(source.contains("while (true)"));
+    assert!(source.contains("gust_method_next"));
+    assert!(source.contains("continue;\n"));
+    assert!(source.contains("break;\n"));
+}
+
+#[test]
+fn iterable_for_loop_lowers_and_emits_c() {
+    let result = check_source(
+        r#"enum Option<T> {
+    Some(T)
+    None
+}
+
+trait Iterator<T> {
+    fn next(mut self): Option<T>
+}
+
+trait Iterable<T> {
+    fn iterator(): Iterator<T>
+}
+
+struct Counter {
+    start: i32
+    end: i32
+}
+
+struct CounterIterator {
+    value: i32
+    end: i32
+}
+
+impl Iterator<i32> for CounterIterator {
+    fn next(mut self): Option<i32> {
+        if self.value < self.end {
+            let value = self.value
+            self.value++
+            return Option.Some(value)
+        }
+
+        return Option<i32>.None
+    }
+}
+
+impl Iterable<i32> for Counter {
+    fn iterator(): Iterator<i32> => CounterIterator {
+        value: self.start,
+        end: self.end
+    }
+}
+
+fn main() {
+    let counter = Counter { start: 1, end: 3 }
+
+    for value in counter {
+        io.println(value.toString())
+    }
+}"#,
+    );
+
+    assert!(
+        !result.has_errors(),
+        "expected no frontend errors, got {:?}",
+        result.diagnostics
+    );
+
+    let lowered = lower_program(&result.program).expect("iterable for loop should lower");
+    let source = emit_c(&lowered);
+
+    assert!(source.contains("while (true)"));
+    assert!(source.contains("gust_method_next"));
+    assert!(source.contains("break;\n"));
+}
+
+#[test]
 fn inferred_returning_if_else_emits_c() {
     let result = check_source(
         r#"fn choose(enabled: bool) {

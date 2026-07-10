@@ -1,0 +1,39 @@
+from ../std/iter import { Iterable, Iterator }
+from ../std/option import { Option }
+
+struct Counter {
+    start: i32
+    end: i32
+}
+
+struct CounterIterator {
+    value: i32
+    end: i32
+}
+
+impl Iterator<i32> for CounterIterator {
+    fn next(mut self): Option<i32> {
+        if self.value < self.end {
+            let value = self.value
+            self.value++
+            return Option.Some(value)
+        }
+
+        return Option<i32>.None
+    }
+}
+
+impl Iterable<i32> for Counter {
+    fn iterator(): Iterator<i32> => CounterIterator {
+        value: self.start,
+        end: self.end
+    }
+}
+
+fn main() {
+    let counter = Counter { start: 1, end: 5 }
+
+    for value in counter {
+        io.println(value.toString())
+    }
+}
