@@ -33,6 +33,20 @@ The source-level standard library lives in the repository-root `std` directory. 
 module resolution is introduced, Gust code in this repository imports standard-library modules
 through ordinary relative paths, such as `from ../std/iter import { Iterator }`. Import paths use
 `/` as their separator. Standard-library modules may import one another using relative paths.
+Gust source filenames use kebab case.
+
+## Collection literals
+
+`[value, ...]` is a collection literal. When a surrounding type supplies a concrete collection,
+that collection must implement `FromElements<T>`; without a target type, the literal defaults to
+an imported `ArrayList<T>`. The compiler lowers the literal to the collection's
+`withElementCapacity` and `add` trait-implementation functions, preserving left-to-right element
+evaluation. Collection behaviour therefore remains standard-library code.
+
+`FromIterator<T>` is a separate standard-library construction trait for iterators. `ArrayList<T>`
+implements both traits. The internal `RawBuffer<T>` storage type is the only collection-specific
+runtime primitive; its allocation and typed storage operations are lowered by the executable
+backend so future GC integration stays behind that boundary.
 
 ## Syntax
 

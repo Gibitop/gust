@@ -241,6 +241,10 @@ pub enum ExprKind {
     String(String),
     Bool(bool),
     Array(Vec<Expr>),
+    CollectionLiteral {
+        items: Vec<Expr>,
+        collection: TypeRef,
+    },
     Call {
         callee: Box<Expr>,
         args: Vec<Expr>,

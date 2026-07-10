@@ -725,6 +725,12 @@ impl<'names, 'diagnostics> ModuleRewriter<'names, 'diagnostics> {
                     self.rewrite_expr(item);
                 }
             }
+            ExprKind::CollectionLiteral { items, collection } => {
+                self.rewrite_type(collection);
+                for item in items {
+                    self.rewrite_expr(item);
+                }
+            }
             ExprKind::Call { callee, args } => {
                 if let ExprKind::Member { name, .. } = &mut callee.kind
                     && let Some(internal_name) = self.visible_extensions.get(name)
@@ -1065,6 +1071,12 @@ fn shift_expr(expr: &mut Expr, offset: usize) {
     shift_span(&mut expr.span, offset);
     match &mut expr.kind {
         ExprKind::Array(items) => {
+            for item in items {
+                shift_expr(item, offset);
+            }
+        }
+        ExprKind::CollectionLiteral { items, collection } => {
+            shift_type(collection, offset);
             for item in items {
                 shift_expr(item, offset);
             }

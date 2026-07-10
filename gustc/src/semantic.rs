@@ -1448,11 +1448,13 @@ impl Analyzer {
                 Type::Unknown
             }
             ExprKind::Array(items) => {
-                self.unsupported(
-                    expr.span,
-                    "array literals are parsed but collection lowering is not implemented yet",
-                );
+                for item in items {
+                    self.validate_expr(item);
+                }
 
+                Type::Unknown
+            }
+            ExprKind::CollectionLiteral { items, .. } => {
                 for item in items {
                     self.validate_expr(item);
                 }
@@ -3302,6 +3304,7 @@ impl Analyzer {
             | ExprKind::Binary { .. }
             | ExprKind::Unary { .. } => true,
             ExprKind::Array(_)
+            | ExprKind::CollectionLiteral { .. }
             | ExprKind::GenericType { .. }
             | ExprKind::Lambda(_)
             | ExprKind::Match { .. }

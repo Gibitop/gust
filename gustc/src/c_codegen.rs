@@ -12,7 +12,11 @@ pub fn emit_c(program: &LoweredProgram) -> String {
     let uses_bool = program_uses_type(program, BasicType::Bool)
         || uses_string_equality
         || number_to_string_types.contains(&BasicType::I128);
-    let uses_usize = program_uses_type(program, BasicType::Usize);
+    let uses_usize = program_uses_type(program, BasicType::Usize)
+        || program
+            .structs
+            .iter()
+            .any(|struct_| struct_.raw_buffer_element.is_some());
     let uses_float =
         program_uses_type(program, BasicType::F32) || program_uses_type(program, BasicType::F64);
     let uses_fixed_width_int = program_uses_fixed_width_int(program);
@@ -289,6 +293,9 @@ fn expr_uses_type(expr: &LoweredExpr, type_: BasicType) -> bool {
             | LoweredExprKind::Clone(object)
             | LoweredExprKind::NumberToString(object) => expr_uses_type(object, type_),
             LoweredExprKind::Call { args, .. } => args.iter().any(|arg| expr_uses_type(arg, type_)),
+            LoweredExprKind::CollectionLiteral { items, .. } => {
+                items.iter().any(|item| expr_uses_type(item, type_))
+            }
             LoweredExprKind::IndirectCall { callee, args }
             | LoweredExprKind::DynamicCall {
                 object: callee,
@@ -453,6 +460,9 @@ fn expr_uses_number_to_string(expr: &LoweredExpr, type_: BasicType) -> bool {
         LoweredExprKind::Call { args, .. } => args
             .iter()
             .any(|arg| expr_uses_number_to_string(arg, type_)),
+        LoweredExprKind::CollectionLiteral { items, .. } => items
+            .iter()
+            .any(|item| expr_uses_number_to_string(item, type_)),
         LoweredExprKind::IndirectCall { callee, args }
         | LoweredExprKind::DynamicCall {
             object: callee,
@@ -584,6 +594,9 @@ fn expr_uses_string_equality(expr: &LoweredExpr) -> bool {
         | LoweredExprKind::Clone(object)
         | LoweredExprKind::NumberToString(object) => expr_uses_string_equality(object),
         LoweredExprKind::Call { args, .. } => args.iter().any(expr_uses_string_equality),
+        LoweredExprKind::CollectionLiteral { items, .. } => {
+            items.iter().any(expr_uses_string_equality)
+        }
         LoweredExprKind::IndirectCall { callee, args }
         | LoweredExprKind::DynamicCall {
             object: callee,
@@ -680,6 +693,9 @@ fn expr_uses_string_concat(expr: &LoweredExpr) -> bool {
         | LoweredExprKind::Clone(object)
         | LoweredExprKind::NumberToString(object) => expr_uses_string_concat(object),
         LoweredExprKind::Call { args, .. } => args.iter().any(expr_uses_string_concat),
+        LoweredExprKind::CollectionLiteral { items, .. } => {
+            items.iter().any(expr_uses_string_concat)
+        }
         LoweredExprKind::IndirectCall { callee, args }
         | LoweredExprKind::DynamicCall {
             object: callee,
@@ -812,6 +828,9 @@ fn expr_uses_enum_trait_object(expr: &LoweredExpr) -> bool {
                 })
         }
         LoweredExprKind::Call { args, .. } => args.iter().any(expr_uses_enum_trait_object),
+        LoweredExprKind::CollectionLiteral { items, .. } => {
+            items.iter().any(expr_uses_enum_trait_object)
+        }
         LoweredExprKind::IndirectCall { callee, args }
         | LoweredExprKind::DynamicCall {
             object: callee,
@@ -902,6 +921,7 @@ fn expr_uses_println(expr: &LoweredExpr) -> bool {
                 })
         }
         LoweredExprKind::Call { args, .. } => args.iter().any(expr_uses_println),
+        LoweredExprKind::CollectionLiteral { items, .. } => items.iter().any(expr_uses_println),
         LoweredExprKind::IndirectCall { callee, args }
         | LoweredExprKind::DynamicCall {
             object: callee,
@@ -1050,6 +1070,15 @@ fn expr_calls_name(expr: &LoweredExpr, name: &str) -> bool {
             name: called_name,
             args,
         } => called_name == name || args.iter().any(|arg| expr_calls_name(arg, name)),
+        LoweredExprKind::CollectionLiteral {
+            constructor,
+            add,
+            items,
+        } => {
+            constructor == name
+                || add == name
+                || items.iter().any(|item| expr_calls_name(item, name))
+        }
         LoweredExprKind::IndirectCall { callee, args } => {
             expr_calls_name(callee, name) || args.iter().any(|arg| expr_calls_name(arg, name))
         }
@@ -1084,7 +1113,32 @@ fn push_c_struct(source: &mut String, struct_: &LoweredStruct) {
         source.push_str(";\n");
     }
 
+    if struct_.raw_buffer_element.is_some() {
+        source.push_str("    void* gust_data;\n");
+        source.push_str("    size_t gust_capacity;\n");
+        source.push_str("    size_t gust_length;\n");
+    }
+
     source.push_str("};\n");
+}
+
+fn raw_buffer_element_type<'a>(
+    structs: &'a [LoweredStruct],
+    type_: &LoweredType,
+) -> Option<&'a LoweredType> {
+    let LoweredType::Struct(name) = type_ else {
+        return None;
+    };
+    structs
+        .iter()
+        .find(|struct_| struct_.name == *name)
+        .and_then(|struct_| struct_.raw_buffer_element.as_ref())
+}
+
+fn raw_buffer_method(name: &str) -> Option<&str> {
+    ["withCapacity", "capacity", "read", "write", "clear", "grow"]
+        .into_iter()
+        .find(|method| name.ends_with(&format!(".{method}")))
 }
 
 fn push_c_type_definitions(source: &mut String, program: &LoweredProgram) {
@@ -1376,6 +1430,11 @@ fn collect_expr_function_types(expr: &LoweredExpr, types: &mut Vec<LoweredType>)
                 collect_expr_function_types(arg, types);
             }
         }
+        LoweredExprKind::CollectionLiteral { items, .. } => {
+            for item in items {
+                collect_expr_function_types(item, types);
+            }
+        }
         LoweredExprKind::IndirectCall { callee, args } => {
             collect_expr_function_types(callee, types);
             for arg in args {
@@ -1539,6 +1598,11 @@ fn push_c_struct_runtime_helpers(source: &mut String, program: &LoweredProgram) 
             push_c_local_name(source, &field.name);
             source.push_str(";\n");
         }
+        if struct_.raw_buffer_element.is_some() {
+            source.push_str("    result->gust_data = NULL;\n");
+            source.push_str("    result->gust_capacity = 0;\n");
+            source.push_str("    result->gust_length = 0;\n");
+        }
         source.push_str("    return result;\n");
         source.push_str("}\n\n");
 
@@ -1579,6 +1643,20 @@ fn push_c_struct_runtime_helpers(source: &mut String, program: &LoweredProgram) 
             source.push_str(";\n");
         }
 
+        if let Some(element) = &struct_.raw_buffer_element {
+            source.push_str("    result->gust_capacity = value->gust_capacity;\n");
+            source.push_str("    result->gust_length = value->gust_length;\n");
+            source.push_str("    result->gust_data = NULL;\n");
+            source.push_str("    if (value->gust_capacity > 0) {\n        result->gust_data = gust_rt_alloc(sizeof(");
+            push_c_type(source, element);
+            source.push_str(") * value->gust_capacity);\n    }\n");
+            source.push_str("    for (size_t gust_index = 0; gust_index < value->gust_length; gust_index++) {\n        ((");
+            push_c_type(source, element);
+            source.push_str("*)result->gust_data)[gust_index] = ");
+            push_c_raw_buffer_clone_element(source, element);
+            source.push_str(";\n    }\n");
+        }
+
         source.push_str("    return result;\n");
         source.push_str("}\n\n");
         source.push_str("static ");
@@ -1593,6 +1671,29 @@ fn push_c_struct_runtime_helpers(source: &mut String, program: &LoweredProgram) 
         push_c_struct_clone_internal_name(source, &struct_.name);
         source.push_str("(value, &entries);\n");
         source.push_str("}\n\n");
+    }
+}
+
+fn push_c_raw_buffer_clone_element(source: &mut String, type_: &LoweredType) {
+    match type_ {
+        LoweredType::Struct(name) => {
+            push_c_struct_clone_internal_name(source, name);
+            source.push_str("(((");
+            push_c_type(source, type_);
+            source.push_str("*)value->gust_data)[gust_index], entries)");
+        }
+        LoweredType::Enum(name) => {
+            push_c_enum_clone_internal_name(source, name);
+            source.push_str("(((");
+            push_c_type(source, type_);
+            source.push_str("*)value->gust_data)[gust_index], entries)");
+        }
+        LoweredType::Basic(_) | LoweredType::Trait(_) | LoweredType::Function { .. } => {
+            source.push_str("((");
+            push_c_type(source, type_);
+            source.push_str("*)value->gust_data)[gust_index]");
+        }
+        LoweredType::Void => unreachable!("raw buffers cannot contain void"),
     }
 }
 
@@ -1912,6 +2013,7 @@ fn push_c_statement(
             | LoweredExprKind::Match { .. }
             | LoweredExprKind::NumberToString(_)
             | LoweredExprKind::Call { .. }
+            | LoweredExprKind::CollectionLiteral { .. }
             | LoweredExprKind::DynamicCall { .. }
             | LoweredExprKind::IndirectCall { .. } => {
                 push_c_indent(source, indent);
@@ -2639,6 +2741,109 @@ fn push_c_value(source: &mut String, value: &LoweredExpr, structs: &[LoweredStru
             source.push(')');
         }
         LoweredExprKind::Call { name, args } => {
+            let raw_element = raw_buffer_element_type(structs, &value.type_).or_else(|| {
+                args.first()
+                    .and_then(|arg| raw_buffer_element_type(structs, &arg.type_))
+            });
+            if let (Some(method), Some(element)) = (raw_buffer_method(name), raw_element) {
+                match method {
+                    "withCapacity" => {
+                        source.push_str("({\n    ");
+                        push_c_type(source, &value.type_);
+                        source.push_str(" gust_buffer = gust_rt_alloc(sizeof(*gust_buffer));\n");
+                        source.push_str("    memset(gust_buffer, 0, sizeof(*gust_buffer));\n");
+                        source.push_str("    gust_buffer->gust_capacity = ");
+                        push_c_value(source, &args[0], structs);
+                        source.push_str(";\n    if (gust_buffer->gust_capacity > 0) {\n        gust_buffer->gust_data = gust_rt_alloc(sizeof(");
+                        push_c_type(source, element);
+                        source.push_str(
+                            ") * gust_buffer->gust_capacity);\n    }\n    gust_buffer;\n})",
+                        );
+                        return;
+                    }
+                    "capacity" => {
+                        push_c_value(source, &args[0], structs);
+                        source.push_str("->gust_capacity");
+                        return;
+                    }
+                    "read" => {
+                        let LoweredType::Enum(option) = &value.type_ else {
+                            unreachable!("raw buffer reads return Option values")
+                        };
+                        source.push('(');
+                        push_c_enum_name(source, option);
+                        source.push_str("){ .gust_tag = ");
+                        push_c_enum_variant_tag(source, option, "Some");
+                        source.push_str(", .gust_payload.");
+                        push_c_local_name(source, "Some");
+                        source.push_str(" = ((");
+                        push_c_type(source, element);
+                        source.push_str("*)");
+                        push_c_value(source, &args[0], structs);
+                        source.push_str("->gust_data)[");
+                        push_c_value(source, &args[1], structs);
+                        source.push_str("] }");
+                        return;
+                    }
+                    "write" => {
+                        source.push_str("((");
+                        push_c_type(source, element);
+                        source.push_str("*)");
+                        push_c_value(source, &args[0], structs);
+                        source.push_str("->gust_data)[");
+                        push_c_value(source, &args[1], structs);
+                        source.push_str("] = ");
+                        push_c_value(source, &args[2], structs);
+                        source.push_str(", ");
+                        push_c_value(source, &args[0], structs);
+                        source.push_str("->gust_length = ");
+                        push_c_value(source, &args[0], structs);
+                        source.push_str("->gust_length > ");
+                        push_c_value(source, &args[1], structs);
+                        source.push_str(" ? ");
+                        push_c_value(source, &args[0], structs);
+                        source.push_str("->gust_length : ");
+                        push_c_value(source, &args[1], structs);
+                        source.push_str(" + 1");
+                        return;
+                    }
+                    "clear" => {
+                        source.push_str("({ memset(&( (");
+                        push_c_type(source, element);
+                        source.push_str("*)");
+                        push_c_value(source, &args[0], structs);
+                        source.push_str("->gust_data)[");
+                        push_c_value(source, &args[1], structs);
+                        source.push_str("], 0, sizeof(");
+                        push_c_type(source, element);
+                        source.push_str(")); if (");
+                        push_c_value(source, &args[0], structs);
+                        source.push_str("->gust_length == ");
+                        push_c_value(source, &args[1], structs);
+                        source.push_str(" + 1) { ");
+                        push_c_value(source, &args[0], structs);
+                        source.push_str("->gust_length = ");
+                        push_c_value(source, &args[1], structs);
+                        source.push_str("; } })");
+                        return;
+                    }
+                    "grow" => {
+                        source.push_str("({ ");
+                        push_c_type(source, &args[0].type_);
+                        source.push_str(" gust_buffer = ");
+                        push_c_value(source, &args[0], structs);
+                        source.push_str("; size_t gust_capacity = ");
+                        push_c_value(source, &args[1], structs);
+                        source.push_str("; void* gust_data = gust_rt_alloc(sizeof(");
+                        push_c_type(source, element);
+                        source.push_str(") * gust_capacity); if (gust_buffer->gust_length > 0) { memcpy(gust_data, gust_buffer->gust_data, sizeof(");
+                        push_c_type(source, element);
+                        source.push_str(") * gust_buffer->gust_length); } gust_buffer->gust_data = gust_data; gust_buffer->gust_capacity = gust_capacity; })");
+                        return;
+                    }
+                    _ => unreachable!("raw buffer methods are exhaustive"),
+                }
+            }
             push_c_function_name(source, name);
             source.push('(');
 
@@ -2651,6 +2856,27 @@ fn push_c_value(source: &mut String, value: &LoweredExpr, structs: &[LoweredStru
             }
 
             source.push(')');
+        }
+        LoweredExprKind::CollectionLiteral {
+            constructor,
+            add,
+            items,
+        } => {
+            source.push_str("({\n    ");
+            push_c_type(source, &value.type_);
+            source.push_str(" gust_collection = ");
+            push_c_function_name(source, constructor);
+            source.push('(');
+            source.push_str(&items.len().to_string());
+            source.push_str(");\n");
+            for item in items {
+                source.push_str("    ");
+                push_c_function_name(source, add);
+                source.push_str("(gust_collection, ");
+                push_c_value(source, item, structs);
+                source.push_str(");\n");
+            }
+            source.push_str("    gust_collection;\n})");
         }
         LoweredExprKind::TraitObject {
             trait_name,

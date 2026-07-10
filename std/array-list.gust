@@ -1,0 +1,117 @@
+from ./collection import { FromElements, FromIterator }
+from ./iter import { Iterable, Iterator }
+from ./option import { Option }
+from ./raw-buffer import { RawBuffer }
+
+struct ArrayList<T> {
+    storage: RawBuffer<T>
+    count: usize
+
+    static fn withCapacity(capacity: usize): Self => ArrayList<T> {
+        storage: RawBuffer.withCapacity(capacity),
+        count: 0,
+    }
+
+    static fn fromIterator(mut iterator: Iterator<T>): Self {
+        let mut result: Self = ArrayList<T>.withCapacity(0)
+        for value in iterator {
+            result.push(value)
+        }
+        return result
+    }
+
+    fn ensureCapacity(mut self, required: usize) {
+        let current = self.storage.capacity()
+        if required <= current {
+            return
+        }
+
+        let mut capacity = current * 2
+        if capacity == 0 {
+            capacity = 4
+        }
+        while capacity < required {
+            capacity *= 2
+        }
+        self.storage.grow(capacity)
+    }
+
+    fn len(): usize => self.count
+
+    fn isEmpty(): bool => self.count == 0
+
+    fn get(index: usize): Option<T> {
+        if index >= self.count {
+            return Option<T>.None
+        }
+
+        return self.storage.read(index)
+    }
+
+    fn set(mut self, index: usize, value: T): Option<T> {
+        if index >= self.count {
+            return Option<T>.None
+        }
+
+        let previous = self.storage.read(index)
+        self.storage.write(index, value)
+        return previous
+    }
+
+    fn push(mut self, value: T) {
+        self.ensureCapacity(self.count + 1)
+        self.storage.write(self.count, value)
+        self.count += 1
+    }
+
+    fn pop(mut self): Option<T> {
+        if self.count == 0 {
+            return Option<T>.None
+        }
+
+        self.count -= 1
+        let value = self.storage.read(self.count)
+        self.storage.clear(self.count)
+        return value
+    }
+
+    fn iterator(): Iterator<T> => ArrayListIterator<T> {
+        list: self,
+        index: 0,
+        end: self.count,
+    }
+}
+
+struct ArrayListIterator<T> {
+    list: ArrayList<T>
+    index: usize
+    end: usize
+}
+
+impl<T> Iterable<T> for ArrayList<T> {
+    fn iterator(): Iterator<T> => self.iterator()
+}
+
+impl<T> Iterator<T> for ArrayListIterator<T> {
+    fn next(mut self): Option<T> {
+        if self.index >= self.end {
+            return Option<T>.None
+        }
+
+        let value = self.list.storage.read(self.index)
+        self.index += 1
+        return value
+    }
+}
+
+impl<T> FromElements<T> for ArrayList<T> {
+    static fn withElementCapacity(capacity: usize): Self => ArrayList<T>.withCapacity(capacity)
+
+    fn add(mut self, value: T) {
+        self.push(value)
+    }
+}
+
+impl<T> FromIterator<T> for ArrayList<T> {
+    static fn fromIterator(mut iterator: Iterator<T>): Self => ArrayList<T>.fromIterator(iterator)
+}
