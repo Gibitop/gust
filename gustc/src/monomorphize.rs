@@ -1295,6 +1295,12 @@ impl Monomorphizer {
     }
 
     fn rewrite_expr(&mut self, expr: &mut Expr, substitutions: &HashMap<String, TypeRef>) {
+        if matches!(expr.kind, ExprKind::Array(_)) {
+            let expected = self.expected_expr_types.remove(&expr.span);
+            self.rewrite_collection_literal(expr, substitutions, expected);
+            return;
+        }
+
         let generic_function_call = match &expr.kind {
             ExprKind::Call { callee, .. } => match &callee.kind {
                 ExprKind::Identifier(name) if self.function_templates.contains_key(name) => {
@@ -1744,9 +1750,102 @@ impl Monomorphizer {
         self.rewrite_expr_children(expr, substitutions);
     }
 
+    fn rewrite_collection_literal(
+        &mut self,
+        expr: &mut Expr,
+        substitutions: &HashMap<String, TypeRef>,
+        expected: Option<TypeRef>,
+    ) {
+        let ExprKind::Array(items) = &mut expr.kind else {
+            unreachable!("collection literal rewriting requires an array expression")
+        };
+
+        let has_expected = expected.is_some();
+        let collection = if let Some(mut expected) = expected {
+            self.rewrite_type(&mut expected, substitutions);
+            expected
+        } else {
+            for item in items.iter_mut() {
+                self.rewrite_expr(item, substitutions);
+            }
+
+            let Some(element) = items.first().and_then(|item| self.infer_expr_type(item)) else {
+                self.diagnostics.push(Diagnostic::error(
+                    expr.span,
+                    "cannot infer an element type for an empty collection literal; add a collection type annotation",
+                ));
+                return;
+            };
+
+            for item in items.iter().skip(1) {
+                if let Some(type_) = self.infer_expr_type(item)
+                    && type_name(&self.expanded_type(&type_))
+                        != type_name(&self.expanded_type(&element))
+                {
+                    self.diagnostics.push(Diagnostic::error(
+                        item.span,
+                        format!(
+                            "collection literal element has type `{}`, expected `{}`",
+                            type_name(&type_),
+                            type_name(&element)
+                        ),
+                    ));
+                }
+            }
+
+            let Some(array_list) = self
+                .struct_templates
+                .keys()
+                .find(|name| *name == "ArrayList" || name.ends_with("::ArrayList"))
+                .cloned()
+            else {
+                self.diagnostics.push(Diagnostic::error(
+                    expr.span,
+                    "collection literals without a target type require an imported `ArrayList`",
+                ));
+                return;
+            };
+
+            let mut collection = TypeRef {
+                name: array_list,
+                args: vec![element],
+                function: None,
+                span: expr.span,
+            };
+            self.rewrite_type(&mut collection, substitutions);
+            collection
+        };
+
+        let element_type = self
+            .specializations
+            .get(&collection.name)
+            .and_then(|(_, args)| args.first().cloned());
+        if let Some(element_type) = element_type {
+            for item in items.iter_mut() {
+                self.apply_expr_context(item, &element_type);
+                self.rewrite_expr(item, substitutions);
+            }
+        } else if has_expected {
+            for item in items.iter_mut() {
+                self.rewrite_expr(item, substitutions);
+            }
+        }
+
+        expr.kind = ExprKind::CollectionLiteral {
+            items: std::mem::take(items),
+            collection,
+        };
+    }
+
     fn rewrite_expr_children(&mut self, expr: &mut Expr, substitutions: &HashMap<String, TypeRef>) {
         match &mut expr.kind {
             ExprKind::Array(items) => {
+                for item in items {
+                    self.rewrite_expr(item, substitutions);
+                }
+            }
+            ExprKind::CollectionLiteral { items, collection } => {
+                self.rewrite_type(collection, substitutions);
                 for item in items {
                     self.rewrite_expr(item, substitutions);
                 }
@@ -3093,6 +3192,7 @@ impl Monomorphizer {
                 };
                 self.infer_expr_type(expr)
             }),
+            ExprKind::CollectionLiteral { collection, .. } => Some(self.expanded_type(collection)),
             ExprKind::Array(_) | ExprKind::Lambda(_) | ExprKind::Missing => None,
         }
     }
@@ -3829,6 +3929,12 @@ impl<'items> MethodReachability<'items> {
                     self.visit_expr(item, locals);
                 }
                 None
+            }
+            ExprKind::CollectionLiteral { items, collection } => {
+                for item in items {
+                    self.visit_expr(item, locals);
+                }
+                Some(collection.name.clone())
             }
             ExprKind::Binary { left, right, .. } => {
                 self.visit_expr(left, locals);

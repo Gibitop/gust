@@ -1,0 +1,21 @@
+from ./option import { Option }
+
+// RawBuffer is an internal storage primitive. Its methods are lowered by gustc,
+// while collection behaviour remains in the standard library.
+struct RawBuffer<T> {
+    empty: Option<T>
+
+    static fn withCapacity(capacity: usize): Self => RawBuffer<T> {
+        empty: Option<T>.None,
+    }
+
+    fn capacity(): usize => 0
+
+    fn read(index: usize): Option<T> => Option<T>.None
+
+    fn write(mut self, index: usize, value: T) {}
+
+    fn clear(mut self, index: usize) {}
+
+    fn grow(mut self, capacity: usize) {}
+}

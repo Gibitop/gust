@@ -23,6 +23,7 @@ pub struct LoweredProgram {
 pub struct LoweredStruct {
     pub name: String,
     pub fields: Vec<LoweredField>,
+    pub raw_buffer_element: Option<LoweredType>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -250,6 +251,11 @@ pub enum LoweredExprKind {
         name: String,
         args: Vec<LoweredExpr>,
     },
+    CollectionLiteral {
+        constructor: String,
+        add: String,
+        items: Vec<LoweredExpr>,
+    },
     TraitObject {
         trait_name: String,
         self_type: LoweredType,
@@ -347,6 +353,13 @@ fn method_name(struct_name: &str, method_name: &str) -> String {
 
 fn extension_name(type_name: &str, function_name: &str) -> String {
     format!("extension {type_name}.{function_name}")
+}
+
+fn is_raw_buffer_name(name: &str) -> bool {
+    name == "RawBuffer"
+        || name.ends_with("::RawBuffer")
+        || name.contains("::RawBuffer<")
+        || name.starts_with("RawBuffer<")
 }
 
 fn trait_method_name(type_name: &str, function_name: &str) -> String {
@@ -482,6 +495,7 @@ fn lower_monomorphized_program(program: &Program) -> Result<LoweredProgram, Vec<
                     LoweredStruct {
                         name: item.name.clone(),
                         fields: Vec::new(),
+                        raw_buffer_element: None,
                     },
                 );
             }
@@ -536,6 +550,33 @@ fn lower_monomorphized_program(program: &Program) -> Result<LoweredProgram, Vec<
                 lower_enum_definition(item, &structs, &enums, &traits, &mut diagnostics)
         {
             enums.insert(item.name.clone(), enum_);
+        }
+    }
+
+    let raw_buffer_elements = structs
+        .iter()
+        .filter(|(name, _)| is_raw_buffer_name(name))
+        .filter_map(|(name, struct_)| {
+            let option_name = struct_
+                .fields
+                .iter()
+                .find(|field| field.name == "empty")
+                .and_then(|field| match &field.type_ {
+                    LoweredType::Enum(name) => Some(name),
+                    _ => None,
+                })?;
+            let element = enums
+                .get(option_name)?
+                .variants
+                .iter()
+                .find(|variant| variant.name == "Some")
+                .and_then(|variant| variant.payload.clone())?;
+            Some((name.clone(), element))
+        })
+        .collect::<Vec<_>>();
+    for (name, element) in raw_buffer_elements {
+        if let Some(struct_) = structs.get_mut(&name) {
+            struct_.raw_buffer_element = Some(element);
         }
     }
 
@@ -1183,6 +1224,7 @@ fn lower_struct_definition(
         Some(LoweredStruct {
             name: item.name.clone(),
             fields,
+            raw_buffer_element: None,
         })
     } else {
         None
@@ -1751,7 +1793,10 @@ fn infer_expr_type(
                 .filter(|signature| signature.return_type_known)
                 .map(|signature| signature.return_type.clone())
         }
-        ExprKind::Array(_) | ExprKind::GenericType { .. } | ExprKind::Missing => None,
+        ExprKind::Array(_)
+        | ExprKind::CollectionLiteral { .. }
+        | ExprKind::GenericType { .. }
+        | ExprKind::Missing => None,
         ExprKind::Lambda(function) => {
             infer_lambda_expr_type(function, locals, signatures, structs, enums, traits)
         }
@@ -1957,6 +2002,7 @@ fn expression_has_mutable_capability(expr: &Expr, locals: &HashMap<String, Lower
             matches!(&callee.kind, ExprKind::Member { name, .. } if name == "clone")
         }
         ExprKind::Array(_)
+        | ExprKind::CollectionLiteral { .. }
         | ExprKind::GenericType { .. }
         | ExprKind::Lambda(_)
         | ExprKind::Match { .. }
@@ -2024,6 +2070,7 @@ fn lowered_expression_has_mutable_capability(
         | LoweredExprKind::Logical { .. }
         | LoweredExprKind::Comparison { .. }
         | LoweredExprKind::NumberToString(_)
+        | LoweredExprKind::CollectionLiteral { .. }
         | LoweredExprKind::Closure { .. } => true,
         LoweredExprKind::Void
         | LoweredExprKind::PostfixIncrement(_)
@@ -2145,6 +2192,11 @@ fn collect_expr_captures(expr: &Expr, available: &HashSet<String>, captured: &mu
             collect_expr_captures(right, available, captured);
         }
         ExprKind::Array(items) => {
+            for item in items {
+                collect_expr_captures(item, available, captured);
+            }
+        }
+        ExprKind::CollectionLiteral { items, .. } => {
             for item in items {
                 collect_expr_captures(item, available, captured);
             }
@@ -2321,6 +2373,11 @@ fn collect_lambda_expr_captures(
             collect_lambda_expr_captures(right, available, lambda_locals, captured);
         }
         ExprKind::Array(items) => {
+            for item in items {
+                collect_lambda_expr_captures(item, available, lambda_locals, captured);
+            }
+        }
+        ExprKind::CollectionLiteral { items, .. } => {
             for item in items {
                 collect_lambda_expr_captures(item, available, lambda_locals, captured);
             }
@@ -4059,6 +4116,17 @@ fn lower_expr(
                 kind: LoweredExprKind::NumberLiteral(value.clone()),
             }
         }
+        ExprKind::CollectionLiteral { items, collection } => lower_collection_literal(
+            expr.span,
+            items,
+            collection,
+            locals,
+            signatures,
+            structs,
+            enums,
+            traits,
+            diagnostics,
+        )?,
         ExprKind::Identifier(name) if locals.contains_key(name) => locals[name]
             .replacement
             .clone()
@@ -5216,6 +5284,91 @@ fn lower_expr(
     }
 
     Some(lowered)
+}
+
+fn lower_collection_literal(
+    span: Span,
+    items: &[Expr],
+    collection: &TypeRef,
+    locals: &HashMap<String, LoweringLocal>,
+    signatures: &HashMap<String, FunctionSignature>,
+    structs: &HashMap<String, LoweredStruct>,
+    enums: &HashMap<String, LoweredEnum>,
+    traits: &HashMap<String, LoweredTrait>,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> Option<LoweredExpr> {
+    let collection = lower_value_type_ref(
+        collection,
+        structs,
+        enums,
+        traits,
+        diagnostics,
+        "collection literals require a concrete collection type in executable builds",
+    )?;
+    if !matches!(collection, LoweredType::Struct(_)) {
+        diagnostics.push(Diagnostic::error(
+            span,
+            "collection literals require a struct type that implements `FromElements<T>`",
+        ));
+        return None;
+    }
+
+    let Some((element, constructor, add)) = traits.values().find_map(|trait_| {
+        let source_name = trait_.name.rsplit("::").next().unwrap_or(&trait_.name);
+        if !source_name.starts_with("FromElements<") {
+            return None;
+        }
+        let element = trait_
+            .methods
+            .iter()
+            .find(|method| method.name == "add" && method.mutable_self)
+            .and_then(|method| method.params.first())
+            .map(|param| param.type_.clone())?;
+        let constructor = qualified_static_trait_method_name(
+            &trait_.name,
+            &collection.name(),
+            "withElementCapacity",
+        );
+        let add = qualified_trait_method_name(&trait_.name, &collection.name(), "add");
+        (signatures.contains_key(&constructor) && signatures.contains_key(&add)).then_some((
+            element,
+            constructor,
+            add,
+        ))
+    }) else {
+        diagnostics.push(Diagnostic::error(
+            span,
+            format!(
+                "collection type `{}` must implement `FromElements<T>` to use a collection literal",
+                collection.name()
+            ),
+        ));
+        return None;
+    };
+
+    let mut lowered_items = Vec::new();
+    for item in items {
+        lowered_items.push(lower_expr(
+            item,
+            locals,
+            signatures,
+            structs,
+            enums,
+            traits,
+            diagnostics,
+            Some(element.clone()),
+            "collection literal elements must match the collection element type",
+        )?);
+    }
+
+    Some(LoweredExpr {
+        type_: collection,
+        kind: LoweredExprKind::CollectionLiteral {
+            constructor,
+            add,
+            items: lowered_items,
+        },
+    })
 }
 
 fn lowered_type_implements_trait(

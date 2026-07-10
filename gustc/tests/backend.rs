@@ -800,6 +800,7 @@ fn main() {
                     type_: basic(BasicType::U32),
                 },
             ],
+            raw_buffer_element: None,
         }]
     );
     assert_eq!(

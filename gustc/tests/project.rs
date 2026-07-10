@@ -1,6 +1,6 @@
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process;
+use std::process::{self, Command};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use gustc::c_codegen::emit_c;
@@ -141,6 +141,101 @@ fn main() {
     );
 
     lower_program(&result.program).expect("root standard library modules should lower");
+}
+
+#[test]
+fn collection_literals_lower_through_from_elements() {
+    let project = TempProject::new();
+    project.write("std/option.gust", include_str!("../../std/option.gust"));
+    project.write("std/iter.gust", include_str!("../../std/iter.gust"));
+    project.write(
+        "std/collection.gust",
+        include_str!("../../std/collection.gust"),
+    );
+    project.write(
+        "std/raw-buffer.gust",
+        include_str!("../../std/raw-buffer.gust"),
+    );
+    project.write(
+        "std/array-list.gust",
+        include_str!("../../std/array-list.gust"),
+    );
+    project.write(
+        "main.gust",
+        r#"from ./std/array-list import { ArrayList }
+from ./std/collection import { FromElements }
+
+struct TestCollection<T> {
+    values: ArrayList<T>
+}
+
+impl<T> FromElements<T> for TestCollection<T> {
+    static fn withElementCapacity(capacity: usize): Self => TestCollection<T> {
+        values: ArrayList<T>.withCapacity(capacity),
+    }
+
+    fn add(mut self, value: T): void {
+        self.values.push(value)
+    }
+}
+
+fn main() {
+    let mut values = [1, 2, 3]
+    values.push(4)
+    values.set(1, 20)
+    let popped = values.pop()
+    let custom: TestCollection<i32> = [5, 6]
+    io.println(values.len().toString())
+    let iterator = values.iterator()
+    let copied = ArrayList.fromIterator(iterator)
+    io.println(copied.len().toString())
+
+    for value in copied {
+        io.println(value.toString())
+    }
+}"#,
+    );
+
+    let result = check_project(&project.path("main.gust")).expect("project should load");
+    assert!(
+        result.diagnostics.is_empty(),
+        "expected collection project to validate, got {:?}",
+        result.diagnostics
+    );
+
+    let lowered = lower_program(&result.program).expect("collection project should lower");
+    let source = emit_c(&lowered);
+    assert!(source.contains("gust_collection"));
+    assert!(source.contains("gust_data"));
+    let c_path = project.path("collection.c");
+    fs::write(&c_path, source).expect("generated C should be written");
+    let output = Command::new("cc")
+        .arg("-fsyntax-only")
+        .arg(&c_path)
+        .output()
+        .expect("C compiler should run");
+    assert!(
+        output.status.success(),
+        "generated collection C should compile: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let executable = project.path("collection");
+    let output = Command::new("cc")
+        .arg(&c_path)
+        .arg("-o")
+        .arg(&executable)
+        .output()
+        .expect("C compiler should build collection executable");
+    assert!(
+        output.status.success(),
+        "generated collection C should build: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let output = Command::new(executable)
+        .output()
+        .expect("collection executable should run");
+    assert!(output.status.success());
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "3\n3\n1\n20\n3\n");
 }
 
 #[test]
