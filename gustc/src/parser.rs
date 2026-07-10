@@ -967,6 +967,12 @@ impl Parser {
             self.expect_kind(&TokenKind::FatArrow, "`=>`");
             let body = if self.check_kind(&TokenKind::LeftBrace) {
                 MatchBranchBody::Block(self.parse_block())
+            } else if self.current_keyword() == Some(Keyword::Break) {
+                let statement = self.parse_break_statement();
+                MatchBranchBody::Block(Block {
+                    span: statement.span,
+                    statements: vec![statement],
+                })
             } else {
                 MatchBranchBody::Expr(self.parse_expression())
             };

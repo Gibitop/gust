@@ -1,0 +1,9 @@
+from ./option import { Option }
+
+trait Iterator<T> {
+    fn next(mut self): Option<T>
+}
+
+trait Iterable<T> {
+    fn iterator(): Iterator<T>
+}

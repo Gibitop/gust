@@ -122,6 +122,47 @@ fn while_break_and_continue_lower_and_emit_c() {
 }
 
 #[test]
+fn bare_break_match_branch_lowers_and_emits_c() {
+    let result = check_source(
+        r#"enum Step {
+    More(i32)
+    Done
+}
+
+fn next(value: i32): Step {
+    if value < 3 {
+        return Step.More(value)
+    }
+    return Step.Done
+}
+
+fn main() {
+    let mut value = 0
+
+    while true {
+        value++
+        match next(value) {
+            Step.More(current) => io.println(current.toString()),
+            Step.Done => break
+        }
+    }
+}"#,
+    );
+
+    assert!(
+        !result.has_errors(),
+        "expected no frontend errors, got {:?}",
+        result.diagnostics
+    );
+
+    let lowered = lower_program(&result.program).expect("bare break match branch should lower");
+    let source = emit_c(&lowered);
+
+    assert!(source.contains("while (true)"));
+    assert!(source.contains("break;\n"));
+}
+
+#[test]
 fn inferred_returning_if_else_emits_c() {
     let result = check_source(
         r#"fn choose(enabled: bool) {
