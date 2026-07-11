@@ -7,12 +7,14 @@ use crate::lower::{
 };
 
 pub fn emit_c(program: &LoweredProgram) -> String {
+    let uses_string = program_uses_type(program, BasicType::String);
     let uses_string_equality = program_uses_string_equality(program);
     let number_to_string_types = number_to_string_types(program);
     let uses_bool = program_uses_type(program, BasicType::Bool)
         || uses_string_equality
         || number_to_string_types.contains(&BasicType::I128);
-    let uses_usize = program_uses_type(program, BasicType::Usize)
+    let uses_usize = uses_string
+        || program_uses_type(program, BasicType::Usize)
         || program
             .structs
             .iter()
@@ -21,6 +23,10 @@ pub fn emit_c(program: &LoweredProgram) -> String {
         program_uses_type(program, BasicType::F32) || program_uses_type(program, BasicType::F64);
     let uses_fixed_width_int = program_uses_fixed_width_int(program);
     let uses_string_concat = program_uses_string_concat(program);
+    let uses_string_builder = program
+        .structs
+        .iter()
+        .any(|struct_| is_string_builder_name(&struct_.name));
     let uses_number_to_string = !number_to_string_types.is_empty();
     let uses_enum_trait_object = program_uses_enum_trait_object(program);
     let uses_println = program.statements.iter().any(statement_uses_println)
@@ -56,6 +62,7 @@ pub fn emit_c(program: &LoweredProgram) -> String {
     }
 
     let uses_alloc = uses_string_concat
+        || uses_string_builder
         || uses_number_to_string
         || uses_enum_trait_object
         || !program.structs.is_empty()
@@ -71,6 +78,18 @@ pub fn emit_c(program: &LoweredProgram) -> String {
         source.push('\n');
     }
 
+    if uses_string {
+        source.push_str("typedef struct {\n");
+        source.push_str("    const unsigned char* gust_data;\n");
+        source.push_str("    size_t gust_byte_len;\n");
+        source.push_str("} gust_rt_string;\n\n");
+        source.push_str("static size_t gust_rt_string_char_len(gust_rt_string value) {\n");
+        source.push_str("    size_t length = 0;\n");
+        source.push_str("    for (size_t index = 0; index < value.gust_byte_len; index++) {\n");
+        source.push_str("        if ((value.gust_data[index] & 0xc0) != 0x80) {\n            length++;\n        }\n");
+        source.push_str("    }\n    return length;\n}\n\n");
+    }
+
     push_c_type_definitions(&mut source, program);
     push_c_function_type_definitions(&mut source, program);
 
@@ -82,14 +101,17 @@ pub fn emit_c(program: &LoweredProgram) -> String {
 
     if uses_string_concat {
         source.push_str(
-            "static char* gust_rt_string_concat(const char* left, const char* right) {\n",
+            "static gust_rt_string gust_rt_string_concat(gust_rt_string left, gust_rt_string right) {\n",
         );
-        source.push_str("    size_t left_len = strlen(left);\n");
-        source.push_str("    size_t right_len = strlen(right);\n");
-        source.push_str("    char* result = gust_rt_alloc(left_len + right_len + 1);\n");
-        source.push_str("    memcpy(result, left, left_len);\n");
-        source.push_str("    memcpy(result + left_len, right, right_len + 1);\n");
-        source.push_str("    return result;\n");
+        source.push_str("    size_t byte_len = left.gust_byte_len + right.gust_byte_len;\n");
+        source.push_str("    unsigned char* data = gust_rt_alloc(byte_len == 0 ? 1 : byte_len);\n");
+        source.push_str("    memcpy(data, left.gust_data, left.gust_byte_len);\n");
+        source.push_str(
+            "    memcpy(data + left.gust_byte_len, right.gust_data, right.gust_byte_len);\n",
+        );
+        source.push_str(
+            "    return (gust_rt_string){ .gust_data = data, .gust_byte_len = byte_len };\n",
+        );
         source.push_str("}\n\n");
     }
 
@@ -98,17 +120,24 @@ pub fn emit_c(program: &LoweredProgram) -> String {
     }
 
     if uses_string_equality {
-        source
-            .push_str("static bool gust_rt_string_equal(const char* left, const char* right) {\n");
-        source.push_str("    return strcmp(left, right) == 0;\n");
+        source.push_str(
+            "static bool gust_rt_string_equal(gust_rt_string left, gust_rt_string right) {\n",
+        );
+        source.push_str("    return left.gust_byte_len == right.gust_byte_len\n");
+        source.push_str(
+            "        && memcmp(left.gust_data, right.gust_data, left.gust_byte_len) == 0;\n",
+        );
         source.push_str("}\n\n");
     }
 
     if uses_println {
-        source.push_str("static void gust_rt_io_println(const char* value) {\n");
-        source.push_str("    puts(value);\n");
+        source.push_str("static void gust_rt_io_println(gust_rt_string value) {\n");
+        source.push_str("    fwrite(value.gust_data, 1, value.gust_byte_len, stdout);\n");
+        source.push_str("    fputc('\\n', stdout);\n");
         source.push_str("}\n\n");
     }
+
+    push_c_string_builder_helpers(&mut source, &program.structs);
 
     push_c_struct_runtime_helpers(&mut source, program);
     push_c_closure_env_structs(&mut source, &program.closure_functions);
@@ -317,6 +346,7 @@ fn expr_uses_type(expr: &LoweredExpr, type_: BasicType) -> bool {
 fn program_uses_fixed_width_int(program: &LoweredProgram) -> bool {
     [
         BasicType::U8,
+        BasicType::Char,
         BasicType::U16,
         BasicType::U32,
         BasicType::U64,
@@ -1113,13 +1143,61 @@ fn push_c_struct(source: &mut String, struct_: &LoweredStruct) {
         source.push_str(";\n");
     }
 
-    if struct_.raw_buffer_element.is_some() {
+    if struct_.raw_buffer_element.is_some() || is_string_builder_name(&struct_.name) {
         source.push_str("    void* gust_data;\n");
         source.push_str("    size_t gust_capacity;\n");
         source.push_str("    size_t gust_length;\n");
     }
 
     source.push_str("};\n");
+}
+
+fn is_string_builder_name(name: &str) -> bool {
+    name == "StringBuilder" || name.ends_with("::StringBuilder")
+}
+
+fn string_builder_method(name: &str) -> Option<&str> {
+    ["withCapacity", "append", "build"]
+        .into_iter()
+        .find(|method| name.ends_with(&format!("StringBuilder.{method}")))
+}
+
+fn push_c_string_builder_helpers(source: &mut String, structs: &[LoweredStruct]) {
+    for struct_ in structs
+        .iter()
+        .filter(|struct_| is_string_builder_name(&struct_.name))
+    {
+        source.push_str("static void gust_rt_string_builder_append_");
+        push_c_struct_name(source, &struct_.name);
+        source.push('(');
+        push_c_struct_name(source, &struct_.name);
+        source.push_str("* builder, gust_rt_string value) {\n");
+        source.push_str("    size_t required = builder->gust_length + value.gust_byte_len;\n");
+        source.push_str("    if (required > builder->gust_capacity) {\n");
+        source.push_str("        size_t capacity = builder->gust_capacity == 0 ? 16 : builder->gust_capacity * 2;\n");
+        source.push_str(
+            "        while (capacity < required) {\n            capacity *= 2;\n        }\n",
+        );
+        source.push_str("        unsigned char* data = gust_rt_alloc(capacity);\n");
+        source.push_str("        if (builder->gust_length > 0) {\n            memcpy(data, builder->gust_data, builder->gust_length);\n        }\n");
+        source.push_str(
+            "        builder->gust_data = data;\n        builder->gust_capacity = capacity;\n",
+        );
+        source.push_str("    }\n");
+        source.push_str("    if (value.gust_byte_len > 0) {\n        memcpy((unsigned char*)builder->gust_data + builder->gust_length, value.gust_data, value.gust_byte_len);\n    }\n");
+        source.push_str("    builder->gust_length = required;\n");
+        source.push_str("}\n\n");
+
+        source.push_str("static gust_rt_string gust_rt_string_builder_build_");
+        push_c_struct_name(source, &struct_.name);
+        source.push('(');
+        push_c_struct_name(source, &struct_.name);
+        source.push_str("* builder) {\n");
+        source.push_str("    unsigned char* data = gust_rt_alloc(builder->gust_length == 0 ? 1 : builder->gust_length);\n");
+        source.push_str("    if (builder->gust_length > 0) {\n        memcpy(data, builder->gust_data, builder->gust_length);\n    }\n");
+        source.push_str("    return (gust_rt_string){ .gust_data = data, .gust_byte_len = builder->gust_length };\n");
+        source.push_str("}\n\n");
+    }
 }
 
 fn raw_buffer_element_type<'a>(
@@ -1598,7 +1676,7 @@ fn push_c_struct_runtime_helpers(source: &mut String, program: &LoweredProgram) 
             push_c_local_name(source, &field.name);
             source.push_str(";\n");
         }
-        if struct_.raw_buffer_element.is_some() {
+        if struct_.raw_buffer_element.is_some() || is_string_builder_name(&struct_.name) {
             source.push_str("    result->gust_data = NULL;\n");
             source.push_str("    result->gust_capacity = 0;\n");
             source.push_str("    result->gust_length = 0;\n");
@@ -1655,6 +1733,14 @@ fn push_c_struct_runtime_helpers(source: &mut String, program: &LoweredProgram) 
             source.push_str("*)result->gust_data)[gust_index] = ");
             push_c_raw_buffer_clone_element(source, element);
             source.push_str(";\n    }\n");
+        }
+
+        if is_string_builder_name(&struct_.name) {
+            source.push_str("    result->gust_capacity = value->gust_capacity;\n");
+            source.push_str("    result->gust_length = value->gust_length;\n");
+            source.push_str("    result->gust_data = NULL;\n");
+            source.push_str("    if (value->gust_capacity > 0) {\n        result->gust_data = gust_rt_alloc(value->gust_capacity);\n    }\n");
+            source.push_str("    if (value->gust_length > 0) {\n        memcpy(result->gust_data, value->gust_data, value->gust_length);\n    }\n");
         }
 
         source.push_str("    return result;\n");
@@ -1988,53 +2074,12 @@ fn push_c_statement(
             push_c_value(source, value, structs);
             source.push_str(";\n");
         }
-        LoweredStatement::Println(value) => match &value.kind {
-            LoweredExprKind::StringLiteral(value) => {
-                push_c_indent(source, indent);
-                source.push_str("gust_rt_io_println(\"");
-                push_c_string_value(source, value);
-                source.push_str("\");\n");
-            }
-            LoweredExprKind::Local(name) => {
-                push_c_indent(source, indent);
-                source.push_str("gust_rt_io_println(");
-                push_c_local_name(source, name);
-                source.push_str(");\n");
-            }
-            LoweredExprKind::StringConcat(_, _)
-            | LoweredExprKind::LocalCell(_)
-            | LoweredExprKind::CapturedLocal { .. }
-            | LoweredExprKind::Not(_)
-            | LoweredExprKind::Logical { .. }
-            | LoweredExprKind::Comparison { .. }
-            | LoweredExprKind::FieldAccess { .. }
-            | LoweredExprKind::EnumPayload { .. }
-            | LoweredExprKind::MatchValue(_)
-            | LoweredExprKind::Match { .. }
-            | LoweredExprKind::NumberToString(_)
-            | LoweredExprKind::Call { .. }
-            | LoweredExprKind::CollectionLiteral { .. }
-            | LoweredExprKind::DynamicCall { .. }
-            | LoweredExprKind::IndirectCall { .. } => {
-                push_c_indent(source, indent);
-                source.push_str("gust_rt_io_println(");
-                push_c_value(source, value, structs);
-                source.push_str(");\n");
-            }
-            LoweredExprKind::Void
-            | LoweredExprKind::BoolLiteral(_)
-            | LoweredExprKind::NumberLiteral(_)
-            | LoweredExprKind::PostfixIncrement(_)
-            | LoweredExprKind::Negate(_)
-            | LoweredExprKind::Arithmetic { .. }
-            | LoweredExprKind::StructLiteral { .. }
-            | LoweredExprKind::TraitObject { .. }
-            | LoweredExprKind::Clone(_)
-            | LoweredExprKind::Closure { .. }
-            | LoweredExprKind::EnumLiteral { .. } => {
-                unreachable!("println only lowers String values")
-            }
-        },
+        LoweredStatement::Println(value) => {
+            push_c_indent(source, indent);
+            source.push_str("gust_rt_io_println(");
+            push_c_value(source, value, structs);
+            source.push_str(");\n");
+        }
         LoweredStatement::Expr(value) => {
             push_c_indent(source, indent);
             push_c_value(source, value, structs);
@@ -2157,9 +2202,9 @@ fn push_c_match_condition(source: &mut String, temp_name: &str, pattern: &Lowere
         LoweredPattern::String(value) => {
             source.push_str("gust_rt_string_equal(");
             source.push_str(temp_name);
-            source.push_str(", \"");
-            push_c_string_value(source, value);
-            source.push_str("\")");
+            source.push_str(", ");
+            push_c_string_literal(source, value);
+            source.push(')');
         }
         LoweredPattern::Wildcard => source.push_str("true"),
     }
@@ -2353,7 +2398,8 @@ fn push_c_type(source: &mut String, type_: &LoweredType) {
 
 fn c_basic_type(type_: BasicType) -> &'static str {
     match type_ {
-        BasicType::String => "const char*",
+        BasicType::String => "gust_rt_string",
+        BasicType::Char => "uint32_t",
         BasicType::Bool => "bool",
         BasicType::U8 => "uint8_t",
         BasicType::U16 => "uint16_t",
@@ -2373,31 +2419,32 @@ fn c_basic_type(type_: BasicType) -> &'static str {
 
 fn push_c_number_to_string_helper(source: &mut String, type_: BasicType) {
     if type_ == BasicType::U128 {
-        source.push_str("static const char* gust_rt_u128_to_string(unsigned __int128 value) {\n");
+        source
+            .push_str("static gust_rt_string gust_rt_u128_to_string(unsigned __int128 value) {\n");
         source.push_str("    char buffer[40];\n");
         source.push_str("    char* cursor = buffer + sizeof(buffer);\n");
-        source.push_str("    *--cursor = '\\0';\n");
         source.push_str("    do {\n");
         source.push_str("        *--cursor = (char)('0' + value % 10);\n");
         source.push_str("        value /= 10;\n");
         source.push_str("    } while (value != 0);\n");
-        source.push_str("    size_t length = (buffer + sizeof(buffer) - 1) - cursor;\n");
-        source.push_str("    char* result = gust_rt_alloc(length + 1);\n");
-        source.push_str("    memcpy(result, cursor, length + 1);\n");
-        source.push_str("    return result;\n");
+        source.push_str("    size_t length = (buffer + sizeof(buffer)) - cursor;\n");
+        source.push_str("    unsigned char* data = gust_rt_alloc(length);\n");
+        source.push_str("    memcpy(data, cursor, length);\n");
+        source.push_str(
+            "    return (gust_rt_string){ .gust_data = data, .gust_byte_len = length };\n",
+        );
         source.push_str("}\n\n");
         return;
     }
 
     if type_ == BasicType::I128 {
-        source.push_str("static const char* gust_rt_i128_to_string(__int128 value) {\n");
+        source.push_str("static gust_rt_string gust_rt_i128_to_string(__int128 value) {\n");
         source.push_str("    bool negative = value < 0;\n");
         source.push_str("    unsigned __int128 magnitude = negative\n");
         source.push_str("        ? (unsigned __int128)(-(value + 1)) + 1\n");
         source.push_str("        : (unsigned __int128)value;\n");
         source.push_str("    char buffer[41];\n");
         source.push_str("    char* cursor = buffer + sizeof(buffer);\n");
-        source.push_str("    *--cursor = '\\0';\n");
         source.push_str("    do {\n");
         source.push_str("        *--cursor = (char)('0' + magnitude % 10);\n");
         source.push_str("        magnitude /= 10;\n");
@@ -2405,10 +2452,12 @@ fn push_c_number_to_string_helper(source: &mut String, type_: BasicType) {
         source.push_str("    if (negative) {\n");
         source.push_str("        *--cursor = '-';\n");
         source.push_str("    }\n");
-        source.push_str("    size_t length = (buffer + sizeof(buffer) - 1) - cursor;\n");
-        source.push_str("    char* result = gust_rt_alloc(length + 1);\n");
-        source.push_str("    memcpy(result, cursor, length + 1);\n");
-        source.push_str("    return result;\n");
+        source.push_str("    size_t length = (buffer + sizeof(buffer)) - cursor;\n");
+        source.push_str("    unsigned char* data = gust_rt_alloc(length);\n");
+        source.push_str("    memcpy(data, cursor, length);\n");
+        source.push_str(
+            "    return (gust_rt_string){ .gust_data = data, .gust_byte_len = length };\n",
+        );
         source.push_str("}\n\n");
         return;
     }
@@ -2421,12 +2470,16 @@ fn push_c_number_to_string_helper(source: &mut String, type_: BasicType) {
         BasicType::I64 => ("%lld", "(long long)value"),
         BasicType::F32 => ("%.9g", "(double)value"),
         BasicType::F64 => ("%.17g", "value"),
-        BasicType::String | BasicType::Bool | BasicType::U128 | BasicType::I128 => {
+        BasicType::String
+        | BasicType::Char
+        | BasicType::Bool
+        | BasicType::U128
+        | BasicType::I128 => {
             unreachable!("only directly formatted numeric types reach this path")
         }
     };
 
-    source.push_str("static const char* gust_rt_");
+    source.push_str("static gust_rt_string gust_rt_");
     source.push_str(type_.name());
     source.push_str("_to_string(");
     source.push_str(c_basic_type(type_));
@@ -2436,13 +2489,15 @@ fn push_c_number_to_string_helper(source: &mut String, type_: BasicType) {
     source.push_str("\", ");
     source.push_str(cast);
     source.push_str(");\n");
-    source.push_str("    char* result = gust_rt_alloc((size_t)length + 1);\n");
-    source.push_str("    snprintf(result, (size_t)length + 1, \"");
+    source.push_str("    unsigned char* data = gust_rt_alloc((size_t)length + 1);\n");
+    source.push_str("    snprintf((char*)data, (size_t)length + 1, \"");
     source.push_str(format);
     source.push_str("\", ");
     source.push_str(cast);
     source.push_str(");\n");
-    source.push_str("    return result;\n");
+    source.push_str(
+        "    return (gust_rt_string){ .gust_data = data, .gust_byte_len = (size_t)length };\n",
+    );
     source.push_str("}\n\n");
 }
 
@@ -2500,9 +2555,7 @@ fn push_c_value(source: &mut String, value: &LoweredExpr, structs: &[LoweredStru
     match &value.kind {
         LoweredExprKind::Void => {}
         LoweredExprKind::StringLiteral(value) => {
-            source.push('"');
-            push_c_string_value(source, value);
-            source.push('"');
+            push_c_string_literal(source, value);
         }
         LoweredExprKind::BoolLiteral(value) => {
             if *value {
@@ -2718,7 +2771,11 @@ fn push_c_value(source: &mut String, value: &LoweredExpr, structs: &[LoweredStru
         }
         LoweredExprKind::FieldAccess { object, field } => {
             push_c_value(source, object, structs);
-            source.push_str("->");
+            if object.type_ == LoweredType::Basic(BasicType::String) {
+                source.push('.');
+            } else {
+                source.push_str("->");
+            }
             push_c_local_name(source, field);
         }
         LoweredExprKind::Clone(object) => {
@@ -2741,6 +2798,56 @@ fn push_c_value(source: &mut String, value: &LoweredExpr, structs: &[LoweredStru
             source.push(')');
         }
         LoweredExprKind::Call { name, args } => {
+            if name == "intrinsic String.len" {
+                source.push_str("gust_rt_string_char_len(");
+                push_c_value(source, &args[0], structs);
+                source.push(')');
+                return;
+            }
+            if let Some(method) = string_builder_method(name) {
+                if method == "withCapacity"
+                    && let LoweredType::Struct(builder_name) = &value.type_
+                    && is_string_builder_name(builder_name)
+                {
+                    source.push_str("({\n    ");
+                    push_c_type(source, &value.type_);
+                    source.push_str(" gust_builder = ");
+                    push_c_struct_new_name(source, builder_name);
+                    source.push_str("(false);\n    gust_builder->gust_capacity = ");
+                    push_c_value(source, &args[0], structs);
+                    source.push_str(";\n    if (gust_builder->gust_capacity > 0) {\n        gust_builder->gust_data = gust_rt_alloc(gust_builder->gust_capacity);\n    }\n    gust_builder;\n})");
+                    return;
+                }
+                let builder = args
+                    .first()
+                    .filter(|builder| matches!(&builder.type_, LoweredType::Struct(name) if is_string_builder_name(name)));
+                if let Some(builder) = builder {
+                    let LoweredType::Struct(builder_name) = &builder.type_ else {
+                        unreachable!("StringBuilder methods require a StringBuilder receiver")
+                    };
+                    match method {
+                        "append" => {
+                            source.push_str("gust_rt_string_builder_append_");
+                            push_c_struct_name(source, builder_name);
+                            source.push('(');
+                            push_c_value(source, builder, structs);
+                            source.push_str(", ");
+                            push_c_value(source, &args[1], structs);
+                            source.push(')');
+                            return;
+                        }
+                        "build" => {
+                            source.push_str("gust_rt_string_builder_build_");
+                            push_c_struct_name(source, builder_name);
+                            source.push('(');
+                            push_c_value(source, builder, structs);
+                            source.push(')');
+                            return;
+                        }
+                        _ => unreachable!("only instance StringBuilder methods reach this branch"),
+                    }
+                }
+            }
             let raw_element = raw_buffer_element_type(structs, &value.type_).or_else(|| {
                 args.first()
                     .and_then(|arg| raw_buffer_element_type(structs, &arg.type_))
@@ -2980,6 +3087,14 @@ fn push_c_value(source: &mut String, value: &LoweredExpr, structs: &[LoweredStru
             source.push(')');
         }
     }
+}
+
+fn push_c_string_literal(source: &mut String, value: &str) {
+    source.push_str("(gust_rt_string){ .gust_data = (const unsigned char*)\"");
+    push_c_string_value(source, value);
+    source.push_str("\", .gust_byte_len = ");
+    source.push_str(&value.len().to_string());
+    source.push_str(" }");
 }
 
 fn push_c_string_value(source: &mut String, value: &str) {

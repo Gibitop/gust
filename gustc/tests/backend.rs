@@ -316,8 +316,8 @@ fn main() {
     let lowered = lower_program(&result.program).expect("returning if/else should lower");
     let source = emit_c(&lowered);
 
-    assert!(source.contains("if (gust_enabled) {\n        return \"enabled\";"));
-    assert!(source.contains("} else {\n        return \"disabled\";"));
+    assert!(source.contains("if (gust_enabled) {\n        return (gust_rt_string){"));
+    assert!(source.contains("} else {\n        return (gust_rt_string){"));
     assert!(source.contains("gust_rt_io_println(gust_fn_"));
     assert!(!source.contains("return ;"));
 }
@@ -358,7 +358,7 @@ fn main() {
     let source = emit_c(&lowered);
 
     assert!(source.contains("static int32_t gust_fn_"));
-    assert!(source.contains("gust_rt_io_println(\"fib works\");"));
+    assert!(source.contains("gust_rt_io_println((gust_rt_string){"));
 }
 
 #[test]
@@ -654,7 +654,7 @@ fn main() {
     let lowered = lower_program(&result.program).expect("closure return should lower");
     let source = emit_c(&lowered);
 
-    assert!(source.contains("static const char* gust_rt_i32_to_string("));
+    assert!(source.contains("static gust_rt_string gust_rt_i32_to_string("));
     assert!(source.contains("gust_rt_io_println(gust_rt_i32_to_string("));
     assert!(source.contains(".gust_call("));
 }
@@ -727,7 +727,7 @@ fn main() {
     let lowered = lower_program(&result.program).expect("function features should lower");
     let source = emit_c(&lowered);
 
-    assert!(source.contains("static const char* gust_fn_"));
+    assert!(source.contains("static gust_rt_string gust_fn_"));
     assert!(source.contains("static void gust_fn_"));
     assert!(source.contains("    return gust_fn_"));
     assert!(source.contains("    gust_rt_io_println(gust_fn_"));
@@ -1027,10 +1027,10 @@ fn hello_world_c_output_is_stable() {
     );
     let lowered = lower_program(&result.program).expect("hello world should lower");
 
-    assert_eq!(
-        emit_c(&lowered),
-        "#include <stdio.h>\n\nstatic void gust_rt_io_println(const char* value) {\n    puts(value);\n}\n\nint main(void) {\n    gust_rt_io_println(\"Hello, world!\");\n    return 0;\n}\n"
-    );
+    let source = emit_c(&lowered);
+    assert!(source.contains("typedef struct {\n    const unsigned char* gust_data;"));
+    assert!(source.contains(".gust_byte_len = 13"));
+    assert!(source.contains("fwrite(value.gust_data, 1, value.gust_byte_len, stdout);"));
 }
 
 #[test]
@@ -1043,10 +1043,10 @@ fn string_local_c_output_is_stable() {
     );
     let lowered = lower_program(&result.program).expect("string local should lower");
 
-    assert_eq!(
-        emit_c(&lowered),
-        "#include <stdio.h>\n\nstatic void gust_rt_io_println(const char* value) {\n    puts(value);\n}\n\nint main(void) {\n    const char* gust_message = \"Hello, string local!\";\n    gust_rt_io_println(gust_message);\n    return 0;\n}\n"
-    );
+    let source = emit_c(&lowered);
+    assert!(source.contains("gust_rt_string gust_message"));
+    assert!(source.contains(".gust_byte_len = 20"));
+    assert!(source.contains("gust_rt_io_println(gust_message);"));
 }
 
 #[test]
@@ -1062,13 +1062,14 @@ fn string_concat_c_output_is_stable() {
     let lowered = lower_program(&result.program).expect("string concat should lower");
     let source = emit_c(&lowered);
 
-    assert_eq!(
-        source,
-        "#include <stdio.h>\n#include <stdlib.h>\n#include <string.h>\n\nstatic void* gust_rt_alloc(size_t size) {\n    return malloc(size);\n}\n\nstatic char* gust_rt_string_concat(const char* left, const char* right) {\n    size_t left_len = strlen(left);\n    size_t right_len = strlen(right);\n    char* result = gust_rt_alloc(left_len + right_len + 1);\n    memcpy(result, left, left_len);\n    memcpy(result + left_len, right, right_len + 1);\n    return result;\n}\n\nstatic void gust_rt_io_println(const char* value) {\n    puts(value);\n}\n\nint main(void) {\n    const char* gust_name = \"Gust\";\n    const char* gust_message = gust_rt_string_concat(gust_rt_string_concat(\"Hello, \", gust_name), \"!\");\n    gust_rt_io_println(gust_rt_string_concat(\"Inline \", \"concat\"));\n    gust_rt_io_println(gust_message);\n    return 0;\n}\n"
-    );
+    assert!(source.contains(
+        "static gust_rt_string gust_rt_string_concat(gust_rt_string left, gust_rt_string right)"
+    ));
+    assert!(source.contains("size_t byte_len = left.gust_byte_len + right.gust_byte_len;"));
+    assert!(source.contains(".gust_byte_len = 4"));
     assert_eq!(source.matches("malloc(").count(), 1);
     assert!(source.contains("return malloc(size);"));
-    assert!(source.contains("char* result = gust_rt_alloc(left_len + right_len + 1);"));
+    assert!(source.contains("unsigned char* data = gust_rt_alloc(byte_len == 0 ? 1 : byte_len);"));
 }
 
 #[test]
@@ -1103,10 +1104,11 @@ fn main() {
     );
     let lowered = lower_program(&result.program).expect("string helper should lower");
 
-    assert_eq!(
-        emit_c(&lowered),
-        "#include <stdio.h>\n#include <stdlib.h>\n#include <string.h>\n\nstatic void* gust_rt_alloc(size_t size) {\n    return malloc(size);\n}\n\nstatic char* gust_rt_string_concat(const char* left, const char* right) {\n    size_t left_len = strlen(left);\n    size_t right_len = strlen(right);\n    char* result = gust_rt_alloc(left_len + right_len + 1);\n    memcpy(result, left, left_len);\n    memcpy(result + left_len, right, right_len + 1);\n    return result;\n}\n\nstatic void gust_rt_io_println(const char* value) {\n    puts(value);\n}\n\n// Gust function: greet\nstatic const char* gust_fn_fb1de34a_greet(const char* gust_name) {\n    return gust_rt_string_concat(\"Hello, \", gust_name);\n}\n\nint main(void) {\n    gust_rt_io_println(gust_rt_string_concat(gust_fn_fb1de34a_greet(\"Gust\"), \"!\"));\n    return 0;\n}\n"
+    let source = emit_c(&lowered);
+    assert!(
+        source.contains("static gust_rt_string gust_fn_fb1de34a_greet(gust_rt_string gust_name)")
     );
+    assert!(source.contains("return gust_rt_string_concat((gust_rt_string){"));
 }
 
 #[test]
@@ -1132,13 +1134,13 @@ fn main() {
     assert!(source.contains("typedef struct gust_struct_"));
     assert!(source.contains("struct gust_struct_"));
     assert!(source.contains("_Person {"));
-    assert!(source.contains("const char* gust_name;"));
+    assert!(source.contains("gust_rt_string gust_name;"));
     assert!(source.contains("uint32_t gust_age;"));
-    assert!(source.contains("const char* gust_name, uint32_t gust_age)"));
+    assert!(source.contains("gust_rt_string gust_name, uint32_t gust_age)"));
     assert!(source.contains("result->gust_name = gust_name;"));
     assert!(source.contains("result->gust_age = gust_age;"));
     assert!(source.contains("gust_person = gust_rt_new_gust_struct_"));
-    assert!(source.contains("_Person(\"Gust\", 1);"));
+    assert!(source.contains("_Person((gust_rt_string){"));
     assert!(source.contains("gust_rt_io_println(gust_person->gust_name);"));
 }
 
@@ -1174,7 +1176,7 @@ fn main() {
     assert!(source.contains("struct gust_struct_f1168775_Lang {"));
     assert!(source.contains("static gust_struct_f1168775_Lang* gust_fn_de4514cf_makeLang() {"));
     assert!(source.contains(
-        "static const char* gust_fn_1f1b2f34_getName(gust_struct_f1168775_Lang* gust_lang) {"
+        "static gust_rt_string gust_fn_1f1b2f34_getName(gust_struct_f1168775_Lang* gust_lang) {"
     ));
     assert!(source.contains("return gust_lang->gust_name;"));
     assert!(source.contains("gust_struct_f1168775_Lang* gust_lang = gust_fn_de4514cf_makeLang();"));
@@ -1198,8 +1200,8 @@ fn main() {
 
     assert!(source.contains("static void* gust_rt_alloc(size_t size)"));
     assert!(source.contains("// Gust function: alloc"));
-    assert!(source.contains("static const char* gust_fn_bab1bb16_alloc("));
-    assert!(source.contains("gust_rt_io_println(gust_fn_bab1bb16_alloc(\"Gust\"));"));
+    assert!(source.contains("static gust_rt_string gust_fn_bab1bb16_alloc("));
+    assert!(source.contains("gust_rt_io_println(gust_fn_bab1bb16_alloc((gust_rt_string){"));
 }
 
 #[test]
@@ -1215,10 +1217,8 @@ fn basic_local_defaults_c_output_is_stable() {
     );
     let lowered = lower_program(&result.program).expect("basic defaults should lower");
 
-    assert_eq!(
-        emit_c(&lowered),
-        "#include <stdbool.h>\n#include <stddef.h>\n#include <stdint.h>\n\nint main(void) {\n    const char* gust_message = \"\";\n    int32_t gust_count = 0;\n    bool gust_flag = false;\n    uint8_t gust_byte = 0;\n    size_t gust_size = 0;\n    return 0;\n}\n"
-    );
+    let source = emit_c(&lowered);
+    assert!(source.contains("gust_rt_string gust_message = (gust_rt_string){ .gust_data = (const unsigned char*)\"\", .gust_byte_len = 0 };"));
 }
 
 #[test]
@@ -1232,10 +1232,9 @@ fn initialized_basic_locals_c_output_is_stable() {
     );
     let lowered = lower_program(&result.program).expect("initialized basics should lower");
 
-    assert_eq!(
-        emit_c(&lowered),
-        "#include <stdbool.h>\n#include <stdint.h>\n\nint main(void) {\n    const char* gust_message = \"Hello, initialized!\";\n    uint64_t gust_count = 42;\n    bool gust_flag = true;\n    return 0;\n}\n"
-    );
+    let source = emit_c(&lowered);
+    assert!(source.contains("gust_rt_string gust_message = (gust_rt_string){"));
+    assert!(source.contains(".gust_byte_len = 19"));
 }
 
 #[test]
@@ -1371,10 +1370,35 @@ fn c_output_escapes_string_values() {
     );
     let lowered = lower_program(&result.program).expect("escaped string should lower");
 
-    assert_eq!(
-        emit_c(&lowered),
-        "#include <stdio.h>\n\nstatic void gust_rt_io_println(const char* value) {\n    puts(value);\n}\n\nint main(void) {\n    gust_rt_io_println(\"line\\n\\\"quote\\\"\\\\slash\");\n    return 0;\n}\n"
+    let source = emit_c(&lowered);
+    assert!(source.contains("line\\n\\\"quote\\\"\\\\slash"));
+    assert!(source.contains(".gust_byte_len = 18"));
+}
+
+#[test]
+fn strings_preserve_embedded_nul_bytes() {
+    let result = check_source(
+        r#"fn main() {
+    let value = "left\0right"
+    if value == "left\0right" {
+        io.println(value + "!")
+    }
+}"#,
     );
+
+    assert!(
+        !result.has_errors(),
+        "expected no frontend errors, got {:?}",
+        result.diagnostics
+    );
+
+    let lowered = lower_program(&result.program).expect("embedded NUL string should lower");
+    let source = emit_c(&lowered);
+
+    assert!(source.contains(".gust_byte_len = 10"));
+    assert!(source.contains("memcmp(left.gust_data, right.gust_data, left.gust_byte_len) == 0;"));
+    assert!(!source.contains("strlen("));
+    assert!(!source.contains("strcmp("));
 }
 
 #[test]
@@ -1478,7 +1502,7 @@ fn main() {
     assert!(source.contains("gust_state->gust_count = (gust_state->gust_count + 3);"));
     assert!(source.contains("gust_state->gust_flags = (gust_state->gust_flags | 2);"));
     assert!(source.contains(
-        "gust_state->gust_label = gust_rt_string_concat(gust_state->gust_label, \" updated\");"
+        "gust_state->gust_label = gust_rt_string_concat(gust_state->gust_label, (gust_rt_string){"
     ));
     assert!(source.contains("(gust_state->gust_count++);"));
 }
@@ -1601,7 +1625,9 @@ fn compound_assignments_emit_c() {
     assert!(source.contains("gust_count = (gust_count * 3);"));
     assert!(source.contains("gust_count = (gust_count / 2);"));
     assert!(source.contains("gust_count = (gust_count % 5);"));
-    assert!(source.contains("gust_message = gust_rt_string_concat(gust_message, \" world\");"));
+    assert!(
+        source.contains("gust_message = gust_rt_string_concat(gust_message, (gust_rt_string){")
+    );
 }
 
 #[test]
@@ -1668,7 +1694,7 @@ fn main() {
 
     assert!(source.contains("_Person* gust_person)"));
     assert!(source.contains(
-        "gust_person->gust_name = gust_rt_string_concat(gust_person->gust_name, \"!\");"
+        "gust_person->gust_name = gust_rt_string_concat(gust_person->gust_name, (gust_rt_string){"
     ));
     assert!(source.contains("gust_fn_"));
     assert!(source.contains("(gust_person);"));
@@ -1764,7 +1790,7 @@ fn main() {
     let source = emit_c(&lowered);
     assert!(source.contains("// Gust function: Lang.greeting"));
     assert!(source.contains("gust_self->gust_name"));
-    assert!(source.contains("gust_lang, \"Hello, \""));
+    assert!(source.contains("gust_lang, (gust_rt_string){"));
 }
 
 #[test]
@@ -2080,9 +2106,10 @@ fn string_comparisons_emit_value_equality_runtime_helper() {
     let source = emit_c(&lowered);
 
     assert!(source.contains("static bool gust_rt_string_equal("));
-    assert!(source.contains("return strcmp(left, right) == 0;"));
-    assert!(source.contains("if (gust_rt_string_equal(gust_name, \"Gust\"))"));
-    assert!(source.contains("if (!gust_rt_string_equal(gust_name, \"Rust\"))"));
+    assert!(source.contains("return left.gust_byte_len == right.gust_byte_len"));
+    assert!(source.contains("memcmp(left.gust_data, right.gust_data, left.gust_byte_len) == 0;"));
+    assert!(source.contains("if (gust_rt_string_equal(gust_name, (gust_rt_string){"));
+    assert!(source.contains("if (!gust_rt_string_equal(gust_name, (gust_rt_string){"));
 }
 
 #[test]
@@ -2443,10 +2470,9 @@ fn main() {
     let lowered = lower_program(&result.program).expect("block match expression should lower");
     let source = emit_c(&lowered);
 
-    assert!(source.contains("const char* gust_internal_match_value_"));
+    assert!(source.contains("gust_rt_string gust_internal_match_value_"));
     assert!(source.contains("_result;"));
-    assert!(source.contains("_result = \"Hello\";"));
-    assert!(source.contains("_result = \"Hi\";"));
+    assert!(source.contains("_result = (gust_rt_string){"));
     assert!(source.contains("gust_rt_io_println(gust_rt_string_concat("));
 }
 

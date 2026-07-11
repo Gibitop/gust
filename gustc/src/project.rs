@@ -786,7 +786,11 @@ impl<'names, 'diagnostics> ModuleRewriter<'names, 'diagnostics> {
                 }
             }
             ExprKind::Lambda(function) => self.rewrite_function(function),
-            ExprKind::Number(_) | ExprKind::String(_) | ExprKind::Bool(_) | ExprKind::Missing => {}
+            ExprKind::Number(_)
+            | ExprKind::String(_)
+            | ExprKind::Char(_)
+            | ExprKind::Bool(_)
+            | ExprKind::Missing => {}
         }
     }
 
@@ -1134,6 +1138,7 @@ fn shift_expr(expr: &mut Expr, offset: usize) {
         ExprKind::Identifier(_)
         | ExprKind::Number(_)
         | ExprKind::String(_)
+        | ExprKind::Char(_)
         | ExprKind::Bool(_)
         | ExprKind::Missing => {}
     }

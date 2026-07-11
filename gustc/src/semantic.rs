@@ -1440,6 +1440,7 @@ impl Analyzer {
                 }),
             },
             ExprKind::String(_) => Type::Basic(BasicType::String),
+            ExprKind::Char(_) => Type::Basic(BasicType::Char),
             ExprKind::Bool(_) => Type::Basic(BasicType::Bool),
             ExprKind::Missing => Type::Unknown,
             ExprKind::GenericType { .. } => Type::Unknown,
@@ -2028,8 +2029,10 @@ impl Analyzer {
 
         let supported = match op {
             BinaryOp::Equal | BinaryOp::NotEqual => {
-                matches!(left_type, Type::Basic(BasicType::String | BasicType::Bool))
-                    || matches!(&left_type, Type::Basic(type_) if type_.is_numeric())
+                matches!(
+                    left_type,
+                    Type::Basic(BasicType::String | BasicType::Char | BasicType::Bool)
+                ) || matches!(&left_type, Type::Basic(type_) if type_.is_numeric())
             }
             BinaryOp::Less | BinaryOp::LessEqual | BinaryOp::Greater | BinaryOp::GreaterEqual => {
                 matches!(&left_type, Type::Basic(type_) if type_.is_numeric())
@@ -2364,6 +2367,30 @@ impl Analyzer {
             }
 
             return Type::Basic(BasicType::String);
+        }
+
+        if object_type == Type::Basic(BasicType::String)
+            && matches!(source_name, "byteLen" | "len" | "isEmpty")
+            && requested_trait.is_none()
+        {
+            if !args.is_empty() {
+                self.diagnostics.push(Diagnostic::error(
+                    expr.span,
+                    format!(
+                        "method `String.{source_name}` expects 0 arguments, got {}",
+                        args.len()
+                    ),
+                ));
+                for arg in args {
+                    self.validate_expr(arg);
+                }
+            }
+
+            return if matches!(source_name, "byteLen" | "len") {
+                Type::Basic(BasicType::Usize)
+            } else {
+                Type::Basic(BasicType::Bool)
+            };
         }
 
         let intrinsic = if requested_trait.is_none() {
@@ -3299,6 +3326,7 @@ impl Analyzer {
                 })
             }
             ExprKind::String(_)
+            | ExprKind::Char(_)
             | ExprKind::Number(_)
             | ExprKind::Bool(_)
             | ExprKind::Binary { .. }

@@ -1983,6 +1983,7 @@ impl Monomorphizer {
             | ExprKind::GenericType { .. }
             | ExprKind::Number(_)
             | ExprKind::String(_)
+            | ExprKind::Char(_)
             | ExprKind::Bool(_)
             | ExprKind::Missing => {}
         }
@@ -2984,6 +2985,7 @@ impl Monomorphizer {
                 }))
             }
             ExprKind::String(_) => Some(inferred("String")),
+            ExprKind::Char(_) => Some(inferred("Char")),
             ExprKind::Bool(_) => Some(inferred("bool")),
             ExprKind::StructInit { name, args, fields } => {
                 if name == "Self"
@@ -3966,6 +3968,7 @@ impl<'items> MethodReachability<'items> {
                 None
             }
             ExprKind::String(_) => Some("String".to_string()),
+            ExprKind::Char(_) => Some("Char".to_string()),
             ExprKind::Number(value) => Some(
                 if crate::ast::number_literal_is_float(value) {
                     "f64"
