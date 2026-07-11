@@ -6,7 +6,7 @@ use gustc::parser::Parser;
 
 #[test]
 fn hello_world_has_no_frontend_errors() {
-    let source = include_str!("../../examples/hello-world.gust");
+    let source = include_str!("../../examples/helloWorld.gust");
     let result = check_source(source);
 
     assert!(

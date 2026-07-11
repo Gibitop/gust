@@ -1,7 +1,7 @@
 from ./collection import { FromElements, FromIterator }
 from ./iter import { Iterable, Iterator }
 from ./option import { Option }
-from ./raw-buffer import { RawBuffer }
+from ./rawBuffer import { RawBuffer }
 
 struct ArrayList<T> {
     storage: RawBuffer<T>

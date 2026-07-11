@@ -173,12 +173,12 @@ fn string_intrinsics_are_available_without_imports() {
 fn string_builder_uses_growable_runtime_storage() {
     let project = TempProject::new();
     project.write(
-        "std/string-builder.gust",
-        include_str!("../../std/string-builder.gust"),
+        "std/stringBuilder.gust",
+        include_str!("../../std/stringBuilder.gust"),
     );
     project.write(
         "examples/main.gust",
-        r#"from ../std/string-builder import { StringBuilder }
+        r#"from ../std/stringBuilder import { StringBuilder }
 
 fn main() {
     let mut builder = StringBuilder.withCapacity(1)
@@ -211,16 +211,16 @@ fn collection_literals_lower_through_from_elements() {
         include_str!("../../std/collection.gust"),
     );
     project.write(
-        "std/raw-buffer.gust",
-        include_str!("../../std/raw-buffer.gust"),
+        "std/rawBuffer.gust",
+        include_str!("../../std/rawBuffer.gust"),
     );
     project.write(
-        "std/array-list.gust",
-        include_str!("../../std/array-list.gust"),
+        "std/arrayList.gust",
+        include_str!("../../std/arrayList.gust"),
     );
     project.write(
         "main.gust",
-        r#"from ./std/array-list import { ArrayList }
+        r#"from ./std/arrayList import { ArrayList }
 from ./std/collection import { FromElements }
 
 struct TestCollection<T> {
