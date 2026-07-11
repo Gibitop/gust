@@ -528,7 +528,7 @@ fn direct_string_concat_println_lowers_successfully() {
 #[test]
 fn string_returning_helper_lowers_successfully() {
     let result = check_source(
-        r#"fn greet(name: String): String {
+        r#"fn greet(name: string): string {
     return "Hello, " + name
 }
 
@@ -662,7 +662,7 @@ fn main() {
 #[test]
 fn incompatible_inferred_return_function_values_are_lowering_errors() {
     let result = check_source(
-        r#"fn useString(f: fn(i32): String): String {
+        r#"fn useString(f: fn(i32): string): string {
     return f(1)
 }
 
@@ -687,7 +687,7 @@ fn main() {
     assert!(
         diagnostics.iter().any(|diagnostic| diagnostic
             .message
-            .contains("expected value of type `fn(i32): String`, got `fn(i32): i32`")),
+            .contains("expected value of type `fn(i32): string`, got `fn(i32): i32`")),
         "expected inferred function return mismatch, got {diagnostics:?}"
     );
 }
@@ -695,15 +695,15 @@ fn main() {
 #[test]
 fn inferred_arrow_void_and_early_return_helpers_emit_c() {
     let result = check_source(
-        r#"fn inferred(name: String) {
+        r#"fn inferred(name: string) {
     return "Hello, " + name
 }
 
-fn arrow(name: String) => inferred(name)
+fn arrow(name: string) => inferred(name)
 
 fn noop(): void {}
 
-fn early(): String {
+fn early(): string {
     return arrow("Gust")
     return "unreachable"
 }
@@ -758,7 +758,7 @@ fn main() {
     assert_eq!(diagnostics.len(), 1);
     assert_eq!(
         diagnostics[0].message,
-        "function `inconsistent` has multiple return types (`String` and `bool`); inferred return types must be consistent"
+        "function `inconsistent` has multiple return types (`string` and `bool`); inferred return types must be consistent"
     );
 }
 
@@ -766,7 +766,7 @@ fn main() {
 fn basic_struct_local_lowers_successfully() {
     let result = check_source(
         r#"struct Person {
-    name: String
+    name: string
     age: u32
 }
 
@@ -837,7 +837,7 @@ fn main() {
 fn struct_field_access_lowers_successfully() {
     let result = check_source(
         r#"struct Person {
-    name: String
+    name: string
     age: u32
 }
 
@@ -846,7 +846,7 @@ fn main() {
         name: "Gust",
         age: 1,
     }
-    let name: String = person.name
+    let name: string = person.name
     io.println(person.name)
 }"#,
     );
@@ -894,7 +894,7 @@ fn main() {
 fn struct_helper_values_lower_successfully() {
     let result = check_source(
         r#"struct Lang {
-    name: String
+    name: string
     version: u32
 }
 
@@ -905,7 +905,7 @@ fn makeLang(): Lang {
     }
 }
 
-fn getName(lang: Lang): String {
+fn getName(lang: Lang): string {
     return lang.name
 }
 
@@ -1094,7 +1094,7 @@ fn main() {
 #[test]
 fn string_helper_call_c_output_is_stable() {
     let result = check_source(
-        r#"fn greet(name: String): String {
+        r#"fn greet(name: string): string {
     return "Hello, " + name
 }
 
@@ -1115,7 +1115,7 @@ fn main() {
 fn basic_struct_c_output_contains_typedef_literal_and_field_access() {
     let result = check_source(
         r#"struct Person {
-    name: String
+    name: string
     age: u32
 }
 
@@ -1145,10 +1145,35 @@ fn main() {
 }
 
 #[test]
+fn empty_structs_emit_c_padding_without_gust_fields() {
+    let result = check_source(
+        r#"struct Token {
+}
+
+fn main() {
+    let token = Token {}
+    let copied = token.clone()
+}"#,
+    );
+    assert!(
+        !result.has_errors(),
+        "expected empty struct to validate, got {:?}",
+        result.diagnostics
+    );
+
+    let lowered = lower_program(&result.program).expect("empty struct should lower");
+    let source = emit_c(&lowered);
+
+    assert!(source.contains("// Gust struct: Token"));
+    assert!(source.contains("bool gust_empty;"));
+    assert!(source.contains("gust_rt_new_"));
+}
+
+#[test]
 fn struct_helper_values_c_output_contains_struct_signatures() {
     let result = check_source(
         r#"struct Lang {
-    name: String
+    name: string
     version: u32
 }
 
@@ -1159,7 +1184,7 @@ fn makeLang(): Lang {
     }
 }
 
-fn getName(lang: Lang): String {
+fn getName(lang: Lang): string {
     return lang.name
 }
 
@@ -1187,7 +1212,7 @@ fn main() {
 #[test]
 fn user_function_named_alloc_does_not_collide_with_runtime_alloc() {
     let result = check_source(
-        r#"fn alloc(name: String): String {
+        r#"fn alloc(name: string): string {
     return "Hello, " + name
 }
 
@@ -1208,7 +1233,7 @@ fn main() {
 fn basic_local_defaults_c_output_is_stable() {
     let result = check_source(
         r#"fn main() {
-    let message: String
+    let message: string
     let count: i32
     let flag: bool
     let byte: u8
@@ -1320,7 +1345,7 @@ fn numeric_to_string_lowers_and_emits_type_specific_runtime_helpers() {
 #[test]
 fn numeric_to_string_is_lowered_as_an_intrinsic_expression() {
     let result = check_source(
-        r#"fn i32.toString(): String => "extension"
+        r#"fn i32.toString(): string => "extension"
 
 fn main() {
     let number: i32 = 42
@@ -1424,7 +1449,7 @@ fn println_rejects_non_string_operands() {
         diagnostics
             .iter()
             .any(|diagnostic| diagnostic.severity == Severity::Error
-                && diagnostic.message.contains("only accepts `String` values")
+                && diagnostic.message.contains("only accepts `string` values")
                 && diagnostic.message.contains("`i32`")),
         "expected numeric println diagnostic, got {diagnostics:?}"
     );
@@ -1432,7 +1457,7 @@ fn println_rejects_non_string_operands() {
         diagnostics
             .iter()
             .any(|diagnostic| diagnostic.severity == Severity::Error
-                && diagnostic.message.contains("only accepts `String` values")
+                && diagnostic.message.contains("only accepts `string` values")
                 && diagnostic.message.contains("`bool`")),
         "expected bool println diagnostic, got {diagnostics:?}"
     );
@@ -1472,7 +1497,7 @@ fn mutable_struct_field_operations_emit_c() {
         r#"struct State {
     count: u32
     flags: u8
-    label: String
+    label: string
 }
 
 fn main() {
@@ -1551,7 +1576,7 @@ fn main() {
 fn struct_assignment_aliases_and_clone_deep_copies() {
     let result = check_source(
         r#"struct A {
-    text: String
+    text: string
 }
 
 struct Pair {
@@ -1668,7 +1693,7 @@ fn mutable_struct_parameters_lower_as_shared_references() {
     let result = check_source(
         r#"
 struct Person {
-    name: String
+    name: string
 }
 
 fn rename(mut person: Person): void {
@@ -1747,9 +1772,9 @@ fn basics_reaches_build_mode_rejection() {
 fn struct_methods_lower_to_functions_with_self_receivers() {
     let result = check_source(
         r#"struct Lang {
-    name: String
+    name: string
 
-    fn greeting(prefix: String) {
+    fn greeting(prefix: string) {
         return prefix + self.name
     }
 }
@@ -1887,7 +1912,7 @@ fn inferred_constructor_return_preserves_argument_mutability() {
     let result = check_source(
         r#"
 struct A {
-    value: String
+    value: string
 }
 
 struct Container {
@@ -1937,14 +1962,14 @@ fn main() {
 fn extension_functions_lower_with_local_static_dispatch() {
     let result = check_source(
         r#"struct Greeter {
-    name: String
+    name: string
 
-    fn label(): String => "member"
+    fn label(): string => "member"
 }
 
-fn Greeter.label(): String => "extension"
-fn Greeter.greeting(prefix: String) => prefix + self.name
-fn String.withSuffix(suffix: String) => self + suffix
+fn Greeter.label(): string => "extension"
+fn Greeter.greeting(prefix: string) => prefix + self.name
+fn string.withSuffix(suffix: string) => self + suffix
 
 fn main() {
     let greeter = Greeter { name: "Gust" }
@@ -1977,7 +2002,7 @@ fn main() {
         lowered
             .functions
             .iter()
-            .any(|function| function.name == "extension String.withSuffix")
+            .any(|function| function.name == "extension string.withSuffix")
     );
 
     let LoweredStatement::Println(LoweredExpr {
@@ -1991,21 +2016,21 @@ fn main() {
 
     let source = emit_c(&lowered);
     assert!(source.contains("// Gust function: extension Greeter.greeting"));
-    assert!(source.contains("// Gust function: extension String.withSuffix"));
+    assert!(source.contains("// Gust function: extension string.withSuffix"));
 }
 
 #[test]
 fn static_members_and_extensions_lower_without_receivers() {
     let result = check_source(
         r#"struct Greeter {
-    name: String
+    name: string
 
-    static fn new(name: String): Self => Self { name: name }
-    static fn label(): String => "member"
+    static fn new(name: string): Self => Self { name: name }
+    static fn label(): string => "member"
 }
 
 static fn Greeter.default(): Self => Self.new("Gust")
-static fn Greeter.label(): String => "extension"
+static fn Greeter.label(): string => "extension"
 
 fn main() {
     let greeter = Greeter.default()
@@ -2255,7 +2280,7 @@ fn main() {
 fn payload_enums_and_matches_emit_tagged_union_c() {
     let result = check_source(
         r#"struct Person {
-    name: String
+    name: string
 }
 
 enum Being {
@@ -2263,7 +2288,7 @@ enum Being {
     Unknown
 }
 
-fn greeting(being: Being): String {
+fn greeting(being: Being): string {
     return match being {
         Being.Person(person) => "Hello, " + person.name,
         Being.Unknown => "Hello, stranger",
@@ -2300,7 +2325,7 @@ fn struct_enum_fields_emit_after_their_enum_definition() {
 }
 
 enum Being {
-    Person(String)
+    Person(string)
     Unknown
 }
 
@@ -2336,11 +2361,11 @@ fn main() {
 fn computed_block_matches_and_string_patterns_emit_c() {
     let result = check_source(
         r#"enum Being {
-    Person(String)
+    Person(string)
     Unknown
 }
 
-fn constructBeing(kind: String): Being {
+fn constructBeing(kind: string): Being {
     return match kind {
         "person" => Being.Person("Ada"),
         _ => Being.Unknown,
@@ -2387,9 +2412,9 @@ fn main() {
 fn mutable_enum_payload_patterns_lower_to_payload_access() {
     let result = check_source(
         r#"struct StringContainer {
-    value: String
+    value: string
 
-    fn set(mut self, value: String) {
+    fn set(mut self, value: string) {
         self.value = value
     }
 }
@@ -2398,7 +2423,7 @@ enum Option {
     Some(StringContainer)
     None
 
-    fn set(mut self, value: String) {
+    fn set(mut self, value: string) {
         match self {
             Option.Some(mut container) => container.set(value),
             Option.None => {},
@@ -2433,11 +2458,11 @@ fn main() {
 fn block_bodied_match_expression_branches_emit_c() {
     let result = check_source(
         r#"enum Being {
-    Person(String)
+    Person(string)
     Unknown
 }
 
-fn constructBeing(kind: String): Being {
+fn constructBeing(kind: string): Being {
     if kind == "person" {
         return Being.Person("Ada")
     }
@@ -2526,23 +2551,23 @@ fn main() {
     let lowered = lower_program(&result.program).expect("generic structs should lower");
     let source = emit_c(&lowered);
 
-    assert!(source.contains("// Gust struct: Box<String>"));
+    assert!(source.contains("// Gust struct: Box<string>"));
     assert!(source.contains("// Gust struct: Box<bool>"));
     assert!(source.contains("// Gust struct: Box<i32>"));
-    assert!(source.contains("// Gust function: Box<String>.get"));
+    assert!(source.contains("// Gust function: Box<string>.get"));
     assert!(source.contains("// Gust function: Box<i32>.get"));
     assert!(source.contains("// Gust function: static Box<i32>.new"));
     assert!(source.contains("// Gust function: static Box<i32>.build"));
-    assert!(source.contains("// Gust function: Box<String>.getValue"));
+    assert!(source.contains("// Gust function: Box<string>.getValue"));
     assert!(source.contains("// Gust function: Box<i32>.getValue"));
-    assert!(!source.contains("// Gust function: static Box<String>.new"));
+    assert!(!source.contains("// Gust function: static Box<string>.new"));
     assert!(!source.contains("// Gust function: static Box<bool>.new"));
-    assert!(!source.contains("// Gust function: static Box<String>.build"));
+    assert!(!source.contains("// Gust function: static Box<string>.build"));
     assert!(!source.contains("// Gust function: Box<bool>.get"));
     assert!(!source.contains("// Gust function: Box<bool>.getValue"));
     assert!(!source.contains(".addOne"));
     assert!(!source.contains(".unused"));
-    assert!(!source.contains("// Gust function: Box<String>.replace"));
+    assert!(!source.contains("// Gust function: Box<string>.replace"));
 }
 
 #[test]
@@ -2557,7 +2582,7 @@ enum Wrapper<T> {
     Value(T)
 }
 
-fn optionText(value: Option<String>): String {
+fn optionText(value: Option<string>): string {
     return match value {
         Option.Some(inner) => inner,
         Option.None => "missing",
@@ -2575,7 +2600,7 @@ fn nestedNumber(value: Wrapper<Option<i32>>): i32 {
 
 fn main() {
     let number = Option.Some(42)
-    let text = Option<String>.Some("Gust")
+    let text = Option<string>.Some("Gust")
     let nested = Wrapper.Value(number)
     io.println(optionText(text))
     io.println(nestedNumber(nested).toString())
@@ -2591,7 +2616,7 @@ fn main() {
     let lowered = lower_program(&result.program).expect("generic enums should lower");
     let source = emit_c(&lowered);
 
-    assert!(source.contains("// Gust enum: Option<String>"));
+    assert!(source.contains("// Gust enum: Option<string>"));
     assert!(source.contains("// Gust enum: Option<i32>"));
     assert!(source.contains("// Gust enum: Wrapper<Option<i32>>"));
     assert!(source.contains(".gust_payload."));
@@ -2619,7 +2644,7 @@ fn main() {
     let lowered = lower_program(&result.program).expect("generic functions should lower");
     let c = emit_c(&lowered);
     assert!(c.contains("identity<i32>"));
-    assert!(c.contains("identity<String>"));
+    assert!(c.contains("identity<string>"));
 }
 
 #[test]
@@ -2647,7 +2672,7 @@ struct Box<T> {
     fn unused<U>(value: U): U => value
 }
 
-fn describe(value: Option<String>): String {
+fn describe(value: Option<string>): string {
     return match value {
         Option.Some(inner) => inner,
         Option.None => "empty",
@@ -2657,8 +2682,8 @@ fn describe(value: Option<String>): String {
 fn main() {
     let number = Box { value: 42 }
     let pair = number.pair("answer")
-    let staticPair = Box<i32>.make<String>(7, "static")
-    let empty: Option<String> = number.empty()
+    let staticPair = Box<i32>.make<string>(7, "static")
+    let empty: Option<string> = number.empty()
     io.println(pair.second)
     io.println(staticPair.second)
     io.println(describe(empty))
@@ -2672,11 +2697,11 @@ fn main() {
 
     let lowered = lower_program(&result.program).expect("generic methods should lower");
     let c = emit_c(&lowered);
-    assert!(c.contains("// Gust function: Box<i32>.pair<String>"));
-    assert!(c.contains("// Gust function: static Box<i32>.make<String>"));
-    assert!(c.contains("// Gust function: Box<i32>.empty<String>"));
-    assert!(c.contains("// Gust struct: Pair<i32, String>"));
-    assert!(c.contains("// Gust enum: Option<String>"));
+    assert!(c.contains("// Gust function: Box<i32>.pair<string>"));
+    assert!(c.contains("// Gust function: static Box<i32>.make<string>"));
+    assert!(c.contains("// Gust function: Box<i32>.empty<string>"));
+    assert!(c.contains("// Gust struct: Pair<i32, string>"));
+    assert!(c.contains("// Gust enum: Option<string>"));
     assert!(!c.contains(".unused"));
 }
 
@@ -2738,20 +2763,20 @@ fn trait_impl_methods_lower_to_static_calls() {
     let result = check_source(
         r#"impl Describe for Person {
     fn describe() => self.name
-    fn update(mut self, name: String) {
+    fn update(mut self, name: string) {
         self.name = name
     }
-    static fn new(name: String) => Self { name: name }
+    static fn new(name: string) => Self { name: name }
 }
 
 trait Describe {
-    fn describe(): String
-    fn update(mut self, name: String): void
-    static fn new(name: String): Self
+    fn describe(): string
+    fn update(mut self, name: string): void
+    static fn new(name: string): Self
 }
 
 struct Person {
-    name: String
+    name: string
 }
 
 fn main() {
@@ -2782,11 +2807,11 @@ fn trait_typed_values_lower_to_dynamic_dispatch() {
 }
 
 trait Describe {
-    fn describe(): String
+    fn describe(): string
 }
 
 struct Person {
-    name: String
+    name: string
 }
 
 fn main() {
@@ -2837,7 +2862,7 @@ fn main() {
 fn enum_trait_typed_values_lower_to_dynamic_dispatch() {
     let result = check_source(
         r#"impl Describe for Mood {
-    fn describe(): String {
+    fn describe(): string {
         return match self {
             Mood.Happy => "happy",
             Mood.Sad => "sad",
@@ -2846,7 +2871,7 @@ fn enum_trait_typed_values_lower_to_dynamic_dispatch() {
 }
 
 trait Describe {
-    fn describe(): String
+    fn describe(): string
 }
 
 enum Mood {
@@ -2948,7 +2973,7 @@ fn main() {
 #[test]
 fn generic_trait_typed_values_lower_to_dynamic_dispatch() {
     let result = check_source(
-        r#"impl Named<String> for Person {
+        r#"impl Named<string> for Person {
     fn name() => self.name
 }
 
@@ -2957,12 +2982,12 @@ trait Named<T> {
 }
 
 struct Person {
-    name: String
+    name: string
 }
 
 fn main() {
     let person = Person { name: "Gust" }
-    let named: Named<String> = person
+    let named: Named<string> = person
     io.println(named.name())
 }"#,
     );
@@ -2980,7 +3005,7 @@ fn main() {
             LoweredStatement::Local {
                 ref value,
                 ..
-            } if matches!(&value.kind, LoweredExprKind::TraitObject { trait_name, .. } if trait_name == "Named<String>")
+            } if matches!(&value.kind, LoweredExprKind::TraitObject { trait_name, .. } if trait_name == "Named<string>")
         ),
         "expected generic trait-typed local to lower as trait object, got {:?}",
         lowered.statements
@@ -2994,16 +3019,16 @@ fn main() {
             }) if matches!(
                 object.kind,
                 LoweredExprKind::Local(ref name) if name == "named"
-            ) && object.type_.name() == "Named<String>"
+            ) && object.type_.name() == "Named<string>"
         ),
         "expected generic trait method call to lower as dynamic call, got {:?}",
         lowered.statements
     );
 
     let c = emit_c(&lowered);
-    assert!(c.contains("// Gust function: trait Named<String> for Person.name"));
+    assert!(c.contains("// Gust function: trait Named<string> for Person.name"));
     assert!(c.contains("gust_trait_thunk_"));
-    assert!(c.contains("Named_String"));
+    assert!(c.contains("Named_string"));
 }
 
 #[test]
@@ -3022,8 +3047,8 @@ impl<T> Named<T> for Box<T> {
 }
 
 fn main() {
-    let value = Box<String> { value: "Gust" }
-    let named: Named<String> = value
+    let value = Box<string> { value: "Gust" }
+    let named: Named<string> = value
     io.println(named.name())
 }"#,
     );
@@ -3041,16 +3066,16 @@ fn main() {
             LoweredStatement::Local {
                 ref value,
                 ..
-            } if matches!(&value.kind, LoweredExprKind::TraitObject { trait_name, .. } if trait_name == "Named<String>")
+            } if matches!(&value.kind, LoweredExprKind::TraitObject { trait_name, .. } if trait_name == "Named<string>")
         ),
         "expected generic trait impl template local to lower as trait object, got {:?}",
         lowered.statements
     );
 
     let c = emit_c(&lowered);
-    assert!(c.contains("// Gust function: trait Named<String> for Box<String>.name"));
+    assert!(c.contains("// Gust function: trait Named<string> for Box<string>.name"));
     assert!(c.contains("gust_trait_thunk_"));
-    assert!(c.contains("Named_String"));
+    assert!(c.contains("Named_string"));
 }
 
 #[test]
@@ -3066,9 +3091,9 @@ fn into_impls_lower_to_target_specific_trait_calls() {
     let lowered = lower_program(&result.program).expect("Into conversions should lower");
     let c = emit_c(&lowered);
 
-    assert!(c.contains("// Gust function: trait Into<UserId> for String.into"));
-    assert!(c.contains("// Gust function: trait Into<Label> for String.into"));
-    assert!(c.contains("// Gust function: static trait From<String> for UserId.from"));
-    assert!(c.contains("// Gust function: static trait From<String> for Label.from"));
+    assert!(c.contains("// Gust function: trait Into<UserId> for string.into"));
+    assert!(c.contains("// Gust function: trait Into<Label> for string.into"));
+    assert!(c.contains("// Gust function: static trait From<string> for UserId.from"));
+    assert!(c.contains("// Gust function: static trait From<string> for Label.from"));
     assert!(c.contains("gust_fn_"));
 }

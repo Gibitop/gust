@@ -21,11 +21,11 @@ fn main() {
 }
 
 struct Person {
-    name: String
+    name: string
 }
 
 struct Dog {
-    name: String
+    name: string
 }
 
 enum Being {
@@ -34,7 +34,7 @@ enum Being {
     Unknown
 }
 
-fn constructBeing(kind: String) {
+fn constructBeing(kind: string) {
     return match kind {
         "person" => Being.Person(Person {
             name: "John",

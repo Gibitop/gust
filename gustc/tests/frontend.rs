@@ -106,7 +106,7 @@ fn basic_primitive_type_names_are_valid() {
     let result = check_source(
         r#"
 fn main() {
-    let string: String
+    let string: string
     let boolean: bool
     let unsigned8: u8
     let unsigned16: u16
@@ -234,7 +234,7 @@ fn main() {
             .any(|diagnostic| diagnostic.severity == Severity::Error
                 && diagnostic
                     .message
-                    .contains("expected value of type `bool`, got `String`")),
+                    .contains("expected value of type `bool`, got `string`")),
         "expected bool condition error, got {:?}",
         result.diagnostics
     );
@@ -329,7 +329,7 @@ fn main() {
             .any(|diagnostic| diagnostic.severity == Severity::Error
                 && diagnostic
                     .message
-                    .contains("expected value of type `bool`, got `String`")),
+                    .contains("expected value of type `bool`, got `string`")),
         "expected bool condition error, got {:?}",
         result.diagnostics
     );
@@ -400,7 +400,7 @@ fn main() {
 fn returning_if_else_satisfies_explicit_return_type() {
     let result = check_source(
         r#"
-fn choose(enabled: bool): String {
+fn choose(enabled: bool): string {
     if enabled {
         return "enabled"
     } else {
@@ -424,7 +424,7 @@ fn basic_struct_literal_validates() {
     let result = check_source(
         r#"
 struct Lang {
-    name: String
+    name: string
     version: u32
 }
 
@@ -445,11 +445,31 @@ fn main() {
 }
 
 #[test]
+fn empty_struct_literal_validates() {
+    let result = check_source(
+        r#"
+struct Token {
+}
+
+fn main() {
+    let token = Token {}
+}
+"#,
+    );
+
+    assert!(
+        !result.has_errors(),
+        "expected empty struct literal to validate, got {:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
 fn struct_field_access_validates_as_field_type() {
     let result = check_source(
         r#"
 struct Lang {
-    name: String
+    name: string
     version: u32
 }
 
@@ -458,7 +478,7 @@ fn main() {
         name: "Gust",
         version: 1,
     }
-    let name: String = lang.name
+    let name: string = lang.name
 }
 "#,
     );
@@ -475,7 +495,7 @@ fn struct_literal_missing_field_is_an_error() {
     let result = check_source(
         r#"
 struct Lang {
-    name: String
+    name: string
     version: u32
 }
 
@@ -505,7 +525,7 @@ fn struct_literal_unknown_field_is_an_error() {
     let result = check_source(
         r#"
 struct Lang {
-    name: String
+    name: string
 }
 
 fn main() {
@@ -535,7 +555,7 @@ fn struct_literal_duplicate_field_is_an_error() {
     let result = check_source(
         r#"
 struct Lang {
-    name: String
+    name: string
 }
 
 fn main() {
@@ -565,7 +585,7 @@ fn struct_literal_field_type_mismatch_is_an_error() {
     let result = check_source(
         r#"
 struct Lang {
-    name: String
+    name: string
     version: u32
 }
 
@@ -585,7 +605,7 @@ fn main() {
             .any(|diagnostic| diagnostic.severity == Severity::Error
                 && diagnostic
                     .message
-                    .contains("expected value of type `u32`, got `String`")),
+                    .contains("expected value of type `u32`, got `string`")),
         "expected field type mismatch, got {:?}",
         result.diagnostics
     );
@@ -596,9 +616,9 @@ fn struct_methods_validate_with_typed_self_and_arguments() {
     let result = check_source(
         r#"
 struct Lang {
-    name: String
+    name: string
 
-    fn greeting(prefix: String): String {
+    fn greeting(prefix: string): string {
         return prefix + self.name
     }
 }
@@ -636,19 +656,19 @@ fn main() {
     let f32Number: f32 = 1.25
     let f64Number: f64 = 2.5
 
-    let u8Value: String = u8Number.toString()
-    let u16Value: String = u16Number.toString()
-    let u32Value: String = u32Number.toString()
-    let u64Value: String = u64Number.toString()
-    let u128Value: String = u128Number.toString()
-    let usizeValue: String = usizeNumber.toString()
-    let i8Value: String = i8Number.toString()
-    let i16Value: String = i16Number.toString()
-    let i32Value: String = i32Number.toString()
-    let i64Value: String = i64Number.toString()
-    let i128Value: String = i128Number.toString()
-    let f32Value: String = f32Number.toString()
-    let f64Value: String = f64Number.toString()
+    let u8Value: string = u8Number.toString()
+    let u16Value: string = u16Number.toString()
+    let u32Value: string = u32Number.toString()
+    let u64Value: string = u64Number.toString()
+    let u128Value: string = u128Number.toString()
+    let usizeValue: string = usizeNumber.toString()
+    let i8Value: string = i8Number.toString()
+    let i16Value: string = i16Number.toString()
+    let i32Value: string = i32Number.toString()
+    let i64Value: string = i64Number.toString()
+    let i128Value: string = i128Number.toString()
+    let f32Value: string = f32Number.toString()
+    let f64Value: string = f64Number.toString()
 }
 "#,
     );
@@ -688,9 +708,9 @@ fn struct_method_calls_report_unknown_methods_and_argument_mismatches() {
     let result = check_source(
         r#"
 struct Lang {
-    name: String
+    name: string
 
-    fn greeting(prefix: String): String {
+    fn greeting(prefix: string): string {
         return prefix + self.name
     }
 }
@@ -721,7 +741,7 @@ fn main() {
             .any(|diagnostic| diagnostic.severity == Severity::Error
                 && diagnostic
                     .message
-                    .contains("expected value of type `String`, got `i32`")),
+                    .contains("expected value of type `string`, got `i32`")),
         "expected method argument type error, got {:?}",
         result.diagnostics
     );
@@ -903,10 +923,10 @@ fn extension_functions_parse_and_validate_with_typed_self() {
     let result = check_source(
         r#"
 struct Greeter {
-    name: String
+    name: string
 }
 
-fn Greeter.greeting(prefix: String) {
+fn Greeter.greeting(prefix: string) {
     return prefix + self.name
 }
 
@@ -937,23 +957,23 @@ fn extension_functions_validate_for_basic_and_imported_types() {
         r#"
 from package import { External, Other }
 
-fn String.withSuffix(suffix: String): String {
+fn string.withSuffix(suffix: string): string {
     return self + suffix
 }
 
-fn External.label(): String {
+fn External.label(): string {
     return "external"
 }
 
-fn Other.label(): String {
+fn Other.label(): string {
     return "other"
 }
 
-fn externalLabel(value: External): String {
+fn externalLabel(value: External): string {
     return value.label()
 }
 
-fn otherLabel(value: Other): String {
+fn otherLabel(value: Other): string {
     return value.label()
 }
 
@@ -974,10 +994,10 @@ fn main() {
 fn extension_functions_reject_unknown_duplicate_and_reserved_declarations() {
     let result = check_source(
         r#"
-fn Missing.label(): String => "missing"
-fn String.label(): String => self
-fn String.label(): String => self
-fn String.clone(): String => self
+fn Missing.label(): string => "missing"
+fn string.label(): string => self
+fn string.label(): string => self
+fn string.clone(): string => self
 
 fn main() {}
 "#,
@@ -999,7 +1019,7 @@ fn main() {}
             .any(|diagnostic| diagnostic.severity == Severity::Error
                 && diagnostic
                     .message
-                    .contains("duplicate extension function `label` for type `String`")),
+                    .contains("duplicate extension function `label` for type `string`")),
         "expected duplicate extension error, got {:?}",
         result.diagnostics
     );
@@ -1023,9 +1043,9 @@ fn static_functions_parse_and_validate_with_contextual_self() {
     let result = check_source(
         r#"
 struct Greeter {
-    name: String
+    name: string
 
-    static fn new(name: String): Self => Self { name: name }
+    static fn new(name: string): Self => Self { name: name }
 }
 
 static fn Greeter.default(): Self => Self.new("Gust")
@@ -1062,7 +1082,7 @@ fn static_functions_do_not_define_an_instance_self() {
     let result = check_source(
         r#"
 struct Value {
-    static fn invalid(): String => self
+    static fn invalid(): string => self
 }
 
 fn main() {}
@@ -1227,7 +1247,7 @@ fn main() {
             .any(|diagnostic| diagnostic.severity == Severity::Error
                 && diagnostic
                     .message
-                    .contains("expected value of type `u32`, got `String`")),
+                    .contains("expected value of type `u32`, got `string`")),
         "expected type-mismatch error, got {:?}",
         result.diagnostics
     );
@@ -1238,7 +1258,7 @@ fn string_add_validates_as_string() {
     let result = check_source(
         r#"
 fn main() {
-    let message: String = "Hello, " + "Gust"
+    let message: string = "Hello, " + "Gust"
 }
 "#,
     );
@@ -1256,7 +1276,7 @@ fn nested_string_add_validates_as_string() {
         r#"
 fn main() {
     let name = "Gust"
-    let message: String = "Hello, " + name + "!"
+    let message: string = "Hello, " + name + "!"
 }
 "#,
     );
@@ -1370,12 +1390,12 @@ fn main() {
 fn function_call_with_basic_return_type_validates() {
     let result = check_source(
         r#"
-fn greet(name: String): String {
+fn greet(name: string): string {
     return "Hello, " + name
 }
 
 fn main() {
-    let message: String = greet("Gust")
+    let message: string = greet("Gust")
 }
 "#,
     );
@@ -1391,7 +1411,7 @@ fn main() {
 fn function_call_wrong_argument_count_is_an_error() {
     let result = check_source(
         r#"
-fn greet(name: String): String {
+fn greet(name: string): string {
     return name
 }
 
@@ -1418,7 +1438,7 @@ fn main() {
 fn function_call_wrong_argument_type_is_an_error() {
     let result = check_source(
         r#"
-fn greet(name: String): String {
+fn greet(name: string): string {
     return name
 }
 
@@ -1435,7 +1455,7 @@ fn main() {
             .any(|diagnostic| diagnostic.severity == Severity::Error
                 && diagnostic
                     .message
-                    .contains("expected value of type `String`, got `i32`")),
+                    .contains("expected value of type `string`, got `i32`")),
         "expected wrong-argument-type error, got {:?}",
         result.diagnostics
     );
@@ -1445,7 +1465,7 @@ fn main() {
 fn function_return_type_mismatch_is_an_error() {
     let result = check_source(
         r#"
-fn greet(): String {
+fn greet(): string {
     return 1
 }
 
@@ -1460,7 +1480,7 @@ fn main() {}
             .any(|diagnostic| diagnostic.severity == Severity::Error
                 && diagnostic
                     .message
-                    .contains("expected value of type `String`, got `i32`")),
+                    .contains("expected value of type `string`, got `i32`")),
         "expected return-type mismatch error, got {:?}",
         result.diagnostics
     );
@@ -1496,7 +1516,7 @@ fn unknown_call_callee_suppresses_initializer_mismatch() {
     let result = check_source(
         r#"
 fn main() {
-    let message: String = missing("Gust")
+    let message: string = missing("Gust")
 }
 "#,
     );
@@ -1524,7 +1544,7 @@ fn main() {
 fn unknown_call_argument_suppresses_argument_mismatch() {
     let result = check_source(
         r#"
-fn greet(name: String): String {
+fn greet(name: string): string {
     return name
 }
 
@@ -1685,7 +1705,7 @@ fn mutable_struct_fields_can_be_assigned_compounded_and_incremented() {
 struct State {
     count: u32
     flags: u8
-    label: String
+    label: string
 }
 
 fn main() {
@@ -1771,7 +1791,7 @@ fn main() {
     assert!(
         result.diagnostics.iter().any(|diagnostic| diagnostic
             .message
-            .contains("expected value of type `u32`, got `String`")),
+            .contains("expected value of type `u32`, got `string`")),
         "expected field assignment type error, got {:?}",
         result.diagnostics
     );
@@ -1888,7 +1908,7 @@ fn immutable_struct_references_cannot_gain_mutable_capability() {
     let result = check_source(
         r#"
 struct A {
-    text: String
+    text: string
 }
 
 struct B {
@@ -1934,7 +1954,7 @@ fn constructor_calls_preserve_argument_mutability() {
     let result = check_source(
         r#"
 struct A {
-    text: String
+    text: string
 }
 
 struct B {
@@ -1969,7 +1989,7 @@ fn clone_creates_mutable_capability_from_immutable_structs() {
     let result = check_source(
         r#"
 struct A {
-    text: String
+    text: string
 }
 
 struct B {
@@ -2003,10 +2023,10 @@ fn mutable_struct_references_can_be_viewed_as_immutable() {
     let result = check_source(
         r#"
 struct A {
-    text: String
+    text: string
 }
 
-fn read(value: A): String {
+fn read(value: A): string {
     return value.text
 }
 
@@ -2233,7 +2253,7 @@ fn main() {
     assert!(
         result.diagnostics.iter().any(|diagnostic| diagnostic
             .message
-            .contains("operator + only supports numeric or String operands")),
+            .contains("operator + only supports numeric or string operands")),
         "expected compound-assignment operator error, got {:?}",
         result.diagnostics
     );
@@ -2281,7 +2301,7 @@ fn main() {
             .any(|diagnostic| diagnostic.severity == Severity::Error
                 && diagnostic
                     .message
-                    .contains("expected value of type `String`, got `i32`")),
+                    .contains("expected value of type `string`, got `i32`")),
         "expected assignment-type error, got {:?}",
         result.diagnostics
     );
@@ -2392,7 +2412,7 @@ fn struct_equality_is_rejected_until_trait_equality_exists() {
     let result = check_source(
         r#"
 struct Person {
-    name: String
+    name: string
 }
 
 fn main() {
@@ -2410,7 +2430,7 @@ fn main() {
             .any(|diagnostic| diagnostic.severity == Severity::Error
                 && diagnostic
                     .message
-                    .contains("operator == only supports numeric, bool, and String operands")),
+                    .contains("operator == only supports numeric, bool, and string operands")),
         "expected unsupported struct equality error, got {:?}",
         result.diagnostics
     );
@@ -2455,7 +2475,7 @@ fn main() {
             .any(|diagnostic| diagnostic.severity == Severity::Error
                 && diagnostic
                     .message
-                    .contains("expected value of type `bool`, got `String`")),
+                    .contains("expected value of type `bool`, got `string`")),
         "expected logical operand error, got {:?}",
         result.diagnostics
     );
@@ -2517,7 +2537,7 @@ fn logical_and_binds_more_tightly_than_logical_or() {
 fn payload_enums_and_exhaustive_matches_validate() {
     let result = check_source(
         r#"struct Person {
-    name: String
+    name: string
 }
 
 enum Being {
@@ -2525,7 +2545,7 @@ enum Being {
     Unknown
 }
 
-fn greeting(being: Being): String {
+fn greeting(being: Being): string {
     return match being {
         Being.Person(person) => "Hello, " + person.name,
         Being.Unknown => "Hello, stranger",
@@ -2549,9 +2569,9 @@ fn main() {
 fn mutable_enum_payload_patterns_validate_for_mutable_match_values() {
     let result = check_source(
         r#"struct StringContainer {
-    value: String
+    value: string
 
-    fn set(mut self, value: String) {
+    fn set(mut self, value: string) {
         self.value = value
     }
 }
@@ -2560,7 +2580,7 @@ enum Option {
     Some(StringContainer)
     None
 
-    fn set(mut self, value: String) {
+    fn set(mut self, value: string) {
         match self {
             Option.Some(mut container) => container.set(value),
             Option.None => {},
@@ -2585,9 +2605,9 @@ fn main() {
 fn mutable_method_calls_on_match_payloads_suggest_mutable_payload_patterns() {
     let result = check_source(
         r#"struct StringContainer {
-    value: String
+    value: string
 
-    fn set(mut self, value: String) {
+    fn set(mut self, value: string) {
         self.value = value
     }
 }
@@ -2596,7 +2616,7 @@ enum Option {
     Some(StringContainer)
     None
 
-    fn set(mut self, value: String) {
+    fn set(mut self, value: string) {
         match self {
             Option.Some(container) => container.set(value),
             Option.None => {},
@@ -2623,9 +2643,9 @@ fn main() {}"#,
 fn mutable_method_calls_on_immutable_match_payloads_do_not_suggest_invalid_mut_patterns() {
     let result = check_source(
         r#"struct StringContainer {
-    value: String
+    value: string
 
-    fn set(mut self, value: String) {
+    fn set(mut self, value: string) {
         self.value = value
     }
 }
@@ -2660,7 +2680,7 @@ fn main() {
 fn mutable_enum_payload_patterns_require_mutable_match_values() {
     let result = check_source(
         r#"struct StringContainer {
-    value: String
+    value: string
 }
 
 enum Option {
@@ -2698,7 +2718,7 @@ fn enum_matches_must_be_exhaustive() {
     Waiting
 }
 
-fn label(status: Status): String {
+fn label(status: Status): string {
     return match status {
         Status.Ready => "ready",
     }
@@ -2723,11 +2743,11 @@ fn main() {}"#,
 fn enum_payloads_and_match_branches_are_type_checked() {
     let result = check_source(
         r#"enum Result {
-    Value(String)
+    Value(string)
     Empty
 }
 
-fn label(result: Result): String {
+fn label(result: Result): string {
     return match result {
         Result.Value(value) => value,
         Result.Empty => false,
@@ -2747,7 +2767,7 @@ fn main() {
                 diagnostic.severity == Severity::Error
                     && diagnostic
                         .message
-                        .contains("expected value of type `String`, got `bool`")
+                        .contains("expected value of type `string`, got `bool`")
             })
             .count()
             >= 2,
@@ -2760,11 +2780,11 @@ fn main() {
 fn enum_match_patterns_reject_duplicate_and_invalid_bindings() {
     let result = check_source(
         r#"enum State {
-    Named(String)
+    Named(string)
     Empty
 }
 
-fn label(state: State): String {
+fn label(state: State): string {
     return match state {
         State.Named(name) => name,
         State.Named(other) => other,
@@ -2801,10 +2821,10 @@ fn main() {}"#,
 fn payload_pattern_error_suggests_valid_syntax() {
     let result = check_source(
         r#"enum Being {
-    Dog(String)
+    Dog(string)
 }
 
-fn label(being: Being): String {
+fn label(being: Being): string {
     return match being {
         Being.Dog => "dog",
     }
@@ -2817,7 +2837,7 @@ fn main() {}"#,
         result.diagnostics.iter().any(|diagnostic| {
             diagnostic.severity == Severity::Error
                 && diagnostic.message.contains(
-                    "`Being.Dog` contains a `String` value; use `Being.Dog(value)` to bind it or `Being.Dog(_)` to ignore it",
+                    "`Being.Dog` contains a `string` value; use `Being.Dog(value)` to bind it or `Being.Dog(_)` to ignore it",
                 )
         }),
         "expected actionable payload-pattern error, got {:?}",
@@ -2829,10 +2849,10 @@ fn main() {}"#,
 fn underscore_discards_an_enum_payload_without_creating_a_binding() {
     let result = check_source(
         r#"enum Being {
-    Dog(String)
+    Dog(string)
 }
 
-fn label(being: Being): String {
+fn label(being: Being): string {
     return match being {
         Being.Dog(_) => "dog",
     }
@@ -2849,10 +2869,10 @@ fn main() {}"#,
 
     let result = check_source(
         r#"enum Being {
-    Dog(String)
+    Dog(string)
 }
 
-fn label(being: Being): String {
+fn label(being: Being): string {
     return match being {
         Being.Dog(_) => _,
     }
@@ -2875,20 +2895,20 @@ fn main() {}"#,
 fn enum_variants_are_namespaced_by_their_enum() {
     let result = check_source(
         r#"enum Left {
-    Value(String)
+    Value(string)
 }
 
 enum Right {
-    Value(String)
+    Value(string)
 }
 
-fn leftLabel(value: Left): String {
+fn leftLabel(value: Left): string {
     return match value {
         Left.Value(label) => label,
     }
 }
 
-fn rightLabel(value: Right): String {
+fn rightLabel(value: Right): string {
     return match value {
         Right.Value(label) => label,
     }
@@ -2933,7 +2953,7 @@ fn main() {
     Ready
 }
 
-fn label(status: Status): String {
+fn label(status: Status): string {
     return match status {
         Ready => "ready",
     }
@@ -2954,7 +2974,7 @@ fn main() {}"#,
 #[test]
 fn string_matches_support_literals_and_require_a_final_wildcard() {
     let result = check_source(
-        r#"fn label(value: String): String {
+        r#"fn label(value: string): string {
     return match value {
         "ready" => "Ready",
         _ => "Unknown",
@@ -2973,7 +2993,7 @@ fn main() {
     );
 
     let missing_wildcard = check_source(
-        r#"fn label(value: String): String {
+        r#"fn label(value: string): string {
     return match value {
         "ready" => "Ready",
     }
@@ -2984,11 +3004,11 @@ fn main() {}"#,
     assert!(missing_wildcard.diagnostics.iter().any(|diagnostic| {
         diagnostic
             .message
-            .contains("non-exhaustive match for `String`; add a wildcard branch")
+            .contains("non-exhaustive match for `string`; add a wildcard branch")
     }));
 
     let unreachable = check_source(
-        r#"fn label(value: String): String {
+        r#"fn label(value: string): string {
     return match value {
         _ => "Unknown",
         "ready" => "Ready",
@@ -3008,7 +3028,7 @@ fn main() {}"#,
 fn block_match_branches_and_shared_string_rebinding_validate() {
     let result = check_source(
         r#"enum Being {
-    Person(String)
+    Person(string)
     Unknown
 }
 
@@ -3055,7 +3075,7 @@ struct Pair<T> {
 
 fn main() {
     let number = Box<i32> { value: 42 }
-    let text = Box<String> { value: "Gust" }
+    let text = Box<string> { value: "Gust" }
     let pair = Pair<Box<i32>> {
         first: number,
         second: Box<i32> { value: 7 },
@@ -3087,13 +3107,13 @@ fn unwrapOr(value: Option<i32>, fallback: i32): i32 {
     }
 }
 
-fn makeNone(): Option<String> {
+fn makeNone(): Option<string> {
     return Option.None
 }
 
 fn main() {
     let inferred = Option.Some(42)
-    let explicit = Option<String>.Some("Gust")
+    let explicit = Option<string>.Some("Gust")
     let contextual: Option<i32> = Option.None
     let text = makeNone()
     io.println(unwrapOr(inferred, 0).toString())
@@ -3173,7 +3193,7 @@ fn main() {
 }
 
 fn main() {
-    let value = Option<i32, String>.Some(1)
+    let value = Option<i32, string>.Some(1)
 }"#,
     );
     assert!(wrong_count.diagnostics.iter().any(|diagnostic| {
@@ -3214,7 +3234,7 @@ fn main() {
     assert!(conflicting.diagnostics.iter().any(|diagnostic| {
         diagnostic
             .message
-            .contains("conflicting types `i32` and `String` were inferred for `T`")
+            .contains("conflicting types `i32` and `string` were inferred for `T`")
     }));
 }
 
@@ -3263,7 +3283,7 @@ fn generic_static_calls_and_contextual_struct_literals_validate() {
 fn main() {
     let number = Box.new(42)
     let inferred = Box { value: "inferred" }
-    let text: Box<String> = Box { value: "Gust" }
+    let text: Box<string> = Box { value: "Gust" }
     io.println(number.value.toString())
     io.println(inferred.value)
     io.println(text.value)
@@ -3292,7 +3312,7 @@ struct Box<T> {
     static fn new(value: T): Self => Self { value: value }
 }
 
-fn makeEmpty(): Empty<String> => Empty.new()
+fn makeEmpty(): Empty<string> => Empty.new()
 
 fn main() {
     let value: u32 = 1
@@ -3346,7 +3366,7 @@ fn main() {
     assert!(conflicting.diagnostics.iter().any(|diagnostic| {
         diagnostic
             .message
-            .contains("conflicting types `i32` and `String` were inferred for `T`")
+            .contains("conflicting types `i32` and `string` were inferred for `T`")
     }));
 }
 
@@ -3378,10 +3398,10 @@ fn main() {
     let number = identity(42)
     let nested = identity(identity(7))
     let forwarded = forward("forwarded")
-    let text = identity<String>("Gust")
+    let text = identity<string>("Gust")
     let wrapped = some("wrapped")
     let box = boxed(9)
-    let missing: Option<String> = none()
+    let missing: Option<string> = none()
     if identity<bool>(true) {
         io.println("explicit")
     }
@@ -3472,14 +3492,14 @@ fn main() {
     assert!(conflicting.diagnostics.iter().any(|diagnostic| {
         diagnostic
             .message
-            .contains("conflicting types `i32` and `String` were inferred for `T`")
+            .contains("conflicting types `i32` and `string` were inferred for `T`")
     }));
 
     let invalid_count = check_source(
         r#"fn identity<T>(value: T): T => value
 
 fn main() {
-    let value = identity<i32, String>(1)
+    let value = identity<i32, string>(1)
 }"#,
     );
     assert!(invalid_count.diagnostics.iter().any(|diagnostic| {
@@ -3533,9 +3553,9 @@ struct Box<T> {
 fn main() {
     let number = Box { value: 42 }
     let pair = number.pair("answer")
-    let staticPair = Box<i32>.make<String>(7, "static")
-    let wrapped = number.wrap<String>("value")
-    let empty: Option<String> = number.empty()
+    let staticPair = Box<i32>.make<string>(7, "static")
+    let wrapped = number.wrap<string>("value")
+    let empty: Option<string> = number.empty()
     io.println(pair.second)
     io.println(staticPair.second)
     match wrapped {
@@ -3616,7 +3636,7 @@ fn main() {
 
 fn main() {
     let value = Box { value: 1 }
-    value.identity<String, i32>("text")
+    value.identity<string, i32>("text")
 }"#,
     );
     assert!(invalid_count.diagnostics.iter().any(|diagnostic| {
@@ -3656,20 +3676,20 @@ fn traits_validate_and_dispatch_concrete_impl_methods() {
     let result = check_source(
         r#"impl Describe for Person {
     fn describe() => self.name
-    fn update(mut self, name: String) {
+    fn update(mut self, name: string) {
         self.name = name
     }
-    static fn new(name: String) => Self { name: name }
+    static fn new(name: string) => Self { name: name }
 }
 
 trait Describe {
-    fn describe(): String
-    fn update(mut self, name: String): void
-    static fn new(name: String): Self
+    fn describe(): string
+    fn update(mut self, name: string): void
+    static fn new(name: string): Self
 }
 
 struct Person {
-    name: String
+    name: string
 }
 
 fn main() {
@@ -3694,11 +3714,11 @@ fn trait_typed_values_accept_implemented_concrete_values() {
 }
 
 trait Describe {
-    fn describe(): String
+    fn describe(): string
 }
 
 struct Person {
-    name: String
+    name: string
 }
 
 fn printDescription(value: Describe) {
@@ -3723,7 +3743,7 @@ fn main() {
 #[test]
 fn generic_traits_validate_concrete_specializations() {
     let result = check_source(
-        r#"impl Named<String> for Person {
+        r#"impl Named<string> for Person {
     fn name() => self.name
 }
 
@@ -3732,16 +3752,16 @@ trait Named<T> {
 }
 
 struct Person {
-    name: String
+    name: string
 }
 
-fn printName(value: Named<String>) {
+fn printName(value: Named<string>) {
     io.println(value.name())
 }
 
 fn main() {
     let person = Person { name: "Gust" }
-    let named: Named<String> = person
+    let named: Named<string> = person
     printName(person)
     io.println(named.name())
 }"#,
@@ -3769,13 +3789,13 @@ impl<T> Named<T> for Box<T> {
     fn name() => self.value
 }
 
-fn printName(value: Named<String>) {
+fn printName(value: Named<string>) {
     io.println(value.name())
 }
 
 fn main() {
-    let value = Box<String> { value: "Gust" }
-    let named: Named<String> = value
+    let value = Box<string> { value: "Gust" }
+    let named: Named<string> = value
     printName(value)
     io.println(named.name())
 }"#,
@@ -3792,11 +3812,11 @@ fn main() {
 fn overlapping_trait_impls_are_rejected_before_specialization() {
     let concrete_overlap = check_source(
         r#"trait Describe {
-    fn describe(): String
+    fn describe(): string
 }
 
 struct Person {
-    name: String
+    name: string
 }
 
 impl<T> Describe for T {
@@ -3817,15 +3837,15 @@ fn main() {}"#,
 
     let bounded_overlap = check_source(
         r#"trait Named {
-    fn name(): String
+    fn name(): string
 }
 
 trait Labeled {
-    fn label(): String
+    fn label(): string
 }
 
 trait Describe {
-    fn describe(): String
+    fn describe(): string
 }
 
 impl<T: Named> Describe for T {
@@ -3846,7 +3866,7 @@ fn main() {}"#,
 
     let nested_overlap = check_source(
         r#"trait Describe {
-    fn describe(): String
+    fn describe(): string
 }
 
 struct Box<T> {
@@ -3885,7 +3905,7 @@ impl<T> Convert<i32> for Box<T> {
     fn convert() => 1
 }
 
-impl<T> Convert<String> for Box<T> {
+impl<T> Convert<string> for Box<T> {
     fn convert() => "value"
 }
 
@@ -3906,23 +3926,23 @@ fn generic_trait_methods_use_expected_types_without_builtin_names() {
     fn convert(): T
 }
 
-impl Convert<UserId> for String {
+impl Convert<UserId> for string {
     fn convert() => UserId { value: self }
 }
 
-impl Convert<Label> for String {
+impl Convert<Label> for string {
     fn convert() => Label { value: self }
 }
 
 struct UserId {
-    value: String
+    value: string
 }
 
 struct Label {
-    value: String
+    value: string
 }
 
-fn readUserId(value: UserId): String {
+fn readUserId(value: UserId): string {
     return value.value
 }
 
@@ -3968,7 +3988,7 @@ impl<T, U: From<T>> Into<U> for T {
 }
 
 struct Missing {
-    value: String
+    value: string
 }
 
 fn main() {
@@ -3978,7 +3998,7 @@ fn main() {
     assert!(missing_from.diagnostics.iter().any(|diagnostic| {
         diagnostic
             .message
-            .contains("does not satisfy bound `Missing: From<String>`")
+            .contains("does not satisfy bound `Missing: From<string>`")
     }));
 }
 
@@ -3986,7 +4006,7 @@ fn main() {
 fn generic_bounds_are_checked_at_concrete_use_sites() {
     let result = check_source(
         r#"struct Person {
-    name: String
+    name: string
 }
 
 struct Number {
@@ -3994,11 +4014,11 @@ struct Number {
 }
 
 trait Named {
-    fn name(): String
+    fn name(): string
 }
 
 trait Labeled {
-    fn label(): String
+    fn label(): string
 }
 
 impl Named for Person {
@@ -4009,7 +4029,7 @@ impl Labeled for Person {
     fn label() => "person"
 }
 
-fn getName<T: Named + Labeled>(value: T): String {
+fn getName<T: Named + Labeled>(value: T): string {
     value.label()
     return value.name()
 }
@@ -4031,18 +4051,18 @@ fn main() {
 fn generic_bounds_allow_member_resolution_after_specialization() {
     let result = check_source(
         r#"struct Person {
-    name: String
+    name: string
 }
 
 trait Named {
-    fn name(): String
+    fn name(): string
 }
 
 impl Named for Person {
     fn name() => self.name
 }
 
-fn getName<T: Named>(value: T): String {
+fn getName<T: Named>(value: T): string {
     return value.name()
 }
 
@@ -4085,10 +4105,10 @@ fn main() {}"#,
 }
 
 struct Person {
-    name: String
+    name: string
 }
 
-impl Named<String, i32> for Person {
+impl Named<string, i32> for Person {
     fn name() => self.name
 }
 
@@ -4106,7 +4126,7 @@ fn main() {}"#,
 }
 
 struct Person {
-    name: String
+    name: string
 }
 
 impl<T, T, U> Named<T> for Person {
@@ -4131,11 +4151,11 @@ fn main() {}"#,
 fn trait_typed_values_require_impls() {
     let result = check_source(
         r#"trait Describe {
-    fn describe(): String
+    fn describe(): string
 }
 
 struct Person {
-    name: String
+    name: string
 }
 
 fn main() {
@@ -4155,12 +4175,12 @@ fn main() {
 fn trait_impls_report_missing_extra_and_mismatched_methods() {
     let missing = check_source(
         r#"trait Describe {
-    fn describe(): String
-    static fn new(name: String): Self
+    fn describe(): string
+    static fn new(name: string): Self
 }
 
 struct Person {
-    name: String
+    name: string
 }
 
 impl Describe for Person {
@@ -4181,18 +4201,18 @@ fn main() {}"#,
 
     let extra = check_source(
         r#"trait Describe {
-    fn describe(): String
-    static fn new(name: String): Self
+    fn describe(): string
+    static fn new(name: string): Self
 }
 
 struct Person {
-    name: String
+    name: string
 }
 
 impl Describe for Person {
-    fn describe(): String => self.name
-    static fn new(name: String) => Self { name: name }
-    fn extra(): String => self.name
+    fn describe(): string => self.name
+    static fn new(name: string) => Self { name: name }
+    fn extra(): string => self.name
 }
 
 fn main() {}"#,
@@ -4205,17 +4225,17 @@ fn main() {}"#,
 
     let explicit_mismatch = check_source(
         r#"trait Describe {
-    fn describe(): String
-    static fn new(name: String): Self
+    fn describe(): string
+    static fn new(name: string): Self
 }
 
 struct Person {
-    name: String
+    name: string
 }
 
 impl Describe for Person {
     fn describe(): i32 => 1
-    static fn new(name: String) => Self { name: name }
+    static fn new(name: string) => Self { name: name }
 }
 
 fn main() {}"#,
@@ -4228,17 +4248,17 @@ fn main() {}"#,
 
     let inferred_mismatch = check_source(
         r#"trait Describe {
-    fn describe(): String
-    static fn new(name: String): Self
+    fn describe(): string
+    static fn new(name: string): Self
 }
 
 struct Person {
-    name: String
+    name: string
 }
 
 impl Describe for Person {
     fn describe() => 1
-    static fn new(name: String) => Self { name: name }
+    static fn new(name: string) => Self { name: name }
 }
 
 fn main() {}"#,
@@ -4246,6 +4266,6 @@ fn main() {}"#,
     assert!(inferred_mismatch.diagnostics.iter().any(|diagnostic| {
         diagnostic
             .message
-            .contains("expected value of type `String`, got `i32`")
+            .contains("expected value of type `string`, got `i32`")
     }));
 }

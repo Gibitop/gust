@@ -439,8 +439,8 @@ pub enum BasicType {
 impl BasicType {
     pub fn from_name(name: &str) -> Option<Self> {
         match name {
-            "String" => Some(Self::String),
-            "Char" => Some(Self::Char),
+            "string" => Some(Self::String),
+            "char" => Some(Self::Char),
             "bool" => Some(Self::Bool),
             "u8" => Some(Self::U8),
             "u16" => Some(Self::U16),
@@ -461,8 +461,8 @@ impl BasicType {
 
     pub fn name(self) -> &'static str {
         match self {
-            Self::String => "String",
-            Self::Char => "Char",
+            Self::String => "string",
+            Self::Char => "char",
             Self::Bool => "bool",
             Self::U8 => "u8",
             Self::U16 => "u16",

@@ -24,7 +24,7 @@ fn main() {
         value: 42,
     }
     let constructed = Box<u8>.new(7)
-    let message: Box<String> = Box {
+    let message: Box<string> = Box {
         value: "Generics work!",
     }
     let nested = Box.new(

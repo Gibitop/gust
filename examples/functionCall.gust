@@ -1,15 +1,15 @@
-fn normal(name: String): String {
+fn normal(name: string): string {
     io.println("Normal")
     return "Hello, " + name
 }
 
-fn inferredNormal(name: String) {
+fn inferredNormal(name: string) {
     return "Hello, " + name
 }
 
-fn inferredArrow(name: String) => arrow("Test")
+fn inferredArrow(name: string) => arrow("Test")
 
-fn arrow(name: String) => "Hello, " + name
+fn arrow(name: string) => "Hello, " + name
 
 fn noop(): void {}
 

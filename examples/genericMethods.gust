@@ -18,7 +18,7 @@ struct Box<T> {
     fn empty<U>() => Option<U>.None
 }
 
-fn describe(value: Option<String>): String {
+fn describe(value: Option<string>): string {
     return match value {
         Option.Some(inner) => inner,
         Option.None => "empty",
@@ -28,8 +28,8 @@ fn describe(value: Option<String>): String {
 fn main() {
     let number = Box { value: 42 }
     let pair = number.pair("answer")
-    let staticPair = Box<i32>.make<String>(7, "static")
-    let empty: Option<String> = number.empty()
+    let staticPair = Box<i32>.make<string>(7, "static")
+    let empty: Option<string> = number.empty()
 
     io.println(pair.second)
     io.println(staticPair.second)

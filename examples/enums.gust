@@ -33,7 +33,7 @@ fn greeting(being: Being) {
 }
 
 struct Spaceship {
-    name: String
+    name: string
     pilot: Being
 }
 
@@ -44,9 +44,9 @@ enum Being {
 }
 
 struct Person {
-    name: String
+    name: string
 }
 
 struct Dog {
-    name: String
+    name: string
 }

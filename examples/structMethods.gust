@@ -1,26 +1,26 @@
 struct Greeter {
-    name: String
+    name: string
 
-    static fn new(name: String) => Self { name: name }
+    static fn new(name: string) => Self { name: name }
 
-    fn updateName(mut self, name: String) {
+    fn updateName(mut self, name: string) {
         self.name = name
     }
 
-    fn greeting(prefix: String) {
+    fn greeting(prefix: string) {
         return prefix + self.name
     }
 
-    fn arrow(end: String) => "Hello from " + self.name + end
+    fn arrow(end: string) => "Hello from " + self.name + end
 }
 
-fn Greeter.alternateGreeting(end: String) {
+fn Greeter.alternateGreeting(end: string) {
     return "Hi from " + self.name + end
 }
 
-fn Greeter.alternateArrowGreeting(end: String) => "Hi from " + self.name + end
+fn Greeter.alternateArrowGreeting(end: string) => "Hi from " + self.name + end
 
-fn Greeter.addSuffix(mut self, suffix: String): void {
+fn Greeter.addSuffix(mut self, suffix: string): void {
     self.name = self.name + suffix
 }
 

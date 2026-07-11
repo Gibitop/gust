@@ -35,6 +35,11 @@ through ordinary relative paths, such as `from ../std/iter import { Iterator }`.
 `/` as their separator. Standard-library modules may import one another using relative paths.
 Gust source filenames use camelCase.
 
+Fully compiler-owned primitive types, such as numeric types, `char`, and `string`, do not have source-level
+standard-library declarations for their intrinsic members. This keeps operations that are always
+available, such as numeric `toString()` and `string.len()`, from looking like extension functions
+that users need to import.
+
 ## Collection literals
 
 `[value, ...]` is a collection literal. When a surrounding type supplies a concrete collection,
@@ -45,8 +50,9 @@ evaluation. Collection behaviour therefore remains standard-library code.
 
 `FromIterator<T>` is a separate standard-library construction trait for iterators. `ArrayList<T>`
 implements both traits. The internal `RawBuffer<T>` storage type is the only collection-specific
-runtime primitive; its allocation and typed storage operations are lowered by the executable
-backend so future GC integration stays behind that boundary.
+runtime primitive; its compiler-implemented declaration lives in `std/internal/rawBuffer.gust`.
+Its allocation and typed storage operations are lowered by the executable backend so future GC
+integration stays behind that boundary.
 
 ## Syntax
 
@@ -60,19 +66,19 @@ Syntax is very similar to Rust. Notable differences:
 - No syntax for features missing by design or not implemented in this language yet (eg. life times, macros, etc)
 - Imports are done very differently from rust. See the examples/modules directory for an example
 
-## String memory management
+## string memory management
 
 Gust will use garbage collection for managed values, including strings. Do not introduce ownership or lexical `free` semantics for strings as an interim design.
 
 Strings are immutable valid UTF-8 text. The runtime representation stores a byte pointer and byte
 length rather than relying on a NUL-terminated C string, so embedded NUL bytes are preserved and
 runtime operations are bounded by explicit lengths. The byte representation remains opaque to Gust
-programs. Fundamental String operations are intrinsic members; higher-level operations belong in
-the standard library as the necessary String and Unicode primitives become available.
+programs. Fundamental string operations are intrinsic members; higher-level operations belong in
+the standard library as the necessary string and Unicode primitives become available.
 
 `StringBuilder` is a standard-library mutable construction type. The compiler supplies only its
-opaque growable UTF-8 byte storage and the bridge from `build()` to immutable `String`; its public
-declaration and API live in `std/stringBuilder.gust`.
+opaque growable UTF-8 byte storage and the bridge from `build()` to immutable `string`; its
+compiler-implemented declaration and API live in `std/internal/stringBuilder.gust`.
 
 The current C backend may temporarily leak heap-allocated string concat results. Keep allocation isolated behind Gust-shaped runtime helpers, so raw `malloc` usage can later be replaced by GC allocation.
 
@@ -138,7 +144,7 @@ The executable backend maps `i128` and `u128` to the C compiler's 128-bit intege
 
 ## Numeric string conversion
 
-Every numeric primitive has a built-in `toString(): String` method. It is an intrinsic member,
+Every numeric primitive has a built-in `toString(): string` method. It is an intrinsic member,
 not an extension function supplied by a prelude, so it is available without imports and takes
 precedence over extension functions with the same name.
 
@@ -148,6 +154,10 @@ numeric conversion to type-specific `gust_rt_*_to_string` runtime helpers. Retur
 allocated through `gust_rt_alloc` so allocation remains isolated for the future garbage collector.
 
 ## Struct field mutation
+
+Empty structs and empty struct literals are valid. The executable backend may add private padding
+when emitting C for a struct with no Gust fields, because standard C structs cannot be truly empty.
+That padding is not visible to Gust programs and must not be modeled as a source-level field.
 
 Structs are managed reference values.
 Assignment and parameter passing copy references, so aliases observe the same mutations
@@ -315,7 +325,7 @@ so functions returning `Option.Some(value)`, `Option<T>.None`, or `Box { value: 
 require annotations.
 
 Traits may declare type parameters, such as `trait Named<T>`. Concrete uses of a generic trait,
-including `impl Named<String> for Person` and trait-typed values like `let value: Named<String>`,
+including `impl Named<string> for Person` and trait-typed values like `let value: Named<string>`,
 are monomorphized before semantic analysis and executable lowering. Each concrete specialization
 has its own trait object type and dynamic-dispatch vtable.
 
@@ -329,8 +339,8 @@ specialization. Bounds do not make otherwise-overlapping impls disjoint because 
 multiple bounds. Gust does not support specialization, so a concrete impl may not overlap a more
 general blanket impl.
 
-Bounds are written inside type parameter lists, such as `fn getName<T: Named>(value: T): String`,
-`struct Box<T: Clone>`, or `impl<T: Named<String>> Display for Box<T>`. Multiple bounds use `+`.
+Bounds are written inside type parameter lists, such as `fn getName<T: Named>(value: T): string`,
+`struct Box<T: Clone>`, or `impl<T: Named<string>> Display for Box<T>`. Multiple bounds use `+`.
 Concrete specializations must satisfy their bounds through an available concrete or generated impl.
 Bounds remain inline; Gust does not have `where` clause syntax.
 

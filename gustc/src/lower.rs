@@ -362,6 +362,41 @@ fn is_raw_buffer_name(name: &str) -> bool {
         || name.starts_with("RawBuffer<")
 }
 
+fn raw_buffer_element_name(name: &str) -> Option<&str> {
+    let start = name.rfind("RawBuffer<")? + "RawBuffer<".len();
+    let element = name.get(start..name.len().checked_sub(1)?)?;
+    (!element.is_empty() && name.ends_with('>')).then_some(element)
+}
+
+fn lowered_type_from_concrete_name(
+    name: &str,
+    structs: &HashMap<String, LoweredStruct>,
+    enums: &HashMap<String, LoweredEnum>,
+    traits: &HashMap<String, LoweredTrait>,
+) -> Option<LoweredType> {
+    if let Some(type_) = BasicType::from_name(name) {
+        return Some(LoweredType::Basic(type_));
+    }
+
+    if name == "void" {
+        return Some(LoweredType::Void);
+    }
+
+    if structs.contains_key(name) {
+        return Some(LoweredType::Struct(name.to_string()));
+    }
+
+    if enums.contains_key(name) {
+        return Some(LoweredType::Enum(name.to_string()));
+    }
+
+    if traits.contains_key(name) {
+        return Some(LoweredType::Trait(name.to_string()));
+    }
+
+    None
+}
+
 fn is_string_builder_name(name: &str) -> bool {
     name == "StringBuilder" || name.ends_with("::StringBuilder")
 }
@@ -560,21 +595,10 @@ fn lower_monomorphized_program(program: &Program) -> Result<LoweredProgram, Vec<
     let raw_buffer_elements = structs
         .iter()
         .filter(|(name, _)| is_raw_buffer_name(name))
-        .filter_map(|(name, struct_)| {
-            let option_name = struct_
-                .fields
-                .iter()
-                .find(|field| field.name == "empty")
-                .and_then(|field| match &field.type_ {
-                    LoweredType::Enum(name) => Some(name),
-                    _ => None,
-                })?;
-            let element = enums
-                .get(option_name)?
-                .variants
-                .iter()
-                .find(|variant| variant.name == "Some")
-                .and_then(|variant| variant.payload.clone())?;
+        .filter_map(|(name, _)| {
+            let element = raw_buffer_element_name(name).and_then(|name| {
+                lowered_type_from_concrete_name(name, &structs, &enums, &traits)
+            })?;
             Some((name.clone(), element))
         })
         .collect::<Vec<_>>();
@@ -3476,7 +3500,7 @@ fn lower_expression_statement(
         if args.len() != 1 {
             diagnostics.push(Diagnostic::error(
                 expr.span,
-                "`io.println` expects exactly one `String` value in executable builds",
+                "`io.println` expects exactly one `string` value in executable builds",
             ));
             return None;
         }
@@ -3490,14 +3514,14 @@ fn lower_expression_statement(
             traits,
             diagnostics,
             None,
-            "`io.println` only accepts `String` values in executable builds",
+            "`io.println` only accepts `string` values in executable builds",
         )?;
 
         if value.type_ != LoweredType::Basic(BasicType::String) {
             diagnostics.push(Diagnostic::error(
                 args[0].span,
                 format!(
-                    "`io.println` only accepts `String` values in executable builds, got `{}`",
+                    "`io.println` only accepts `string` values in executable builds, got `{}`",
                     value.type_.name()
                 ),
             ));
@@ -3552,7 +3576,7 @@ fn lower_match_statement(
     ) {
         diagnostics.push(Diagnostic::error(
             expr.span,
-            "match statements require an enum or `String` value in executable builds",
+            "match statements require an enum or `string` value in executable builds",
         ));
         return None;
     }
@@ -4876,7 +4900,7 @@ fn lower_expr(
                         diagnostics.push(Diagnostic::error(
                             expr.span,
                             format!(
-                                "method `String.byteLen` expects 0 arguments, got {}",
+                                "method `string.byteLen` expects 0 arguments, got {}",
                                 args.len()
                             ),
                         ));
@@ -4948,7 +4972,7 @@ fn lower_expr(
                         diagnostics.push(Diagnostic::error(
                             expr.span,
                             format!(
-                                "method `String.len` expects 0 arguments, got {}",
+                                "method `string.len` expects 0 arguments, got {}",
                                 args.len()
                             ),
                         ));
@@ -4957,7 +4981,7 @@ fn lower_expr(
                     return Some(LoweredExpr {
                         type_: LoweredType::Basic(BasicType::Usize),
                         kind: LoweredExprKind::Call {
-                            name: "intrinsic String.len".to_string(),
+                            name: "intrinsic string.len".to_string(),
                             args: vec![object],
                         },
                     });
@@ -4970,7 +4994,7 @@ fn lower_expr(
                         diagnostics.push(Diagnostic::error(
                             expr.span,
                             format!(
-                                "method `String.isEmpty` expects 0 arguments, got {}",
+                                "method `string.isEmpty` expects 0 arguments, got {}",
                                 args.len()
                             ),
                         ));
@@ -5308,7 +5332,7 @@ fn lower_expr(
             ) {
                 diagnostics.push(Diagnostic::error(
                     expr.span,
-                    "match expressions require an enum or `String` value in executable builds",
+                    "match expressions require an enum or `string` value in executable builds",
                 ));
                 return None;
             }

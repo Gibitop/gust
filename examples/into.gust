@@ -11,19 +11,19 @@ impl<T, U: From<T>> Into<U> for T {
 }
 
 struct UserId {
-    value: String
+    value: string
 }
 
 struct Label {
-    value: String
+    value: string
 }
 
-impl From<String> for UserId {
-    static fn from(value: String) => UserId { value: value }
+impl From<string> for UserId {
+    static fn from(value: string) => UserId { value: value }
 }
 
-impl From<String> for Label {
-    static fn from(value: String) => Label { value: value }
+impl From<string> for Label {
+    static fn from(value: string) => Label { value: value }
 }
 
 fn printUserId(value: UserId) {

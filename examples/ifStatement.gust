@@ -1,4 +1,4 @@
-fn status(enabled: bool): String {
+fn status(enabled: bool): string {
     if enabled {
         return "Enabled"
     } else if false {

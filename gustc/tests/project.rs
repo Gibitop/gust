@@ -60,14 +60,14 @@ fn main() {
     project.write(
         "lib/greeting.gust",
         r#"struct Greeter {
-    name: String
+    name: string
 
-    static fn new(name: String): Self => Self { name: name }
+    static fn new(name: string): Self => Self { name: name }
 }
 
-fn punctuation(): String => "!"
+fn punctuation(): string => "!"
 
-fn greeting(value: Greeter): String {
+fn greeting(value: Greeter): string {
     return "Hello, " + value.name + punctuation()
 }
 
@@ -173,12 +173,12 @@ fn string_intrinsics_are_available_without_imports() {
 fn string_builder_uses_growable_runtime_storage() {
     let project = TempProject::new();
     project.write(
-        "std/stringBuilder.gust",
-        include_str!("../../std/stringBuilder.gust"),
+        "std/internal/stringBuilder.gust",
+        include_str!("../../std/internal/stringBuilder.gust"),
     );
     project.write(
         "examples/main.gust",
-        r#"from ../std/stringBuilder import { StringBuilder }
+        r#"from ../std/internal/stringBuilder import { StringBuilder }
 
 fn main() {
     let mut builder = StringBuilder.withCapacity(1)
@@ -199,6 +199,58 @@ fn main() {
     let source = emit_c(&lowered);
     assert!(source.contains("gust_rt_string_builder_append_"));
     assert!(source.contains("gust_rt_string_builder_build_"));
+    assert!(!source.contains("gust_marker"));
+}
+
+#[test]
+fn std_internal_declares_compiler_backed_storage_types() {
+    let project = TempProject::new();
+    project.write("std/option.gust", include_str!("../../std/option.gust"));
+    project.write(
+        "std/internal/rawBuffer.gust",
+        include_str!("../../std/internal/rawBuffer.gust"),
+    );
+    project.write(
+        "std/internal/stringBuilder.gust",
+        include_str!("../../std/internal/stringBuilder.gust"),
+    );
+    project.write(
+        "main.gust",
+        r#"from ./std/internal/rawBuffer import { RawBuffer }
+from ./std/internal/stringBuilder import { StringBuilder }
+
+fn main() {
+    let value = "gust"
+    io.println(value.byteLen().toString())
+    io.println(value.len().toString())
+    if value.isEmpty() {
+        io.println("empty")
+    } else {
+        io.println("not empty")
+    }
+
+    let mut builder = StringBuilder.new()
+    builder.append(value)
+    io.println(builder.build())
+
+    let mut buffer = RawBuffer<i32>.withCapacity(1)
+    buffer.write(0, 42)
+    io.println(buffer.capacity().toString())
+}"#,
+    );
+
+    let result = check_project(&project.path("main.gust")).expect("project should load");
+    assert!(
+        result.diagnostics.is_empty(),
+        "expected std/internal storage declarations to validate, got {:?}",
+        result.diagnostics
+    );
+
+    let lowered = lower_program(&result.program).expect("std/internal storage should lower");
+    let source = emit_c(&lowered);
+    assert!(source.contains("RawBuffer<i32>"));
+    assert!(source.contains("sizeof(int32_t) * gust_buffer->gust_capacity"));
+    assert!(!source.contains("gust_empty"));
 }
 
 #[test]
@@ -211,8 +263,8 @@ fn collection_literals_lower_through_from_elements() {
         include_str!("../../std/collection.gust"),
     );
     project.write(
-        "std/rawBuffer.gust",
-        include_str!("../../std/rawBuffer.gust"),
+        "std/internal/rawBuffer.gust",
+        include_str!("../../std/internal/rawBuffer.gust"),
     );
     project.write(
         "std/arrayList.gust",
@@ -343,8 +395,8 @@ fn main() {
     );
     project.write(
         "helper.gust",
-        r#"fn visible(): String => "visible"
-fn hidden(): String => "hidden""#,
+        r#"fn visible(): string => "visible"
+fn hidden(): string => "hidden""#,
     );
 
     let result = check_project(&project.path("main.gust")).expect("project should load");
@@ -393,7 +445,7 @@ fn main() {}"#,
     );
     project.write(
         "helper.gust",
-        r#"fn broken(): String {
+        r#"fn broken(): string {
     return 1
 }"#,
     );
@@ -405,7 +457,7 @@ fn main() {}"#,
         .find(|diagnostic| {
             diagnostic
                 .message
-                .contains("expected value of type `String`")
+                .contains("expected value of type `string`")
         })
         .unwrap_or_else(|| {
             panic!(
@@ -431,13 +483,13 @@ fn main() {}"#,
         "a.gust",
         r#"from ./b import { other }
 
-fn value(): String => other()"#,
+fn value(): string => other()"#,
     );
     project.write(
         "b.gust",
         r#"from ./a import { value }
 
-fn other(): String => value()"#,
+fn other(): string => value()"#,
     );
 
     let result = check_project(&project.path("main.gust")).expect("project should load");
@@ -466,13 +518,13 @@ fn main() {
     project.write(
         "extensions.gust",
         r#"struct Greeter {
-    name: String
+    name: string
 
-    fn label(): String => "member"
+    fn label(): string => "member"
 }
 
-fn Greeter.label(): String => "extension"
-fn String.withSuffix(suffix: String): String => self + suffix"#,
+fn Greeter.label(): string => "extension"
+fn string.withSuffix(suffix: string): string => self + suffix"#,
     );
 
     let result = check_project(&project.path("main.gust")).expect("project should load");
@@ -498,8 +550,8 @@ fn main() {
     );
     project.write(
         "extensions.gust",
-        r#"fn marker(): String => "marker"
-fn String.withSuffix(suffix: String): String => self + suffix"#,
+        r#"fn marker(): string => "marker"
+fn string.withSuffix(suffix: string): string => self + suffix"#,
     );
 
     let result = check_project(&project.path("main.gust")).expect("project should load");
@@ -524,8 +576,8 @@ fn main() {}"#,
     );
     project.write(
         "helper.gust",
-        r#"fn first(): String => "first"
-fn second(): String => "second""#,
+        r#"fn first(): string => "first"
+fn second(): string => "second""#,
     );
 
     let result = check_project(&project.path("main.gust")).expect("project should load");
@@ -622,7 +674,7 @@ fn main() {
     None
 }
 
-fn none(): Option<String> => Option.None"#,
+fn none(): Option<string> => Option.None"#,
     );
 
     let result = check_project(&project.path("main.gust")).expect("project should load");
@@ -665,13 +717,13 @@ fn imported_generic_traits_are_monomorphized_after_module_linking() {
         "main.gust",
         r#"from ./named import { Named, Person }
 
-fn printName(value: Named<String>) {
+fn printName(value: Named<string>) {
     io.println(value.name())
 }
 
 fn main() {
     let person = Person.new("from module")
-    let named: Named<String> = person
+    let named: Named<string> = person
     printName(person)
     io.println(named.name())
 }"#,
@@ -683,12 +735,12 @@ fn main() {
 }
 
 struct Person {
-    name: String
+    name: string
 
-    static fn new(name: String): Self => Self { name: name }
+    static fn new(name: string): Self => Self { name: name }
 }
 
-impl Named<String> for Person {
+impl Named<string> for Person {
     fn name() => self.name
 }"#,
     );
@@ -712,7 +764,7 @@ fn imported_generic_trait_impl_templates_are_monomorphized_after_module_linking(
 
 fn main() {
     let value = Box.new("from module")
-    let named: Named<String> = value
+    let named: Named<string> = value
     io.println(named.name())
 }"#,
     );
@@ -759,11 +811,11 @@ fn main() {
     project.write(
         "model.gust",
         r#"trait Describe {
-    fn describe(): String
+    fn describe(): string
 }
 
 struct Person {
-    name: String
+    name: string
 }"#,
     );
     project.write(
@@ -877,7 +929,7 @@ fn imported_trait_bound_and_impl_coherence_diagnostics_use_gust_names() {
         "main.gust",
         r#"from ./model import { Named, Person }
 
-fn describe<T: Named>(value: T): String => "description"
+fn describe<T: Named>(value: T): string => "description"
 
 fn main() {
     let description = describe(Person {})
@@ -886,7 +938,7 @@ fn main() {
     bound_project.write(
         "model.gust",
         r#"trait Named {
-    fn name(): String
+    fn name(): string
 }
 
 struct Person {}"#,
@@ -929,7 +981,7 @@ fn main() {}"#,
     coherence_project.write(
         "model.gust",
         r#"trait Describe {
-    fn describe(): String
+    fn describe(): string
 }
 
 struct Person {}"#,

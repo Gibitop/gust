@@ -10,7 +10,7 @@ enum Option<T> {
     }
 }
 
-fn describe(value: Option<String>): String {
+fn describe(value: Option<string>): string {
     return match value {
         Option.Some(text) => "Value: " + text,
         Option.None => "No value",
@@ -19,7 +19,7 @@ fn describe(value: Option<String>): String {
 
 fn main() {
     let inferred = Option.Some("Gust")
-    let contextual: Option<String> = Option.None
+    let contextual: Option<string> = Option.None
     let explicit = Option<i32>.Some(42)
     let explicit2 = Option<i32>.None
 
