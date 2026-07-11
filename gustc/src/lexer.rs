@@ -24,6 +24,8 @@ pub enum TokenKind {
     Colon,
     Comma,
     Dot,
+    DotDot,
+    DotDotEqual,
     Slash,
     SlashEqual,
     Plus,
@@ -135,7 +137,17 @@ impl<'source> Lexer<'source> {
             ']' => self.single(TokenKind::RightBracket, start),
             ':' => self.single(TokenKind::Colon, start),
             ',' => self.single(TokenKind::Comma, start),
-            '.' => self.single(TokenKind::Dot, start),
+            '.' => {
+                if self.match_character('.') {
+                    if self.match_character('=') {
+                        self.token(TokenKind::DotDotEqual, start, self.position)
+                    } else {
+                        self.token(TokenKind::DotDot, start, self.position)
+                    }
+                } else {
+                    self.single(TokenKind::Dot, start)
+                }
+            }
             '/' => {
                 if self.match_character('=') {
                     self.token(TokenKind::SlashEqual, start, self.position)

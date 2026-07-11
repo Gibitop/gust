@@ -349,6 +349,71 @@ fn main() {
 }
 
 #[test]
+fn range_literals_iterate_with_project_modules() {
+    let project = TempProject::new();
+    project.write("std/option.gust", include_str!("../../std/option.gust"));
+    project.write("std/iter.gust", include_str!("../../std/iter.gust"));
+    project.write("std/range.gust", include_str!("../../std/range.gust"));
+    project.write(
+        "main.gust",
+        r#"from ./std/range import { Range, RangeInclusive }
+
+fn label(value: i32): string {
+    return match value {
+        0 => "zero",
+        1..4 => "small",
+        4..=6 => "medium",
+        _ => "other",
+    }
+}
+
+fn main() {
+    for value in 1..4 {
+        io.println(label(value))
+    }
+
+    for value in 4..=6 {
+        io.println(label(value))
+    }
+}"#,
+    );
+
+    let result = check_project(&project.path("main.gust")).expect("project should load");
+    assert!(
+        result.diagnostics.is_empty(),
+        "expected range project to validate, got {:?}",
+        result.diagnostics
+    );
+
+    let lowered = lower_program(&result.program).expect("range project should lower");
+    let source = emit_c(&lowered);
+    assert!(source.contains("Range"));
+    assert!(source.contains("RangeInclusive"));
+    let c_path = project.path("range.c");
+    fs::write(&c_path, source).expect("generated C should be written");
+    let executable = project.path("range");
+    let output = Command::new("cc")
+        .arg(&c_path)
+        .arg("-o")
+        .arg(&executable)
+        .output()
+        .expect("C compiler should build range executable");
+    assert!(
+        output.status.success(),
+        "generated range C should build: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let output = Command::new(executable)
+        .output()
+        .expect("range executable should run");
+    assert!(output.status.success());
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "small\nsmall\nsmall\nmedium\nmedium\nmedium\n"
+    );
+}
+
+#[test]
 fn enum_methods_survive_project_linking() {
     let project = TempProject::new();
     project.write(

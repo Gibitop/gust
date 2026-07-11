@@ -1,0 +1,61 @@
+from ./iter import { Iterable, Iterator }
+from ./option import { Option }
+
+struct Range {
+    start: i32
+    end: i32
+}
+
+struct RangeInclusive {
+    start: i32
+    end: i32
+}
+
+struct RangeIterator {
+    current: i32
+    end: i32
+    inclusive: bool
+    finished: bool
+}
+
+impl Iterable<i32> for Range {
+    fn iterator(): Iterator<i32> => RangeIterator {
+        current: self.start,
+        end: self.end,
+        inclusive: false,
+        finished: false,
+    }
+}
+
+impl Iterable<i32> for RangeInclusive {
+    fn iterator(): Iterator<i32> => RangeIterator {
+        current: self.start,
+        end: self.end,
+        inclusive: true,
+        finished: false,
+    }
+}
+
+impl Iterator<i32> for RangeIterator {
+    fn next(mut self): Option<i32> {
+        if self.finished {
+            return Option<i32>.None
+        }
+
+        if self.current > self.end {
+            return Option<i32>.None
+        }
+
+        if !self.inclusive && self.current >= self.end {
+            return Option<i32>.None
+        }
+
+        let value = self.current
+        if self.current == self.end {
+            self.finished = true
+        } else {
+            self.current++
+        }
+        return Option.Some(value)
+    }
+}

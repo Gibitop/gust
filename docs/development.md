@@ -129,6 +129,16 @@ mutable-capable expression because `next()` advances it; an `Iterable<T>` may be
 an immutable binding because it produces the iterator. `break` and `continue` apply to the
 generated loop.
 
+## Range literals
+
+Bounded range literals use Rust-shaped syntax. `start..end` creates an exclusive `Range`, and
+`start..=end` creates an inclusive `RangeInclusive`. The first implementation supports `i32`
+endpoints and requires the corresponding standard-library range types to be imported. Both range
+types implement `Iterable<i32>` through standard-library code, so `for value in 0..10` works when
+`std/range.gust` is part of the loaded module graph. Open-ended and full ranges are not implemented
+yet. Match patterns also accept `i32` exact numeric literals and bounded ranges, such as
+`0`, `1..5`, and `5..=8`; numeric matches require a wildcard branch for exhaustiveness.
+
 ## Numeric literals
 
 Integer literals default to `i32`. Decimal and exponent-form literals default to `f64`.

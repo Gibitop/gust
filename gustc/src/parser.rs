@@ -680,7 +680,7 @@ impl Parser {
     }
 
     fn parse_expression(&mut self) -> Expr {
-        self.parse_binary_expression(0)
+        self.parse_range_expression()
     }
 
     fn parse_expression_without_struct_init(&mut self) -> Expr {
@@ -689,6 +689,28 @@ impl Parser {
         let expr = self.parse_expression();
         self.allow_struct_init = previous;
         expr
+    }
+
+    fn parse_range_expression(&mut self) -> Expr {
+        let start = self.parse_binary_expression(0);
+        let inclusive = if self.match_kind(&TokenKind::DotDotEqual) {
+            true
+        } else if self.match_kind(&TokenKind::DotDot) {
+            false
+        } else {
+            return start;
+        };
+        let end = self.parse_binary_expression(0);
+        let span = start.span.join(end.span);
+
+        Expr {
+            kind: ExprKind::Range {
+                start: Box::new(start),
+                end: Box::new(end),
+                inclusive,
+            },
+            span,
+        }
     }
 
     fn parse_binary_expression(&mut self, min_precedence: u8) -> Expr {
@@ -1006,6 +1028,33 @@ impl Parser {
         if let TokenKind::StringLiteral(value) = self.current().kind.clone() {
             self.advance();
             return Pattern::String { value, span: start };
+        }
+
+        if let TokenKind::Number(value) = self.current().kind.clone() {
+            self.advance();
+            let inclusive = if self.match_kind(&TokenKind::DotDotEqual) {
+                Some(true)
+            } else if self.match_kind(&TokenKind::DotDot) {
+                Some(false)
+            } else {
+                None
+            };
+            if let Some(inclusive) = inclusive {
+                let end = if let TokenKind::Number(value) = self.current().kind.clone() {
+                    self.advance();
+                    value
+                } else {
+                    self.error_here("expected range pattern end");
+                    String::new()
+                };
+                return Pattern::Range {
+                    start: value,
+                    end,
+                    inclusive,
+                    span: start.join(self.previous_span()),
+                };
+            }
+            return Pattern::Number { value, span: start };
         }
 
         if matches!(&self.current().kind, TokenKind::Identifier(name) if name == "_") {
@@ -1375,6 +1424,8 @@ fn simple_kind_eq(left: &TokenKind, right: &TokenKind) -> bool {
             | (TokenKind::Colon, TokenKind::Colon)
             | (TokenKind::Comma, TokenKind::Comma)
             | (TokenKind::Dot, TokenKind::Dot)
+            | (TokenKind::DotDot, TokenKind::DotDot)
+            | (TokenKind::DotDotEqual, TokenKind::DotDotEqual)
             | (TokenKind::Slash, TokenKind::Slash)
             | (TokenKind::SlashEqual, TokenKind::SlashEqual)
             | (TokenKind::Plus, TokenKind::Plus)

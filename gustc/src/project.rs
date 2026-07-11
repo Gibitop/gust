@@ -772,6 +772,10 @@ impl<'names, 'diagnostics> ModuleRewriter<'names, 'diagnostics> {
                     self.rewrite_expr(&mut field.value);
                 }
             }
+            ExprKind::Range { start, end, .. } => {
+                self.rewrite_expr(start);
+                self.rewrite_expr(end);
+            }
             ExprKind::Binary { left, right, .. } => {
                 self.rewrite_expr(left);
                 self.rewrite_expr(right);
@@ -806,7 +810,10 @@ impl<'names, 'diagnostics> ModuleRewriter<'names, 'diagnostics> {
                 }
                 binding.clone()
             }
-            Pattern::String { .. } | Pattern::Wildcard { .. } => None,
+            Pattern::String { .. }
+            | Pattern::Number { .. }
+            | Pattern::Range { .. }
+            | Pattern::Wildcard { .. } => None,
         };
 
         self.scopes
@@ -1112,6 +1119,10 @@ fn shift_expr(expr: &mut Expr, offset: usize) {
                 shift_expr(&mut field.value, offset);
             }
         }
+        ExprKind::Range { start, end, .. } => {
+            shift_expr(start, offset);
+            shift_expr(end, offset);
+        }
         ExprKind::Binary { left, right, .. } => {
             shift_expr(left, offset);
             shift_expr(right, offset);
@@ -1126,6 +1137,8 @@ fn shift_expr(expr: &mut Expr, offset: usize) {
                 match &mut branch.pattern {
                     Pattern::Variant { span, .. }
                     | Pattern::String { span, .. }
+                    | Pattern::Number { span, .. }
+                    | Pattern::Range { span, .. }
                     | Pattern::Wildcard { span } => shift_span(span, offset),
                 }
                 match &mut branch.body {
