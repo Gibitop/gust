@@ -291,8 +291,17 @@ pub struct LoweredMatchStatementBranch {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LoweredPattern {
-    Variant { enum_name: String, variant: String },
+    Variant {
+        enum_name: String,
+        variant: String,
+    },
     String(String),
+    Number(String),
+    Range {
+        start: String,
+        end: String,
+        inclusive: bool,
+    },
     Wildcard,
 }
 
@@ -1744,6 +1753,14 @@ fn infer_expr_type(
                 .contains_key(name)
                 .then(|| LoweredType::Struct(name.clone()))
         }
+        ExprKind::Range { inclusive, .. } => {
+            let source_name = if *inclusive {
+                "RangeInclusive"
+            } else {
+                "Range"
+            };
+            find_lowered_struct_by_source_name(source_name, structs).map(LoweredType::Struct)
+        }
         ExprKind::Member { object, name } => {
             if let ExprKind::Identifier(enum_name) = &object.kind
                 && let Some(variant) = find_qualified_variant(enums, enum_name, name)
@@ -2026,6 +2043,7 @@ fn expression_has_mutable_capability(expr: &Expr, locals: &HashMap<String, Lower
         | ExprKind::Char(_)
         | ExprKind::Number(_)
         | ExprKind::Bool(_)
+        | ExprKind::Range { .. }
         | ExprKind::Binary { .. }
         | ExprKind::Unary { .. } => true,
         ExprKind::Call { callee, .. } => {
@@ -2236,6 +2254,10 @@ fn collect_expr_captures(expr: &Expr, available: &HashSet<String>, captured: &mu
                 collect_expr_captures(&field.value, available, captured);
             }
         }
+        ExprKind::Range { start, end, .. } => {
+            collect_expr_captures(start, available, captured);
+            collect_expr_captures(end, available, captured);
+        }
         ExprKind::Match { value, branches } => {
             collect_expr_captures(value, available, captured);
             for branch in branches {
@@ -2417,6 +2439,10 @@ fn collect_lambda_expr_captures(
             for field in fields {
                 collect_lambda_expr_captures(&field.value, available, lambda_locals, captured);
             }
+        }
+        ExprKind::Range { start, end, .. } => {
+            collect_lambda_expr_captures(start, available, lambda_locals, captured);
+            collect_lambda_expr_captures(end, available, lambda_locals, captured);
         }
         ExprKind::Match { value, branches } => {
             collect_lambda_expr_captures(value, available, lambda_locals, captured);
@@ -3572,11 +3598,13 @@ fn lower_match_statement(
     )?;
     if !matches!(
         value.type_,
-        LoweredType::Enum(_) | LoweredType::Basic(BasicType::String)
+        LoweredType::Enum(_)
+            | LoweredType::Basic(BasicType::String)
+            | LoweredType::Basic(BasicType::I32)
     ) {
         diagnostics.push(Diagnostic::error(
             expr.span,
-            "match statements require an enum or `string` value in executable builds",
+            "match statements require an enum, `string`, or `i32` value in executable builds",
         ));
         return None;
     }
@@ -4105,6 +4133,105 @@ fn lower_struct_init(
         kind: LoweredExprKind::StructLiteral {
             name: name.to_string(),
             fields: lowered_fields,
+        },
+    })
+}
+
+fn find_lowered_struct_by_source_name(
+    source_name: &str,
+    structs: &HashMap<String, LoweredStruct>,
+) -> Option<String> {
+    structs
+        .keys()
+        .find_map(|name| (source_callable_name(name) == source_name).then(|| name.clone()))
+}
+
+fn lower_range_literal(
+    expr: &Expr,
+    start: &Expr,
+    end: &Expr,
+    inclusive: bool,
+    locals: &HashMap<String, LoweringLocal>,
+    signatures: &HashMap<String, FunctionSignature>,
+    structs: &HashMap<String, LoweredStruct>,
+    enums: &HashMap<String, LoweredEnum>,
+    traits: &HashMap<String, LoweredTrait>,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> Option<LoweredExpr> {
+    let type_name = if inclusive { "RangeInclusive" } else { "Range" };
+    let Some(name) = find_lowered_struct_by_source_name(type_name, structs) else {
+        diagnostics.push(Diagnostic::error(
+            expr.span,
+            format!("range literals require an imported `{type_name}` in executable builds"),
+        ));
+        return None;
+    };
+    let Some(struct_) = structs.get(&name) else {
+        diagnostics.push(Diagnostic::error(
+            expr.span,
+            format!("unknown range struct `{name}` in executable build"),
+        ));
+        return None;
+    };
+    if struct_.fields.len() != 2 {
+        diagnostics.push(Diagnostic::error(
+            expr.span,
+            format!("range struct `{name}` must declare only `start` and `end` fields"),
+        ));
+        return None;
+    }
+    let Some(start_field) = struct_.fields.iter().find(|field| field.name == "start") else {
+        diagnostics.push(Diagnostic::error(
+            expr.span,
+            format!("range struct `{name}` must declare a `start` field"),
+        ));
+        return None;
+    };
+    let Some(end_field) = struct_.fields.iter().find(|field| field.name == "end") else {
+        diagnostics.push(Diagnostic::error(
+            expr.span,
+            format!("range struct `{name}` must declare an `end` field"),
+        ));
+        return None;
+    };
+
+    let start = lower_expr(
+        start,
+        locals,
+        signatures,
+        structs,
+        enums,
+        traits,
+        diagnostics,
+        Some(start_field.type_.clone()),
+        "expected supported range start in executable builds",
+    )?;
+    let end = lower_expr(
+        end,
+        locals,
+        signatures,
+        structs,
+        enums,
+        traits,
+        diagnostics,
+        Some(end_field.type_.clone()),
+        "expected supported range end in executable builds",
+    )?;
+
+    Some(LoweredExpr {
+        type_: LoweredType::Struct(name.clone()),
+        kind: LoweredExprKind::StructLiteral {
+            name,
+            fields: vec![
+                LoweredStructFieldValue {
+                    name: "start".to_string(),
+                    value: start,
+                },
+                LoweredStructFieldValue {
+                    name: "end".to_string(),
+                    value: end,
+                },
+            ],
         },
     })
 }
@@ -4644,6 +4771,22 @@ fn lower_expr(
             expr,
             name,
             fields,
+            locals,
+            signatures,
+            structs,
+            enums,
+            traits,
+            diagnostics,
+        )?,
+        ExprKind::Range {
+            start,
+            end,
+            inclusive,
+        } => lower_range_literal(
+            expr,
+            start,
+            end,
+            *inclusive,
             locals,
             signatures,
             structs,
@@ -5328,11 +5471,13 @@ fn lower_expr(
             )?;
             if !matches!(
                 value.type_,
-                LoweredType::Enum(_) | LoweredType::Basic(BasicType::String)
+                LoweredType::Enum(_)
+                    | LoweredType::Basic(BasicType::String)
+                    | LoweredType::Basic(BasicType::I32)
             ) {
                 diagnostics.push(Diagnostic::error(
                     expr.span,
-                    "match expressions require an enum or `string` value in executable builds",
+                    "match expressions require an enum, `string`, or `i32` value in executable builds",
                 ));
                 return None;
             }
@@ -6075,6 +6220,38 @@ fn lower_match_pattern(
         }
         (Pattern::String { value, .. }, LoweredType::Basic(BasicType::String)) => {
             Some(LoweredPattern::String(value.clone()))
+        }
+        (Pattern::Number { value, span }, LoweredType::Basic(BasicType::I32)) => {
+            if number_literal_is_float(value) {
+                diagnostics.push(Diagnostic::error(
+                    *span,
+                    "numeric match patterns for `i32` require integer literals in executable builds",
+                ));
+                return None;
+            }
+            Some(LoweredPattern::Number(value.clone()))
+        }
+        (
+            Pattern::Range {
+                start,
+                end,
+                inclusive,
+                span,
+            },
+            LoweredType::Basic(BasicType::I32),
+        ) => {
+            if number_literal_is_float(start) || number_literal_is_float(end) {
+                diagnostics.push(Diagnostic::error(
+                    *span,
+                    "numeric range patterns for `i32` require integer literal bounds in executable builds",
+                ));
+                return None;
+            }
+            Some(LoweredPattern::Range {
+                start: start.clone(),
+                end: end.clone(),
+                inclusive: *inclusive,
+            })
         }
         (Pattern::Wildcard { .. }, _) => Some(LoweredPattern::Wildcard),
         _ => {

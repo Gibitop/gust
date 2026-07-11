@@ -1926,6 +1926,18 @@ impl Monomorphizer {
                     ));
                 }
             }
+            ExprKind::Range { start, end, .. } => {
+                let endpoint = TypeRef {
+                    name: "i32".to_string(),
+                    args: Vec::new(),
+                    function: None,
+                    span: expr.span,
+                };
+                self.apply_expr_context(start, &endpoint);
+                self.apply_expr_context(end, &endpoint);
+                self.rewrite_expr(start, substitutions);
+                self.rewrite_expr(end, substitutions);
+            }
             ExprKind::Binary { left, right, .. } => {
                 self.rewrite_expr(left, substitutions);
                 self.rewrite_expr(right, substitutions);
@@ -3018,6 +3030,24 @@ impl Monomorphizer {
                     })
                 }
             }
+            ExprKind::Range { inclusive, .. } => {
+                let source_name = if *inclusive {
+                    "RangeInclusive"
+                } else {
+                    "Range"
+                };
+                self.concrete_structs
+                    .iter()
+                    .find(|name| {
+                        *name == source_name || name.ends_with(&format!("::{source_name}"))
+                    })
+                    .map(|name| TypeRef {
+                        name: name.clone(),
+                        args: Vec::new(),
+                        function: None,
+                        span: expr.span,
+                    })
+            }
             ExprKind::GenericType { name, args } => {
                 if name == "Self"
                     && args.is_empty()
@@ -3860,6 +3890,25 @@ impl<'items> MethodReachability<'items> {
                     self.visit_expr(&field.value, locals);
                 }
                 self.structs.contains_key(name).then(|| name.clone())
+            }
+            ExprKind::Range {
+                start,
+                end,
+                inclusive,
+            } => {
+                self.visit_expr(start, locals);
+                self.visit_expr(end, locals);
+                let source_name = if *inclusive {
+                    "RangeInclusive"
+                } else {
+                    "Range"
+                };
+                self.structs
+                    .keys()
+                    .find(|name| {
+                        *name == source_name || name.ends_with(&format!("::{source_name}"))
+                    })
+                    .cloned()
             }
             ExprKind::Member { object, name } => {
                 let object_type = self.visit_expr(object, locals)?;

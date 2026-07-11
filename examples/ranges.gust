@@ -1,0 +1,20 @@
+from ../std/range import { Range, RangeInclusive }
+
+fn label(value: i32) {
+    return match value {
+        0 => "zero",
+        1..5 => "small",
+        5..=8 => "medium",
+        _ => "other",
+    }
+}
+
+fn main() {
+    for value in 1..5 {
+        io.println(label(value))
+    }
+
+    for value in 5..=8 {
+        io.println(label(value))
+    }
+}

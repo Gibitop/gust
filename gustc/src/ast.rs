@@ -268,6 +268,11 @@ pub enum ExprKind {
         args: Vec<TypeRef>,
         fields: Vec<StructInitField>,
     },
+    Range {
+        start: Box<Expr>,
+        end: Box<Expr>,
+        inclusive: bool,
+    },
     Binary {
         left: Box<Expr>,
         op: BinaryOp,
@@ -381,6 +386,16 @@ pub enum Pattern {
         value: String,
         span: Span,
     },
+    Number {
+        value: String,
+        span: Span,
+    },
+    Range {
+        start: String,
+        end: String,
+        inclusive: bool,
+        span: Span,
+    },
     Wildcard {
         span: Span,
     },
@@ -391,6 +406,8 @@ impl Pattern {
         match self {
             Pattern::Variant { span, .. }
             | Pattern::String { span, .. }
+            | Pattern::Number { span, .. }
+            | Pattern::Range { span, .. }
             | Pattern::Wildcard { span } => *span,
         }
     }

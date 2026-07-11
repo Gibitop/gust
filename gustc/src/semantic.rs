@@ -1517,6 +1517,11 @@ impl Analyzer {
             ExprKind::StructInit { name, fields, .. } => {
                 self.validate_struct_init(expr.span, name, fields)
             }
+            ExprKind::Range {
+                start,
+                end,
+                inclusive,
+            } => self.validate_range(expr.span, start, end, *inclusive),
             ExprKind::Unary {
                 op: UnaryOp::Not,
                 operand,
@@ -1637,8 +1642,31 @@ impl Analyzer {
                                 ));
                             }
                         }
+                        (Type::Basic(BasicType::I32), Pattern::Number { value, span }) => {
+                            if number_literal_is_float(value) {
+                                self.diagnostics.push(Diagnostic::error(
+                                    *span,
+                                    "numeric match patterns for `i32` require integer literals",
+                                ));
+                            }
+                        }
                         (
-                            Type::Enum(_) | Type::Basic(BasicType::String),
+                            Type::Basic(BasicType::I32),
+                            Pattern::Range {
+                                start, end, span, ..
+                            },
+                        ) => {
+                            if number_literal_is_float(start) || number_literal_is_float(end) {
+                                self.diagnostics.push(Diagnostic::error(
+                                    *span,
+                                    "numeric range patterns for `i32` require integer literal bounds",
+                                ));
+                            }
+                        }
+                        (
+                            Type::Enum(_)
+                            | Type::Basic(BasicType::String)
+                            | Type::Basic(BasicType::I32),
                             Pattern::Wildcard { span },
                         ) => {
                             if has_wildcard {
@@ -1659,6 +1687,42 @@ impl Analyzer {
                             self.diagnostics.push(Diagnostic::error(
                                 *span,
                                 "enum patterns cannot match a `string` value",
+                            ));
+                        }
+                        (Type::Basic(BasicType::String), Pattern::Number { span, .. }) => {
+                            self.diagnostics.push(Diagnostic::error(
+                                *span,
+                                "numeric patterns cannot match a `string` value",
+                            ));
+                        }
+                        (Type::Basic(BasicType::String), Pattern::Range { span, .. }) => {
+                            self.diagnostics.push(Diagnostic::error(
+                                *span,
+                                "numeric range patterns cannot match a `string` value",
+                            ));
+                        }
+                        (Type::Enum(enum_name), Pattern::Number { span, .. }) => {
+                            self.diagnostics.push(Diagnostic::error(
+                                *span,
+                                format!("numeric patterns cannot match enum `{enum_name}`"),
+                            ));
+                        }
+                        (Type::Enum(enum_name), Pattern::Range { span, .. }) => {
+                            self.diagnostics.push(Diagnostic::error(
+                                *span,
+                                format!("numeric range patterns cannot match enum `{enum_name}`"),
+                            ));
+                        }
+                        (Type::Basic(type_), Pattern::Number { span, .. })
+                        | (Type::Basic(type_), Pattern::Range { span, .. })
+                            if *type_ != BasicType::I32 =>
+                        {
+                            self.diagnostics.push(Diagnostic::error(
+                                *span,
+                                format!(
+                                    "numeric match patterns currently require an `i32` match value, got `{}`",
+                                    type_.name()
+                                ),
                             ));
                         }
                         (Type::Unknown, _) => {
@@ -1709,13 +1773,21 @@ impl Analyzer {
                         expr.span,
                         "non-exhaustive match for `string`; add a wildcard branch",
                     ));
+                } else if value_type == Type::Basic(BasicType::I32) && !has_wildcard {
+                    self.diagnostics.push(Diagnostic::error(
+                        expr.span,
+                        "non-exhaustive match for `i32`; add a wildcard branch",
+                    ));
                 } else if !matches!(
                     value_type,
-                    Type::Enum(_) | Type::Basic(BasicType::String) | Type::Unknown
+                    Type::Enum(_)
+                        | Type::Basic(BasicType::String)
+                        | Type::Basic(BasicType::I32)
+                        | Type::Unknown
                 ) {
                     self.diagnostics.push(Diagnostic::error(
                         value.span,
-                        "match expressions require an enum or `string` value",
+                        "match expressions require an enum, `string`, or `i32` value",
                     ));
                 }
 
@@ -2991,7 +3063,10 @@ impl Analyzer {
 
                 Some(variant.clone())
             }
-            Pattern::String { .. } | Pattern::Wildcard { .. } => None,
+            Pattern::String { .. }
+            | Pattern::Number { .. }
+            | Pattern::Range { .. }
+            | Pattern::Wildcard { .. } => None,
         }
     }
 
@@ -3050,6 +3125,32 @@ impl Analyzer {
                     .find_map(|trait_name| generic_trait_item_type_name(trait_name, "Iterable"))
             })
             .map(|item_type_name| self.type_from_name(item_type_name))
+    }
+
+    fn validate_range(&mut self, span: Span, start: &Expr, end: &Expr, inclusive: bool) -> Type {
+        let endpoint_type = Type::Basic(BasicType::I32);
+        let start_type = self.validate_expr_with_context(start, Some(endpoint_type.clone()));
+        let end_type = self.validate_expr_with_context(end, Some(endpoint_type.clone()));
+        self.report_type_mismatch(start.span, endpoint_type.clone(), start_type);
+        self.report_type_mismatch(end.span, endpoint_type, end_type);
+
+        let type_name = if inclusive { "RangeInclusive" } else { "Range" };
+
+        if let Some(name) = self.find_struct_by_source_name(type_name) {
+            Type::Struct(name)
+        } else {
+            self.diagnostics.push(Diagnostic::error(
+                span,
+                format!("range literals require an imported `{type_name}`"),
+            ));
+            Type::Unknown
+        }
+    }
+
+    fn find_struct_by_source_name(&self, source_name: &str) -> Option<String> {
+        self.structs
+            .keys()
+            .find_map(|name| (source_callable_name(name) == source_name).then(|| name.clone()))
     }
 
     fn for_uses_iterator_directly(&self, iterable_type: &Type) -> bool {
@@ -3329,6 +3430,7 @@ impl Analyzer {
             | ExprKind::Char(_)
             | ExprKind::Number(_)
             | ExprKind::Bool(_)
+            | ExprKind::Range { .. }
             | ExprKind::Binary { .. }
             | ExprKind::Unary { .. } => true,
             ExprKind::Array(_)

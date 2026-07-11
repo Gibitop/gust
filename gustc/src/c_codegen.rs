@@ -2212,6 +2212,30 @@ fn push_c_match_condition(source: &mut String, temp_name: &str, pattern: &Lowere
             push_c_string_literal(source, value);
             source.push(')');
         }
+        LoweredPattern::Number(value) => {
+            source.push_str(temp_name);
+            source.push_str(" == ");
+            push_c_number_literal(source, value, &LoweredType::Basic(BasicType::I32));
+        }
+        LoweredPattern::Range {
+            start,
+            end,
+            inclusive,
+        } => {
+            source.push('(');
+            source.push_str(temp_name);
+            source.push_str(" >= ");
+            push_c_number_literal(source, start, &LoweredType::Basic(BasicType::I32));
+            source.push_str(" && ");
+            source.push_str(temp_name);
+            if *inclusive {
+                source.push_str(" <= ");
+            } else {
+                source.push_str(" < ");
+            }
+            push_c_number_literal(source, end, &LoweredType::Basic(BasicType::I32));
+            source.push(')');
+        }
         LoweredPattern::Wildcard => source.push_str("true"),
     }
 }
