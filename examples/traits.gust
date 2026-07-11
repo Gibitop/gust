@@ -1,25 +1,25 @@
 impl Describe for Person {
     fn describe() => "Hello, " + self.name
-    static fn new(name: String) => Self { name: name }
+    static fn new(name: string) => Self { name: name }
 }
 
 impl Update for Person {
-    fn update(mut self, name: String) {
+    fn update(mut self, name: string) {
         self.name = name
     }
 }
 
 trait Describe {
-    fn describe(): String
-    static fn new(name: String): Self
+    fn describe(): string
+    static fn new(name: string): Self
 }
 
 trait Update {
-    fn update(mut self, name: String): void
+    fn update(mut self, name: string): void
 }
 
 struct Person {
-    name: String
+    name: string
 }
 
 fn printDescription(value: Describe) {

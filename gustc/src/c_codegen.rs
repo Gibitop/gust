@@ -1148,6 +1148,12 @@ fn push_c_struct(source: &mut String, struct_: &LoweredStruct) {
         source.push_str("    size_t gust_capacity;\n");
         source.push_str("    size_t gust_length;\n");
     }
+    if struct_.fields.is_empty()
+        && struct_.raw_buffer_element.is_none()
+        && !is_string_builder_name(&struct_.name)
+    {
+        source.push_str("    bool gust_empty;\n");
+    }
 
     source.push_str("};\n");
 }
@@ -2798,7 +2804,7 @@ fn push_c_value(source: &mut String, value: &LoweredExpr, structs: &[LoweredStru
             source.push(')');
         }
         LoweredExprKind::Call { name, args } => {
-            if name == "intrinsic String.len" {
+            if name == "intrinsic string.len" {
                 source.push_str("gust_rt_string_char_len(");
                 push_c_value(source, &args[0], structs);
                 source.push(')');
@@ -2813,7 +2819,7 @@ fn push_c_value(source: &mut String, value: &LoweredExpr, structs: &[LoweredStru
                     push_c_type(source, &value.type_);
                     source.push_str(" gust_builder = ");
                     push_c_struct_new_name(source, builder_name);
-                    source.push_str("(false);\n    gust_builder->gust_capacity = ");
+                    source.push_str("();\n    gust_builder->gust_capacity = ");
                     push_c_value(source, &args[0], structs);
                     source.push_str(";\n    if (gust_builder->gust_capacity > 0) {\n        gust_builder->gust_data = gust_rt_alloc(gust_builder->gust_capacity);\n    }\n    gust_builder;\n})");
                     return;

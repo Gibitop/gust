@@ -11,11 +11,11 @@ enum Being {
 } // There is no semicolons at the end of the lines ever
 
 struct Person {
-    name: String
+    name: string
     age: u32
 
     // Methods can be defined on structs
-    fn toJson(): String {
+    fn toJson(): string {
         return "{\n" +
         "    \"name\": \"" + escapeString(self.name) + "\",\n" +
         "    \"age\": " + self.age.toString() + "\n" +
@@ -70,7 +70,7 @@ fn main() {
 }
 
 // this function returns a string. This is inferred by the compiler
-fn getGreeting(being: Being): String {
+fn getGreeting(being: Being): string {
     // Returns are always explicit (through the return keyword) for function with a body block
     return match being {
         // Match branches extract the value from the matched expression

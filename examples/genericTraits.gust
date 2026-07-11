@@ -1,4 +1,4 @@
-impl Named<String> for Person {
+impl Named<string> for Person {
     fn name() => self.name
 }
 
@@ -15,7 +15,7 @@ trait Named<T> {
 }
 
 trait Labeled {
-    fn label(): String
+    fn label(): string
 }
 
 struct Box<T> {
@@ -23,23 +23,23 @@ struct Box<T> {
 }
 
 struct Person {
-    name: String
+    name: string
 }
 
-fn printName(value: Named<String>) {
+fn printName(value: Named<string>) {
     io.println(value.name())
 }
 
-fn printLabeledName<T: Named<String> + Labeled>(value: T) {
+fn printLabeledName<T: Named<string> + Labeled>(value: T) {
     io.println(value.label())
     io.println(value.name())
 }
 
 fn main() {
     let person = Person { name: "Gust" }
-    let named: Named<String> = person
-    let boxed = Box<String> { value: "Boxed Gust" }
-    let boxedNamed: Named<String> = boxed
+    let named: Named<string> = person
+    let boxed = Box<string> { value: "Boxed Gust" }
+    let boxedNamed: Named<string> = boxed
 
     io.println(person.name())
     printName(person)

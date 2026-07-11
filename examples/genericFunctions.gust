@@ -27,7 +27,7 @@ fn main() {
     let explicit = identity<i32>(42)
     let nested = identity(identity("nested"))
     let wrapped = some("wrapped")
-    let missing: Option<String> = none()
+    let missing: Option<string> = none()
 
     io.println(inferred)
     io.println(explicit.toString())

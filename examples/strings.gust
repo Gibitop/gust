@@ -1,4 +1,4 @@
-from ../std/stringBuilder import { StringBuilder }
+from ../std/internal/stringBuilder import { StringBuilder }
 
 fn main() {
     let empty = ""
@@ -14,7 +14,7 @@ fn main() {
     io.println(value.len().toString())
 
     if '🦀' == '🦀' {
-        io.println("Char values compare by Unicode scalar value")
+        io.println("char values compare by Unicode scalar value")
     }
 
     if copied == message {

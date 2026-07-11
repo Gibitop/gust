@@ -1,5 +1,5 @@
 struct Message {
-    text: String
+    text: string
 }
 
 struct Pair {
@@ -7,7 +7,7 @@ struct Pair {
     second: Message
 }
 
-fn append(mut pair: Pair, suffix: String) {
+fn append(mut pair: Pair, suffix: string) {
     pair.first.text += suffix
 }
 

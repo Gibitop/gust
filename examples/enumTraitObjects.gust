@@ -8,7 +8,7 @@ impl Describe for Mood {
 }
 
 trait Describe {
-    fn describe(): String
+    fn describe(): string
 }
 
 enum Mood {

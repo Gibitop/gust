@@ -2,7 +2,7 @@
 
 fn main() {
     // Strings default to the empty string.
-    let emptyMessage: String
+    let emptyMessage: string
     let greeting = "Hello from basic types!"
 
     io.println(emptyMessage)
@@ -34,5 +34,5 @@ fn main() {
     let singlePrecision: f32 = 1.25
     let doublePrecision = 2.5 // Unannotated floating-point literals default to f64.
 
-    // Numeric and bool locals are valid, but io.println currently accepts only String values.
+    // Numeric and bool locals are valid, but io.println currently accepts only string values.
 }

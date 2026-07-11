@@ -1658,7 +1658,7 @@ impl Analyzer {
                         (Type::Basic(BasicType::String), Pattern::Variant { span, .. }) => {
                             self.diagnostics.push(Diagnostic::error(
                                 *span,
-                                "enum patterns cannot match a `String` value",
+                                "enum patterns cannot match a `string` value",
                             ));
                         }
                         (Type::Unknown, _) => {
@@ -1707,7 +1707,7 @@ impl Analyzer {
                 } else if value_type == Type::Basic(BasicType::String) && !has_wildcard {
                     self.diagnostics.push(Diagnostic::error(
                         expr.span,
-                        "non-exhaustive match for `String`; add a wildcard branch",
+                        "non-exhaustive match for `string`; add a wildcard branch",
                     ));
                 } else if !matches!(
                     value_type,
@@ -1715,7 +1715,7 @@ impl Analyzer {
                 ) {
                     self.diagnostics.push(Diagnostic::error(
                         value.span,
-                        "match expressions require an enum or `String` value",
+                        "match expressions require an enum or `string` value",
                     ));
                 }
 
@@ -1935,7 +1935,7 @@ impl Analyzer {
         }
 
         let requirement = if op == BinaryOp::Add {
-            "only supports numeric or String operands"
+            "only supports numeric or string operands"
         } else {
             "only supports numeric operands"
         };
@@ -2056,7 +2056,7 @@ impl Analyzer {
         if !supported {
             let requirement = match op {
                 BinaryOp::Equal | BinaryOp::NotEqual => {
-                    "only supports numeric, bool, and String operands"
+                    "only supports numeric, bool, and string operands"
                 }
                 BinaryOp::Less
                 | BinaryOp::LessEqual
@@ -2377,7 +2377,7 @@ impl Analyzer {
                 self.diagnostics.push(Diagnostic::error(
                     expr.span,
                     format!(
-                        "method `String.{source_name}` expects 0 arguments, got {}",
+                        "method `string.{source_name}` expects 0 arguments, got {}",
                         args.len()
                     ),
                 ));
@@ -2679,7 +2679,7 @@ impl Analyzer {
             self.diagnostics.push(Diagnostic::error(
                 span,
                 format!(
-                    "`.clone()` is only supported for struct and String values, got `{}`",
+                    "`.clone()` is only supported for struct and string values, got `{}`",
                     object_type.name()
                 ),
             ));

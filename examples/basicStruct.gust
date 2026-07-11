@@ -1,5 +1,5 @@
 struct Lang {
-    name: String
+    name: string
     version: u32
 }
 
@@ -10,7 +10,7 @@ fn makeLang(): Lang {
     }
 }
 
-fn getName(lang: Lang): String {
+fn getName(lang: Lang): string {
     return lang.name
 }
 
