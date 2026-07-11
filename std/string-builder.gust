@@ -1,0 +1,15 @@
+// StringBuilder is mutable scratch storage for efficiently constructing a String.
+// Its storage operations are lowered by gustc; the public API remains ordinary Gust.
+struct StringBuilder {
+    marker: bool
+
+    static fn withCapacity(byteCapacity: usize): Self => StringBuilder {
+        marker: false,
+    }
+
+    static fn new(): Self => StringBuilder.withCapacity(0)
+
+    fn append(mut self, value: String) {}
+
+    fn build(): String => ""
+}

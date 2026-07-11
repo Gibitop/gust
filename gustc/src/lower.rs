@@ -362,6 +362,10 @@ fn is_raw_buffer_name(name: &str) -> bool {
         || name.starts_with("RawBuffer<")
 }
 
+fn is_string_builder_name(name: &str) -> bool {
+    name == "StringBuilder" || name.ends_with("::StringBuilder")
+}
+
 fn trait_method_name(type_name: &str, function_name: &str) -> String {
     format!("trait {type_name}.{function_name}")
 }
@@ -1646,6 +1650,7 @@ fn infer_expr_type(
 ) -> Option<LoweredType> {
     match &expr.kind {
         ExprKind::String(_) => Some(LoweredType::Basic(BasicType::String)),
+        ExprKind::Char(_) => Some(LoweredType::Basic(BasicType::Char)),
         ExprKind::Bool(_)
         | ExprKind::Unary {
             op: UnaryOp::Not, ..
@@ -1994,6 +1999,7 @@ fn expression_has_mutable_capability(expr: &Expr, locals: &HashMap<String, Lower
         ExprKind::GenericMember { object, .. } => expression_has_mutable_capability(object, locals),
         ExprKind::StructInit { .. }
         | ExprKind::String(_)
+        | ExprKind::Char(_)
         | ExprKind::Number(_)
         | ExprKind::Bool(_)
         | ExprKind::Binary { .. }
@@ -2221,6 +2227,7 @@ fn collect_expr_captures(expr: &Expr, available: &HashSet<String>, captured: &mu
         ExprKind::Identifier(_)
         | ExprKind::Number(_)
         | ExprKind::String(_)
+        | ExprKind::Char(_)
         | ExprKind::Bool(_)
         | ExprKind::GenericType { .. }
         | ExprKind::Missing => {}
@@ -2408,6 +2415,7 @@ fn collect_lambda_expr_captures(
         }
         ExprKind::Number(_)
         | ExprKind::String(_)
+        | ExprKind::Char(_)
         | ExprKind::Bool(_)
         | ExprKind::GenericType { .. }
         | ExprKind::Missing => {}
@@ -3793,6 +3801,7 @@ fn lower_local_statement(
     } else if let Some(type_) = annotated_type.clone() {
         let kind = match type_ {
             LoweredType::Basic(BasicType::String) => LoweredExprKind::StringLiteral(String::new()),
+            LoweredType::Basic(BasicType::Char) => LoweredExprKind::NumberLiteral("0".to_string()),
             LoweredType::Basic(BasicType::Bool) => LoweredExprKind::BoolLiteral(false),
             LoweredType::Basic(type_) if type_.is_numeric() => {
                 LoweredExprKind::NumberLiteral("0".to_string())
@@ -4091,6 +4100,10 @@ fn lower_expr(
         ExprKind::String(value) => LoweredExpr {
             type_: LoweredType::Basic(BasicType::String),
             kind: LoweredExprKind::StringLiteral(value.clone()),
+        },
+        ExprKind::Char(value) => LoweredExpr {
+            type_: LoweredType::Basic(BasicType::Char),
+            kind: LoweredExprKind::NumberLiteral(value.to_string()),
         },
         ExprKind::Bool(value) => LoweredExpr {
             type_: LoweredType::Basic(BasicType::Bool),
@@ -4557,7 +4570,7 @@ fn lower_expr(
                 BinaryOp::Equal | BinaryOp::NotEqual => {
                     matches!(
                         &left.type_,
-                        LoweredType::Basic(BasicType::String | BasicType::Bool)
+                        LoweredType::Basic(BasicType::String | BasicType::Char | BasicType::Bool)
                     ) || matches!(&left.type_, LoweredType::Basic(type_) if type_.is_numeric())
                 }
                 BinaryOp::Less
@@ -4853,6 +4866,134 @@ fn lower_expr(
                     return Some(LoweredExpr {
                         type_: LoweredType::Basic(BasicType::String),
                         kind: LoweredExprKind::NumberToString(Box::new(object)),
+                    });
+                }
+
+                if matches!(object.type_, LoweredType::Basic(BasicType::String))
+                    && source_callable_name(name) == "byteLen"
+                {
+                    if !args.is_empty() {
+                        diagnostics.push(Diagnostic::error(
+                            expr.span,
+                            format!(
+                                "method `String.byteLen` expects 0 arguments, got {}",
+                                args.len()
+                            ),
+                        ));
+                        return None;
+                    }
+
+                    return Some(LoweredExpr {
+                        type_: LoweredType::Basic(BasicType::Usize),
+                        kind: LoweredExprKind::FieldAccess {
+                            object: Box::new(object),
+                            field: "byte_len".to_string(),
+                        },
+                    });
+                }
+
+                if matches!(&object.type_, LoweredType::Struct(name) if is_string_builder_name(name))
+                    && matches!(source_callable_name(name), "append" | "build")
+                {
+                    let source_name = source_callable_name(name);
+                    let expected_count = usize::from(source_name == "append");
+                    if args.len() != expected_count {
+                        diagnostics.push(Diagnostic::error(
+                            expr.span,
+                            format!(
+                                "method `StringBuilder.{source_name}` expects {expected_count} arguments, got {}",
+                                args.len()
+                            ),
+                        ));
+                        return None;
+                    }
+
+                    let mut lowered_args = vec![object];
+                    for arg in args {
+                        let expected_type = if source_name == "append" {
+                            Some(LoweredType::Basic(BasicType::String))
+                        } else {
+                            None
+                        };
+                        lowered_args.push(lower_expr(
+                            arg,
+                            locals,
+                            signatures,
+                            structs,
+                            enums,
+                            traits,
+                            diagnostics,
+                            expected_type,
+                            "expected StringBuilder argument in executable builds",
+                        )?);
+                    }
+
+                    return Some(LoweredExpr {
+                        type_: if source_name == "append" {
+                            LoweredType::Void
+                        } else {
+                            LoweredType::Basic(BasicType::String)
+                        },
+                        kind: LoweredExprKind::Call {
+                            name: format!("intrinsic StringBuilder.{source_name}"),
+                            args: lowered_args,
+                        },
+                    });
+                }
+
+                if matches!(object.type_, LoweredType::Basic(BasicType::String))
+                    && source_callable_name(name) == "len"
+                {
+                    if !args.is_empty() {
+                        diagnostics.push(Diagnostic::error(
+                            expr.span,
+                            format!(
+                                "method `String.len` expects 0 arguments, got {}",
+                                args.len()
+                            ),
+                        ));
+                        return None;
+                    }
+                    return Some(LoweredExpr {
+                        type_: LoweredType::Basic(BasicType::Usize),
+                        kind: LoweredExprKind::Call {
+                            name: "intrinsic String.len".to_string(),
+                            args: vec![object],
+                        },
+                    });
+                }
+
+                if matches!(object.type_, LoweredType::Basic(BasicType::String))
+                    && source_callable_name(name) == "isEmpty"
+                {
+                    if !args.is_empty() {
+                        diagnostics.push(Diagnostic::error(
+                            expr.span,
+                            format!(
+                                "method `String.isEmpty` expects 0 arguments, got {}",
+                                args.len()
+                            ),
+                        ));
+                        return None;
+                    }
+
+                    let byte_len = LoweredExpr {
+                        type_: LoweredType::Basic(BasicType::Usize),
+                        kind: LoweredExprKind::FieldAccess {
+                            object: Box::new(object),
+                            field: "byte_len".to_string(),
+                        },
+                    };
+                    return Some(LoweredExpr {
+                        type_: LoweredType::Basic(BasicType::Bool),
+                        kind: LoweredExprKind::Comparison {
+                            left: Box::new(byte_len),
+                            op: BinaryOp::Equal,
+                            right: Box::new(LoweredExpr {
+                                type_: LoweredType::Basic(BasicType::Usize),
+                                kind: LoweredExprKind::NumberLiteral("0".to_string()),
+                            }),
+                        },
                     });
                 }
 

@@ -1,0 +1,34 @@
+from ../std/string-builder import { StringBuilder }
+
+fn main() {
+    let empty = ""
+    let value = "Gust"
+    let mut builder = StringBuilder.withCapacity(16)
+    builder.append("Hello, ")
+    builder.append(value)
+    let message = builder.build()
+    let mut copied = message.clone()
+
+    io.println(message)
+    io.println(value.byteLen().toString())
+    io.println(value.len().toString())
+
+    if '🦀' == '🦀' {
+        io.println("Char values compare by Unicode scalar value")
+    }
+
+    if copied == message {
+        io.println("copies compare by value")
+    }
+
+    match value {
+        "Gust" => io.println("matched Gust"),
+        _ => io.println("matched another string"),
+    }
+
+    if empty.isEmpty() {
+        io.println("empty")
+    }
+
+    io.println("AAA" + "BBB")
+}

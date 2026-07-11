@@ -64,6 +64,16 @@ Syntax is very similar to Rust. Notable differences:
 
 Gust will use garbage collection for managed values, including strings. Do not introduce ownership or lexical `free` semantics for strings as an interim design.
 
+Strings are immutable valid UTF-8 text. The runtime representation stores a byte pointer and byte
+length rather than relying on a NUL-terminated C string, so embedded NUL bytes are preserved and
+runtime operations are bounded by explicit lengths. The byte representation remains opaque to Gust
+programs. Fundamental String operations are intrinsic members; higher-level operations belong in
+the standard library as the necessary String and Unicode primitives become available.
+
+`StringBuilder` is a standard-library mutable construction type. The compiler supplies only its
+opaque growable UTF-8 byte storage and the bridge from `build()` to immutable `String`; its public
+declaration and API live in `std/string-builder.gust`.
+
 The current C backend may temporarily leak heap-allocated string concat results. Keep allocation isolated behind Gust-shaped runtime helpers, so raw `malloc` usage can later be replaced by GC allocation.
 
 ## Runtime development

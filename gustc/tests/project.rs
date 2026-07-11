@@ -144,6 +144,64 @@ fn main() {
 }
 
 #[test]
+fn string_intrinsics_are_available_without_imports() {
+    let project = TempProject::new();
+    project.write(
+        "examples/main.gust",
+        r#"fn main() {
+    let value = "Gust"
+    if value.byteLen() == 4 && !value.isEmpty() {
+        io.println(value)
+    }
+}"#,
+    );
+
+    let result = check_project(&project.path("examples/main.gust")).expect("project should load");
+    assert!(
+        result.diagnostics.is_empty(),
+        "expected intrinsic string operations to validate, got {:?}",
+        result.diagnostics
+    );
+
+    let lowered = lower_program(&result.program).expect("intrinsic string operations should lower");
+    let source = emit_c(&lowered);
+    assert!(source.contains("gust_value.gust_byte_len"), "{source}");
+    assert!(source.contains("gust_value.gust_byte_len == 0"), "{source}");
+}
+
+#[test]
+fn string_builder_uses_growable_runtime_storage() {
+    let project = TempProject::new();
+    project.write(
+        "std/string-builder.gust",
+        include_str!("../../std/string-builder.gust"),
+    );
+    project.write(
+        "examples/main.gust",
+        r#"from ../std/string-builder import { StringBuilder }
+
+fn main() {
+    let mut builder = StringBuilder.withCapacity(1)
+    builder.append("hello")
+    builder.append(" world")
+    io.println(builder.build())
+}"#,
+    );
+
+    let result = check_project(&project.path("examples/main.gust")).expect("project should load");
+    assert!(
+        result.diagnostics.is_empty(),
+        "expected StringBuilder to validate, got {:?}",
+        result.diagnostics
+    );
+
+    let lowered = lower_program(&result.program).expect("StringBuilder should lower");
+    let source = emit_c(&lowered);
+    assert!(source.contains("gust_rt_string_builder_append_"));
+    assert!(source.contains("gust_rt_string_builder_build_"));
+}
+
+#[test]
 fn collection_literals_lower_through_from_elements() {
     let project = TempProject::new();
     project.write("std/option.gust", include_str!("../../std/option.gust"));

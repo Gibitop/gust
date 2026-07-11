@@ -13,6 +13,7 @@ pub enum TokenKind {
     Identifier(String),
     Number(String),
     StringLiteral(String),
+    CharLiteral(u32),
     Keyword(Keyword),
     LeftParen,
     RightParen,
@@ -240,6 +241,7 @@ impl<'source> Lexer<'source> {
                 }
             }
             '"' => self.string_literal(start),
+            '\'' => self.char_literal(start),
             character if character.is_ascii_digit() => self.number(start),
             character if is_identifier_start(character) => self.identifier(start),
             _ => {
@@ -280,6 +282,7 @@ impl<'source> Lexer<'source> {
                     'n' => '\n',
                     'r' => '\r',
                     't' => '\t',
+                    '0' => '\0',
                     '"' => '"',
                     '\\' => '\\',
                     other => other,
@@ -301,6 +304,43 @@ impl<'source> Lexer<'source> {
         self.diagnostics
             .push(Diagnostic::error(span, "unterminated string literal"));
         self.token(TokenKind::StringLiteral(value), start, self.position)
+    }
+
+    fn char_literal(&mut self, start: usize) -> Token {
+        let Some(character) = self.bump() else {
+            self.diagnostics.push(Diagnostic::error(
+                Span::new(start, self.position),
+                "unterminated character literal",
+            ));
+            return self.token(TokenKind::CharLiteral(0), start, self.position);
+        };
+        let value = if character == '\\' {
+            match self.bump() {
+                Some('n') => '\n',
+                Some('r') => '\r',
+                Some('t') => '\t',
+                Some('0') => '\0',
+                Some('\'') => '\'',
+                Some('\\') => '\\',
+                Some(other) => other,
+                None => {
+                    self.diagnostics.push(Diagnostic::error(
+                        Span::new(start, self.position),
+                        "unterminated character literal",
+                    ));
+                    return self.token(TokenKind::CharLiteral(0), start, self.position);
+                }
+            }
+        } else {
+            character
+        };
+        if !self.match_character('\'') {
+            self.diagnostics.push(Diagnostic::error(
+                Span::new(start, self.position),
+                "character literals contain exactly one Unicode scalar value",
+            ));
+        }
+        self.token(TokenKind::CharLiteral(value as u32), start, self.position)
     }
 
     fn number(&mut self, start: usize) -> Token {

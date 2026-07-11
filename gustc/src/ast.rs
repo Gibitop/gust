@@ -239,6 +239,7 @@ pub enum ExprKind {
     Identifier(String),
     Number(String),
     String(String),
+    Char(u32),
     Bool(bool),
     Array(Vec<Expr>),
     CollectionLiteral {
@@ -418,6 +419,7 @@ pub struct FunctionTypeParam {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum BasicType {
     String,
+    Char,
     Bool,
     U8,
     U16,
@@ -438,6 +440,7 @@ impl BasicType {
     pub fn from_name(name: &str) -> Option<Self> {
         match name {
             "String" => Some(Self::String),
+            "Char" => Some(Self::Char),
             "bool" => Some(Self::Bool),
             "u8" => Some(Self::U8),
             "u16" => Some(Self::U16),
@@ -459,6 +462,7 @@ impl BasicType {
     pub fn name(self) -> &'static str {
         match self {
             Self::String => "String",
+            Self::Char => "Char",
             Self::Bool => "bool",
             Self::U8 => "u8",
             Self::U16 => "u16",

@@ -906,6 +906,10 @@ impl Parser {
                 kind: ExprKind::String(value),
                 span: token.span,
             },
+            TokenKind::CharLiteral(value) => Expr {
+                kind: ExprKind::Char(value),
+                span: token.span,
+            },
             TokenKind::Keyword(Keyword::False) => Expr {
                 kind: ExprKind::Bool(false),
                 span: token.span,
