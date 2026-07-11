@@ -1,4 +1,4 @@
-from ../std/string-builder import { StringBuilder }
+from ../std/stringBuilder import { StringBuilder }
 
 fn main() {
     let empty = ""

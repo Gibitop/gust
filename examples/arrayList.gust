@@ -1,4 +1,4 @@
-from ../std/array-list import { ArrayList }
+from ../std/arrayList import { ArrayList }
 from ../std/iter import { Iterator }
 
 fn main() {

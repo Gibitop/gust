@@ -33,7 +33,7 @@ The source-level standard library lives in the repository-root `std` directory. 
 module resolution is introduced, Gust code in this repository imports standard-library modules
 through ordinary relative paths, such as `from ../std/iter import { Iterator }`. Import paths use
 `/` as their separator. Standard-library modules may import one another using relative paths.
-Gust source filenames use kebab case.
+Gust source filenames use camelCase.
 
 ## Collection literals
 
@@ -72,7 +72,7 @@ the standard library as the necessary String and Unicode primitives become avail
 
 `StringBuilder` is a standard-library mutable construction type. The compiler supplies only its
 opaque growable UTF-8 byte storage and the bridge from `build()` to immutable `String`; its public
-declaration and API live in `std/string-builder.gust`.
+declaration and API live in `std/stringBuilder.gust`.
 
 The current C backend may temporarily leak heap-allocated string concat results. Keep allocation isolated behind Gust-shaped runtime helpers, so raw `malloc` usage can later be replaced by GC allocation.
 
