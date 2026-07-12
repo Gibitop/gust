@@ -272,6 +272,104 @@ fn main() {}"#,
 }
 
 #[test]
+fn match_guards_validate_and_can_use_pattern_bindings() {
+    let result = check_source(
+        r#"struct Person {
+    name: string
+    age: i32
+}
+
+enum MaybePerson {
+    Some(Person)
+    None
+}
+
+fn label(person: Person): string {
+    return match person {
+        Person { name, age } if age >= 18 => name,
+        Person { name, ... } => name,
+    }
+}
+
+fn maybeLabel(value: MaybePerson): string {
+    return match value {
+        MaybePerson.Some(Person { name, age }) if age >= 18 => name,
+        MaybePerson.Some(Person { name, ... }) => name,
+        MaybePerson.None => "none",
+    }
+}
+
+fn main() {}"#,
+    );
+
+    assert!(
+        !result.has_errors(),
+        "expected match guards to validate, got {:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
+fn match_guards_must_be_boolean() {
+    let result = check_source(
+        r#"struct Person {
+    name: string
+    age: i32
+}
+
+fn label(person: Person): string {
+    return match person {
+        Person { name, ... } if name => name,
+        Person { name, ... } => name,
+    }
+}
+
+fn main() {}"#,
+    );
+
+    assert!(
+        result.diagnostics.iter().any(|diagnostic| {
+            diagnostic.severity == Severity::Error
+                && diagnostic
+                    .message
+                    .contains("expected value of type `bool`, got `string`")
+        }),
+        "expected non-boolean guard diagnostic, got {:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
+fn guarded_match_branches_do_not_count_as_exhaustive() {
+    let result = check_source(
+        r#"enum Status {
+    Ready
+    Waiting
+}
+
+fn label(status: Status): string {
+    return match status {
+        Status.Ready if true => "ready",
+        Status.Waiting => "waiting",
+    }
+}
+
+fn main() {}"#,
+    );
+
+    assert!(
+        result.diagnostics.iter().any(|diagnostic| {
+            diagnostic.severity == Severity::Error
+                && diagnostic
+                    .message
+                    .contains("non-exhaustive match for enum `Status`; missing `Ready`")
+        }),
+        "expected guarded branch to be non-total, got {:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
 fn or_pattern_bindings_must_match_across_alternatives() {
     let result = check_source(
         r#"enum Result {

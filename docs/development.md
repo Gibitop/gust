@@ -257,6 +257,21 @@ is accepted, including enum payloads such as `Option.Some(Person { name, ... })`
 lowering treats field bindings as replacements for field-access expressions on the matched value,
 so extraction does not require extra source-level local declarations.
 
+## Match guards
+
+Match branches may include an `if` guard after the pattern, such as
+`Person { name, age } if age >= 18 => name`. The guard is a boolean expression evaluated only after
+the pattern matches, and it may use bindings introduced by that pattern. Non-boolean guards are
+rejected.
+
+Guarded branches do not count toward exhaustiveness, duplicate coverage, or covering-pattern
+detection, because the guard may fail at runtime. A later unguarded branch is still required for
+any value the guarded pattern alone would otherwise cover.
+
+Executable lowering combines the pattern test and guard with `&&`, so a branch becomes
+`if (patternCondition && guard)`. A wildcard or otherwise unconditional pattern with a guard still
+emits an `if` whose condition is only the guard.
+
 ## Extension functions
 
 An extension function is declared at the top level with `fn Type.functionName(...)`.

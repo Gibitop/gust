@@ -130,12 +130,20 @@ fn collect_expr_captures(expr: &Expr, available: &HashSet<String>, captured: &mu
         ExprKind::Match { value, branches } => {
             collect_expr_captures(value, available, captured);
             for branch in branches {
+                let mut branch_available = available.clone();
+                collect_pattern_bindings(&branch.pattern, &mut branch_available);
+                if let Some(guard) = &branch.guard {
+                    collect_expr_captures(guard, &branch_available, captured);
+                }
                 match &branch.body {
-                    MatchBranchBody::Expr(expr) => collect_expr_captures(expr, available, captured),
-                    MatchBranchBody::Block(block) => {
-                        let mut branch_available = available.clone();
-                        collect_block_captures(block, &mut branch_available, captured);
+                    MatchBranchBody::Expr(expr) => {
+                        collect_expr_captures(expr, &branch_available, captured)
                     }
+                    MatchBranchBody::Block(block) => collect_block_captures(
+                        block,
+                        &mut branch_available,
+                        captured,
+                    ),
                 }
             }
         }
@@ -316,19 +324,21 @@ fn collect_lambda_expr_captures(
         ExprKind::Match { value, branches } => {
             collect_lambda_expr_captures(value, available, lambda_locals, captured);
             for branch in branches {
+                let mut branch_locals = lambda_locals.clone();
+                collect_pattern_bindings(&branch.pattern, &mut branch_locals);
+                if let Some(guard) = &branch.guard {
+                    collect_lambda_expr_captures(guard, available, &mut branch_locals, captured);
+                }
                 match &branch.body {
                     MatchBranchBody::Expr(expr) => {
-                        collect_lambda_expr_captures(expr, available, lambda_locals, captured)
+                        collect_lambda_expr_captures(expr, available, &mut branch_locals, captured)
                     }
-                    MatchBranchBody::Block(block) => {
-                        let mut branch_locals = lambda_locals.clone();
-                        collect_lambda_block_captures(
-                            block,
-                            available,
-                            &mut branch_locals,
-                            captured,
-                        );
-                    }
+                    MatchBranchBody::Block(block) => collect_lambda_block_captures(
+                        block,
+                        available,
+                        &mut branch_locals,
+                        captured,
+                    ),
                 }
             }
         }
@@ -341,3 +351,31 @@ fn collect_lambda_expr_captures(
     }
 }
 
+fn collect_pattern_bindings(pattern: &Pattern, bindings: &mut HashSet<String>) {
+    match pattern {
+        Pattern::Or { alternatives, .. } => {
+            for alternative in alternatives {
+                collect_pattern_bindings(alternative, bindings);
+            }
+        }
+        Pattern::Variant { payload, .. } => {
+            if let Some(payload) = payload {
+                collect_pattern_bindings(payload, bindings);
+            }
+        }
+        Pattern::Struct { fields, .. } => {
+            for field in fields {
+                collect_pattern_bindings(&field.pattern, bindings);
+            }
+        }
+        Pattern::Binding { name, .. } if name != "_" => {
+            bindings.insert(name.clone());
+        }
+        Pattern::Binding { .. }
+        | Pattern::String { .. }
+        | Pattern::Bool { .. }
+        | Pattern::Number { .. }
+        | Pattern::Range { .. }
+        | Pattern::Wildcard { .. } => {}
+    }
+}

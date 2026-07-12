@@ -230,6 +230,7 @@ impl Analyzer {
                 let mut branch_type = None;
 
                 for branch in branches {
+                    let branch_has_guard = branch.guard.is_some();
                     if has_wildcard {
                         self.diagnostics.push(Diagnostic::error(
                             branch.pattern.span(),
@@ -252,69 +253,95 @@ impl Analyzer {
                             );
                             match &value_type {
                                 Type::Enum(_) => {
-                                    for variant_name in self
-                                        .pattern_fully_covered_variants(&branch.pattern, &value_type)
-                                    {
-                                        if !seen.insert(variant_name.clone()) {
-                                            self.diagnostics.push(Diagnostic::error(
-                                                branch.pattern.span(),
-                                                format!(
-                                                    "duplicate match branch for variant `{variant_name}`"
-                                                ),
-                                            ));
+                                    if !branch_has_guard {
+                                        for variant_name in self.pattern_fully_covered_variants(
+                                            &branch.pattern,
+                                            &value_type,
+                                        ) {
+                                            if !seen.insert(variant_name.clone()) {
+                                                self.diagnostics.push(Diagnostic::error(
+                                                    branch.pattern.span(),
+                                                    format!(
+                                                        "duplicate match branch for variant `{variant_name}`"
+                                                    ),
+                                                ));
+                                            }
                                         }
-                                    }
-                                    self.add_pattern_coverage(
-                                        &mut enum_coverage,
-                                        &branch.pattern,
-                                        &value_type,
-                                    );
-                                    if self.pattern_fully_covers_type(&branch.pattern, &value_type) {
-                                        covering_pattern_seen = true;
+                                        self.add_pattern_coverage(
+                                            &mut enum_coverage,
+                                            &branch.pattern,
+                                            &value_type,
+                                        );
+                                        if self.pattern_fully_covers_type(
+                                            &branch.pattern,
+                                            &value_type,
+                                        ) {
+                                            covering_pattern_seen = true;
+                                        }
                                     }
                                 }
                                 Type::Struct(_) => {
-                                    if self.pattern_fully_covers_type(&branch.pattern, &value_type) {
+                                    if !branch_has_guard
+                                        && self
+                                            .pattern_fully_covers_type(&branch.pattern, &value_type)
+                                    {
                                         struct_covered = true;
                                     }
                                 }
                                 Type::Basic(BasicType::String) => {
-                                    for (value, span) in self.pattern_string_values(&branch.pattern) {
-                                        if !seen.insert(value.clone()) {
-                                            self.diagnostics.push(Diagnostic::error(
-                                                span,
-                                                format!(
-                                                    "duplicate match branch for string `{value}`"
-                                                ),
-                                            ));
+                                    if !branch_has_guard {
+                                        for (value, span) in
+                                            self.pattern_string_values(&branch.pattern)
+                                        {
+                                            if !seen.insert(value.clone()) {
+                                                self.diagnostics.push(Diagnostic::error(
+                                                    span,
+                                                    format!(
+                                                        "duplicate match branch for string `{value}`"
+                                                    ),
+                                                ));
+                                            }
                                         }
-                                    }
-                                    if self.pattern_fully_covers_type(&branch.pattern, &value_type) {
-                                        has_wildcard = true;
+                                        if self.pattern_fully_covers_type(
+                                            &branch.pattern,
+                                            &value_type,
+                                        ) {
+                                            has_wildcard = true;
+                                        }
                                     }
                                 }
                                 Type::Basic(BasicType::Bool) => {
-                                    for (value, span) in self.pattern_bool_values(&branch.pattern) {
-                                        let already_covered = if value {
-                                            std::mem::replace(&mut bool_true_covered, true)
-                                        } else {
-                                            std::mem::replace(&mut bool_false_covered, true)
-                                        };
-                                        if already_covered {
-                                            self.diagnostics.push(Diagnostic::error(
-                                                span,
-                                                format!(
-                                                    "duplicate match branch for bool `{value}`"
-                                                ),
-                                            ));
+                                    if !branch_has_guard {
+                                        for (value, span) in
+                                            self.pattern_bool_values(&branch.pattern)
+                                        {
+                                            let already_covered = if value {
+                                                std::mem::replace(&mut bool_true_covered, true)
+                                            } else {
+                                                std::mem::replace(&mut bool_false_covered, true)
+                                            };
+                                            if already_covered {
+                                                self.diagnostics.push(Diagnostic::error(
+                                                    span,
+                                                    format!(
+                                                        "duplicate match branch for bool `{value}`"
+                                                    ),
+                                                ));
+                                            }
                                         }
-                                    }
-                                    if self.pattern_fully_covers_type(&branch.pattern, &value_type) {
-                                        covering_pattern_seen = true;
+                                        if self.pattern_fully_covers_type(
+                                            &branch.pattern,
+                                            &value_type,
+                                        ) {
+                                            covering_pattern_seen = true;
+                                        }
                                     }
                                 }
                                 Type::Basic(type_) if type_.is_integer() => {
-                                    if self.pattern_fully_covers_type(&branch.pattern, &value_type) {
+                                    if !branch_has_guard
+                                        && self
+                                            .pattern_fully_covers_type(&branch.pattern, &value_type)
+                                    {
                                         has_wildcard = true;
                                     }
                                 }
@@ -328,23 +355,27 @@ impl Analyzer {
                                 value_mutable,
                                 None,
                             );
-                            for variant_name in self
-                                .pattern_fully_covered_variants(&branch.pattern, &value_type)
-                            {
-                                if !seen.insert(variant_name.clone()) {
-                                    self.diagnostics.push(Diagnostic::error(
-                                        branch.pattern.span(),
-                                        format!("duplicate match branch for variant `{variant_name}`"),
-                                    ));
+                            if !branch_has_guard {
+                                for variant_name in self
+                                    .pattern_fully_covered_variants(&branch.pattern, &value_type)
+                                {
+                                    if !seen.insert(variant_name.clone()) {
+                                        self.diagnostics.push(Diagnostic::error(
+                                            branch.pattern.span(),
+                                            format!(
+                                                "duplicate match branch for variant `{variant_name}`"
+                                            ),
+                                        ));
+                                    }
                                 }
-                            }
-                            self.add_pattern_coverage(
-                                &mut enum_coverage,
-                                &branch.pattern,
-                                &value_type,
-                            );
-                            if self.pattern_fully_covers_type(&branch.pattern, &value_type) {
-                                covering_pattern_seen = true;
+                                self.add_pattern_coverage(
+                                    &mut enum_coverage,
+                                    &branch.pattern,
+                                    &value_type,
+                                );
+                                if self.pattern_fully_covers_type(&branch.pattern, &value_type) {
+                                    covering_pattern_seen = true;
+                                }
                             }
                         }
                         (Type::Struct(_), Pattern::Struct { .. }) => {
@@ -354,12 +385,14 @@ impl Analyzer {
                                 value_mutable,
                                 None,
                             );
-                            if self.pattern_fully_covers_type(&branch.pattern, &value_type) {
+                            if !branch_has_guard
+                                && self.pattern_fully_covers_type(&branch.pattern, &value_type)
+                            {
                                 struct_covered = true;
                             }
                         }
                         (Type::Basic(BasicType::String), Pattern::String { value, span }) => {
-                            if !seen.insert(value.clone()) {
+                            if !branch_has_guard && !seen.insert(value.clone()) {
                                 self.diagnostics.push(Diagnostic::error(
                                     *span,
                                     format!("duplicate match branch for string `{value}`"),
@@ -367,16 +400,18 @@ impl Analyzer {
                             }
                         }
                         (Type::Basic(BasicType::Bool), Pattern::Bool { value, span }) => {
-                            let already_covered = if *value {
-                                std::mem::replace(&mut bool_true_covered, true)
-                            } else {
-                                std::mem::replace(&mut bool_false_covered, true)
-                            };
-                            if already_covered {
-                                self.diagnostics.push(Diagnostic::error(
-                                    *span,
-                                    format!("duplicate match branch for bool `{value}`"),
-                                ));
+                            if !branch_has_guard {
+                                let already_covered = if *value {
+                                    std::mem::replace(&mut bool_true_covered, true)
+                                } else {
+                                    std::mem::replace(&mut bool_false_covered, true)
+                                };
+                                if already_covered {
+                                    self.diagnostics.push(Diagnostic::error(
+                                        *span,
+                                        format!("duplicate match branch for bool `{value}`"),
+                                    ));
+                                }
                             }
                         }
                         (Type::Basic(type_), Pattern::Number { value, span })
@@ -427,29 +462,33 @@ impl Analyzer {
                             | Type::Basic(BasicType::I128),
                             Pattern::Wildcard { span },
                         ) => {
-                            if has_wildcard {
-                                self.diagnostics.push(Diagnostic::error(
-                                    *span,
-                                    "duplicate wildcard match branch",
-                                ));
-                            }
-                            has_wildcard = true;
-                            if matches!(value_type, Type::Enum(_)) {
-                                self.add_pattern_coverage(
-                                    &mut enum_coverage,
-                                    &branch.pattern,
-                                    &value_type,
-                                );
+                            if !branch_has_guard {
+                                if has_wildcard {
+                                    self.diagnostics.push(Diagnostic::error(
+                                        *span,
+                                        "duplicate wildcard match branch",
+                                    ));
+                                }
+                                has_wildcard = true;
+                                if matches!(value_type, Type::Enum(_)) {
+                                    self.add_pattern_coverage(
+                                        &mut enum_coverage,
+                                        &branch.pattern,
+                                        &value_type,
+                                    );
+                                }
                             }
                         }
                         (Type::Struct(_), Pattern::Wildcard { span }) => {
-                            if has_wildcard {
-                                self.diagnostics.push(Diagnostic::error(
-                                    *span,
-                                    "duplicate wildcard match branch",
-                                ));
+                            if !branch_has_guard {
+                                if has_wildcard {
+                                    self.diagnostics.push(Diagnostic::error(
+                                        *span,
+                                        "duplicate wildcard match branch",
+                                    ));
+                                }
+                                has_wildcard = true;
                             }
-                            has_wildcard = true;
                         }
                         (Type::Enum(enum_name), Pattern::String { span, .. }) => {
                             self.diagnostics.push(Diagnostic::error(
@@ -542,6 +581,12 @@ impl Analyzer {
                             );
                         }
                         (_, _) => {}
+                    }
+                    if let Some(guard) = &branch.guard {
+                        let expected_type = Type::Basic(BasicType::Bool);
+                        let guard_type =
+                            self.validate_expr_with_context(guard, Some(expected_type.clone()));
+                        self.report_type_mismatch(guard.span, expected_type, guard_type);
                     }
                     let value_type =
                         self.validate_match_branch_body(&branch.body, expected_type.clone());

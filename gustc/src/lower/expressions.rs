@@ -1461,6 +1461,21 @@ fn lower_expr(
                     diagnostics,
                     &temp_name,
                 )?;
+                let guard = if let Some(guard) = &branch.guard {
+                    Some(lower_expr(
+                        guard,
+                        &branch_locals,
+                        signatures,
+                        structs,
+                        enums,
+                        traits,
+                        diagnostics,
+                        Some(LoweredType::Basic(BasicType::Bool)),
+                        "expected supported match guard in executable builds",
+                    )?)
+                } else {
+                    None
+                };
 
                 let expected_branch_type = expected_type.clone().or_else(|| result_type.clone());
                 let (statements, branch_value) = match &branch.body {
@@ -1492,6 +1507,7 @@ fn lower_expr(
                 result_type.get_or_insert_with(|| branch_value.type_.clone());
                 lowered_branches.push(LoweredMatchBranch {
                     pattern,
+                    guard,
                     statements,
                     value: branch_value,
                 });

@@ -331,6 +331,9 @@ impl<'names, 'diagnostics> ModuleRewriter<'names, 'diagnostics> {
         self.rewrite_pattern(&mut branch.pattern, branch.span, &mut bindings);
 
         self.scopes.push(bindings);
+        if let Some(guard) = &mut branch.guard {
+            self.rewrite_expr(guard);
+        }
         match &mut branch.body {
             MatchBranchBody::Expr(expr) => self.rewrite_expr(expr),
             MatchBranchBody::Block(block) => self.rewrite_block(block),

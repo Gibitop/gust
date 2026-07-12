@@ -273,6 +273,7 @@ pub enum LoweredExprKind {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LoweredMatchBranch {
     pub pattern: LoweredPattern,
+    pub guard: Option<LoweredExpr>,
     pub statements: Vec<LoweredStatement>,
     pub value: LoweredExpr,
 }
@@ -280,6 +281,7 @@ pub struct LoweredMatchBranch {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LoweredMatchStatementBranch {
     pub pattern: LoweredPattern,
+    pub guard: Option<LoweredExpr>,
     pub statements: Vec<LoweredStatement>,
 }
 
