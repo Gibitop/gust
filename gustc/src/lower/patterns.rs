@@ -88,9 +88,6 @@ fn lowered_expression_has_mutable_capability(
         LoweredExprKind::Void
         | LoweredExprKind::PostfixIncrement(_)
         | LoweredExprKind::EnumLiteral { .. }
-        | LoweredExprKind::EnumPayload { .. }
-        | LoweredExprKind::MatchPatternBinding { .. }
-        | LoweredExprKind::MatchValue(_)
         | LoweredExprKind::Match { .. } => false,
     }
 }
@@ -115,12 +112,7 @@ fn lower_match_pattern(
     enums: &HashMap<String, LoweredEnum>,
     structs: &HashMap<String, LoweredStruct>,
     diagnostics: &mut Vec<Diagnostic>,
-    match_value_name: &str,
 ) -> Option<LoweredPattern> {
-    let matched_value = LoweredExpr {
-        type_: value_type.clone(),
-        kind: LoweredExprKind::MatchValue(match_value_name.to_string()),
-    };
     lower_match_pattern_with_expr(
         pattern,
         value_type,
@@ -129,7 +121,6 @@ fn lower_match_pattern(
         enums,
         structs,
         diagnostics,
-        &matched_value,
     )
 }
 
@@ -141,7 +132,6 @@ fn lower_match_pattern_with_expr(
     enums: &HashMap<String, LoweredEnum>,
     structs: &HashMap<String, LoweredStruct>,
     diagnostics: &mut Vec<Diagnostic>,
-    matched_value: &LoweredExpr,
 ) -> Option<LoweredPattern> {
     match (pattern, value_type) {
         (
@@ -159,7 +149,6 @@ fn lower_match_pattern_with_expr(
             enums,
             structs,
             diagnostics,
-            matched_value,
         ),
         (
             Pattern::Variant {
@@ -191,25 +180,15 @@ fn lower_match_pattern_with_expr(
             };
 
             let lowered_payload = match (payload, &variant_definition.payload) {
-                (Some(payload), Some(payload_type)) => {
-                    let payload_value = LoweredExpr {
-                        type_: payload_type.clone(),
-                        kind: LoweredExprKind::EnumPayload {
-                            object: Box::new(matched_value.clone()),
-                            variant: variant.clone(),
-                        },
-                    };
-                    Some(Box::new(lower_match_pattern_with_expr(
-                        payload,
-                        payload_type,
-                        value_mutable,
-                        locals,
-                        enums,
-                        structs,
-                        diagnostics,
-                        &payload_value,
-                    )?))
-                }
+                (Some(payload), Some(payload_type)) => Some(Box::new(lower_match_pattern_with_expr(
+                    payload,
+                    payload_type,
+                    value_mutable,
+                    locals,
+                    enums,
+                    structs,
+                    diagnostics,
+                )?)),
                 (Some(_), None) => {
                     diagnostics.push(Diagnostic::error(
                         *span,
@@ -282,13 +261,6 @@ fn lower_match_pattern_with_expr(
                     continue;
                 };
 
-                let field_value = LoweredExpr {
-                    type_: field_definition.type_.clone(),
-                    kind: LoweredExprKind::FieldAccess {
-                        object: Box::new(matched_value.clone()),
-                        field: field.name.clone(),
-                    },
-                };
                 let pattern = lower_match_pattern_with_expr(
                     &field.pattern,
                     &field_definition.type_,
@@ -297,7 +269,6 @@ fn lower_match_pattern_with_expr(
                     enums,
                     structs,
                     diagnostics,
-                    &field_value,
                 )?;
                 lowered_fields.push(LoweredStructPatternField {
                     name: field.name.clone(),
@@ -336,27 +307,30 @@ fn lower_match_pattern_with_expr(
             },
             _,
         ) => {
-            if name != "_" {
-                if *mutable && !value_mutable {
-                    diagnostics.push(Diagnostic::error(
-                        *span,
-                        format!(
-                            "cannot bind mutable payload `{name}` from an immutable match value in executable build"
-                        ),
-                    ));
-                    return None;
-                }
-                locals.insert(
-                    name.clone(),
-                    LoweringLocal {
-                        type_: value_type.clone(),
-                        mutable: *mutable,
-                        replacement: Some(matched_value.clone()),
-                        captured: false,
-                    },
-                );
+            if name == "_" {
+                return Some(LoweredPattern::Wildcard);
             }
-            Some(LoweredPattern::Wildcard)
+            if *mutable && !value_mutable {
+                diagnostics.push(Diagnostic::error(
+                    *span,
+                    format!(
+                        "cannot bind mutable payload `{name}` from an immutable match value in executable build"
+                    ),
+                ));
+                return None;
+            }
+            locals.insert(
+                name.clone(),
+                LoweringLocal {
+                    type_: value_type.clone(),
+                    mutable: *mutable,
+                    replacement: None,
+                    captured: false,
+                },
+            );
+            Some(LoweredPattern::Binding {
+                name: name.clone(),
+            })
         }
         (Pattern::String { value, .. }, LoweredType::Basic(BasicType::String)) => {
             Some(LoweredPattern::String(value.clone()))
@@ -443,7 +417,6 @@ fn lower_or_match_pattern(
     enums: &HashMap<String, LoweredEnum>,
     structs: &HashMap<String, LoweredStruct>,
     diagnostics: &mut Vec<Diagnostic>,
-    matched_value: &LoweredExpr,
 ) -> Option<LoweredPattern> {
     let mut lowered_alternatives = Vec::new();
     let mut alternative_locals = Vec::new();
@@ -458,7 +431,6 @@ fn lower_or_match_pattern(
             enums,
             structs,
             diagnostics,
-            matched_value,
         )?;
         lowered_alternatives.push(lowered);
         alternative_locals.push(locals_for_alternative);
@@ -501,51 +473,22 @@ fn lower_or_match_pattern(
             return None;
         }
 
-        let replacements = bindings
-            .iter()
-            .map(|binding| binding.replacement.clone())
-            .collect::<Vec<_>>();
-        let replacement = if replacements
-            .iter()
-            .all(|replacement| replacement == &replacements[0])
-        {
-            replacements[0].clone()
-        } else if replacements.iter().all(Option::is_some) {
-            if first.mutable {
-                diagnostics.push(Diagnostic::error(
-                    span,
-                    format!(
-                        "mutable or-pattern binding `{name}` is not supported in executable builds"
-                    ),
-                ));
-                return None;
-            }
-
-            Some(LoweredExpr {
-                type_: first.type_.clone(),
-                kind: LoweredExprKind::MatchPatternBinding {
-                    matched_value: Box::new(matched_value.clone()),
-                    alternatives: lowered_alternatives
-                        .iter()
-                        .cloned()
-                        .zip(replacements.into_iter().flatten())
-                        .map(|(pattern, value)| LoweredPatternBindingAlternative {
-                            pattern,
-                            value,
-                        })
-                        .collect(),
-                },
-            })
-        } else {
-            replacements[0].clone()
-        };
+        if first.mutable {
+            diagnostics.push(Diagnostic::error(
+                span,
+                format!(
+                    "mutable or-pattern binding `{name}` is not supported in executable builds"
+                ),
+            ));
+            return None;
+        }
 
         locals.insert(
             name,
             LoweringLocal {
                 type_: first.type_.clone(),
                 mutable: first.mutable,
-                replacement,
+                replacement: None,
                 captured: first.captured,
             },
         );

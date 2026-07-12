@@ -179,6 +179,6 @@ fn find_lowered_struct_by_source_name(
 }
 
 fn match_temp_name(span: Span) -> String {
-    format!("gust_internal_match_value_{}", span.start)
+    format!("internal_match_value_{}", span.start)
 }
 

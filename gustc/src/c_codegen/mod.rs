@@ -3,7 +3,8 @@ use std::collections::HashSet;
 use crate::ast::{BasicType, BinaryOp};
 use crate::lower::{
     LoweredClosureFunction, LoweredEnum, LoweredExpr, LoweredExprKind, LoweredFunction,
-    LoweredPattern, LoweredProgram, LoweredStatement, LoweredStruct, LoweredType,
+    LoweredMatchBindSource, LoweredMatchDecision, LoweredMatchTest, LoweredProgram,
+    LoweredStatement, LoweredStruct, LoweredType,
 };
 
 pub fn emit_c(program: &LoweredProgram) -> String {
@@ -12,7 +13,8 @@ pub fn emit_c(program: &LoweredProgram) -> String {
     let number_to_string_types = number_to_string_types(program);
     let uses_bool = program_uses_type(program, BasicType::Bool)
         || uses_string_equality
-        || number_to_string_types.contains(&BasicType::I128);
+        || number_to_string_types.contains(&BasicType::I128)
+        || program_uses_match_or(program);
     let uses_usize = uses_string
         || program_uses_type(program, BasicType::Usize)
         || program

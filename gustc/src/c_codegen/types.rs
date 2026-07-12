@@ -194,17 +194,10 @@ fn collect_statement_function_types(statement: &LoweredStatement, types: &mut Ve
             }
         }
         LoweredStatement::Match {
-            value, branches, ..
+            value, decision, ..
         } => {
             collect_expr_function_types(value, types);
-            for branch in branches {
-                if let Some(guard) = &branch.guard {
-                    collect_expr_function_types(guard, types);
-                }
-                for statement in &branch.statements {
-                    collect_statement_function_types(statement, types);
-                }
-            }
+            collect_decision_function_types(decision, types);
         }
         LoweredStatement::Break | LoweredStatement::Continue => {}
     }
@@ -223,9 +216,6 @@ fn collect_expr_function_types(expr: &LoweredExpr, types: &mut Vec<LoweredType>)
         LoweredExprKind::PostfixIncrement(operand)
         | LoweredExprKind::Not(operand)
         | LoweredExprKind::Negate(operand)
-        | LoweredExprKind::EnumPayload {
-            object: operand, ..
-        }
         | LoweredExprKind::FieldAccess {
             object: operand, ..
         }
@@ -242,28 +232,11 @@ fn collect_expr_function_types(expr: &LoweredExpr, types: &mut Vec<LoweredType>)
                 collect_expr_function_types(payload, types);
             }
         }
-        LoweredExprKind::MatchPatternBinding {
-            matched_value,
-            alternatives,
-        } => {
-            collect_expr_function_types(matched_value, types);
-            for alternative in alternatives {
-                collect_expr_function_types(&alternative.value, types);
-            }
-        }
         LoweredExprKind::Match {
-            value, branches, ..
+            value, decision, ..
         } => {
             collect_expr_function_types(value, types);
-            for branch in branches {
-                if let Some(guard) = &branch.guard {
-                    collect_expr_function_types(guard, types);
-                }
-                for statement in &branch.statements {
-                    collect_statement_function_types(statement, types);
-                }
-                collect_expr_function_types(&branch.value, types);
-            }
+            collect_decision_function_types(decision, types);
         }
         LoweredExprKind::Call { args, .. } => {
             for arg in args {
@@ -294,8 +267,7 @@ fn collect_expr_function_types(expr: &LoweredExpr, types: &mut Vec<LoweredType>)
         | LoweredExprKind::Local(_)
         | LoweredExprKind::LocalCell(_)
         | LoweredExprKind::CapturedLocal { .. }
-        | LoweredExprKind::Closure { .. }
-        | LoweredExprKind::MatchValue(_) => {}
+        | LoweredExprKind::Closure { .. } => {}
     }
 }
 
@@ -342,5 +314,57 @@ fn c_basic_type(type_: BasicType) -> &'static str {
         BasicType::I128 => "__int128",
         BasicType::F32 => "float",
         BasicType::F64 => "double",
+    }
+}
+
+fn collect_decision_function_types(decision: &LoweredMatchDecision, types: &mut Vec<LoweredType>) {
+    match decision {
+        LoweredMatchDecision::Arms { arms } => {
+            for arm in arms {
+                collect_decision_function_types(arm, types);
+            }
+        }
+        LoweredMatchDecision::Test {
+            test,
+            then,
+            else_,
+            ..
+        } => {
+            if let LoweredMatchTest::Guard(guard) = test {
+                collect_expr_function_types(guard, types);
+            }
+            collect_decision_function_types(then, types);
+            collect_decision_function_types(else_, types);
+        }
+        LoweredMatchDecision::Bind { type_, then, .. } => {
+            collect_function_type(type_, types);
+            collect_decision_function_types(then, types);
+        }
+        LoweredMatchDecision::Or {
+            bindings,
+            alternatives,
+            then,
+            else_,
+        } => {
+            for binding in bindings {
+                collect_function_type(&binding.type_, types);
+            }
+            for alternative in alternatives {
+                collect_decision_function_types(alternative, types);
+            }
+            collect_decision_function_types(then, types);
+            collect_decision_function_types(else_, types);
+        }
+        LoweredMatchDecision::Matched
+        | LoweredMatchDecision::Fail
+        | LoweredMatchDecision::End => {}
+        LoweredMatchDecision::Body { statements, value } => {
+            for statement in statements {
+                collect_statement_function_types(statement, types);
+            }
+            if let Some(value) = value {
+                collect_expr_function_types(value, types);
+            }
+        }
     }
 }

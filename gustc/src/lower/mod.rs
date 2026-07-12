@@ -549,3 +549,4 @@ include!("statements.rs");
 include!("loops.rs");
 include!("expressions.rs");
 include!("patterns.rs");
+include!("decision.rs");
