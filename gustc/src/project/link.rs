@@ -58,20 +58,19 @@ fn link_modules(modules: &[Module], diagnostics: &mut Vec<Diagnostic>) -> Progra
                 continue;
             };
 
-            if let Some(namespace) = &import.namespace {
-                if visible_names[module_index].contains_key(&namespace.name)
+            if let Some(namespace) = &import.namespace
+                && (visible_names[module_index].contains_key(&namespace.name)
                     || visible_namespaces[module_index]
                         .insert(namespace.name.clone(), target)
-                        .is_some()
-                {
-                    diagnostics.push(Diagnostic::error(
-                        namespace.span,
-                        format!(
-                            "module namespace `{}` conflicts with another name in this module",
-                            namespace.name
-                        ),
-                    ));
-                }
+                        .is_some())
+            {
+                diagnostics.push(Diagnostic::error(
+                    namespace.span,
+                    format!(
+                        "module namespace `{}` conflicts with another name in this module",
+                        namespace.name
+                    ),
+                ));
             }
 
             for imported_name in &import.names {
@@ -186,4 +185,3 @@ fn stable_name_hash(name: &str) -> u32 {
 
     hash
 }
-

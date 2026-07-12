@@ -78,7 +78,7 @@ fn lower_trait_method_definition(
         });
     }
 
-    let Some(return_type) = method.return_type.as_ref().and_then(|return_type| {
+    let return_type = method.return_type.as_ref().and_then(|return_type| {
         lower_trait_object_type_ref(
             return_type,
             structs,
@@ -87,9 +87,7 @@ fn lower_trait_method_definition(
             diagnostics,
             "trait object methods only support basic, known struct, enum, trait, and function return types in executable builds",
         )
-    }) else {
-        return None;
-    };
+    })?;
 
     can_lower.then(|| LoweredTraitMethod {
         name: method.name.clone(),
@@ -286,7 +284,7 @@ fn lower_function_signature(
     }
 
     let (return_type, return_type_known) = if let Some(return_type) = &function.return_type {
-        let Some(return_type) = lower_value_type_ref_in_context(
+        let return_type = lower_value_type_ref_in_context(
             return_type,
             self_type,
             structs,
@@ -294,9 +292,7 @@ fn lower_function_signature(
             traits,
             diagnostics,
             "only basic, known struct, enum, trait, and function return types are supported in executable builds",
-        ) else {
-            return None;
-        };
+        )?;
         (return_type, true)
     } else {
         (LoweredType::Void, false)
@@ -314,6 +310,9 @@ fn lower_function_signature(
     }
 }
 
+// Function lowering is the boundary where signatures, concrete type tables, diagnostics, and
+// optional receiver context come together to produce executable IR.
+#[allow(clippy::too_many_arguments)]
 fn lower_function(
     function: &FunctionDecl,
     name: &str,
@@ -681,9 +680,7 @@ fn lower_function_value_expr(
     diagnostics: &mut Vec<Diagnostic>,
     span: Span,
 ) -> Option<LoweredExpr> {
-    let Some(signature) = signatures.get(name) else {
-        return None;
-    };
+    let signature = signatures.get(name)?;
     let function_type = LoweredType::Function {
         params: signature
             .params
@@ -758,4 +755,3 @@ fn lower_function_value_expr(
         },
     })
 }
-

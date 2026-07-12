@@ -39,7 +39,7 @@ fn push_c_u128_literal(source: &mut String, value: &str) {
     source.push_str(&value[..first_chunk_len]);
     source.push_str("ULL)");
 
-    for chunk in value[first_chunk_len..].as_bytes().chunks(CHUNK_DIGITS) {
+    for chunk in value.as_bytes()[first_chunk_len..].chunks(CHUNK_DIGITS) {
         source.push_str(" * (unsigned __int128)");
         source.push_str(CHUNK_BASE);
         source.push_str(" + ");

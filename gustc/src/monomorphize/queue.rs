@@ -127,7 +127,7 @@ impl Monomorphizer {
                         }
                     }
                     self.infer_specialized_member_returns(
-                        &mut specialized.name,
+                        &specialized.name,
                         &mut specialized.members,
                     );
                     self.self_types.pop();

@@ -11,6 +11,9 @@ struct ModuleRewriter<'names, 'diagnostics> {
 }
 
 impl<'names, 'diagnostics> ModuleRewriter<'names, 'diagnostics> {
+    // Module rewriting is initialized from the linker-owned name maps and diagnostics sink; the
+    // constructor keeps those borrowed inputs visible instead of hiding them in an intermediate bag.
+    #[allow(clippy::too_many_arguments)]
     fn new(
         local_names: &'names HashMap<String, String>,
         visible_names: &'names HashMap<String, String>,
@@ -426,4 +429,3 @@ fn resolve_qualified_name(
     let export = exports[*target].get(member)?;
     (!export.extension).then(|| export.internal_name.clone())
 }
-

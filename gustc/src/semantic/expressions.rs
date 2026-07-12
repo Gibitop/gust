@@ -741,9 +741,8 @@ impl Analyzer {
             Type::Basic(_) | Type::Struct(_) | Type::Enum(_) => self
                 .trait_impls
                 .iter()
-                .filter_map(|(trait_name, self_type)| {
-                    (self_type == &iterable_name).then(|| trait_name.clone())
-                })
+                .filter(|(_, self_type)| *self_type == iterable_name)
+                .map(|(trait_name, _)| trait_name.clone())
                 .collect(),
             Type::Function { .. } | Type::Void | Type::Named(_) | Type::Unknown => Vec::new(),
         }

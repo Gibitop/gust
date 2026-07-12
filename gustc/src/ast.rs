@@ -360,7 +360,7 @@ pub struct MatchBranch {
 
 #[derive(Debug, Clone)]
 pub enum MatchBranchBody {
-    Expr(Expr),
+    Expr(Box<Expr>),
     Block(Block),
 }
 

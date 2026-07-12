@@ -57,6 +57,9 @@ fn infer_function_return_type(
     }
 }
 
+// Return inference walks blocks with a cloned local type scope plus shared function/type tables
+// and mutable aggregate return state, mirroring the lowering pass it supports.
+#[allow(clippy::too_many_arguments)]
 fn infer_block_return_types(
     block: &Block,
     locals: &mut HashMap<String, LoweredType>,
@@ -219,4 +222,3 @@ fn lowered_statement_always_returns_value(statement: &LoweredStatement) -> bool 
         } => false,
     }
 }
-
