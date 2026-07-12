@@ -578,6 +578,139 @@ fn main() {}"#,
 }
 
 #[test]
+fn struct_patterns_validate_and_bind_fields() {
+    let result = check_source(
+        r#"struct Person {
+    name: string
+    age: i32
+}
+
+enum MaybePerson {
+    Some(Person)
+    None
+}
+
+fn shorthand(person: Person): string {
+    return match person {
+        Person { name, age } => name,
+    }
+}
+
+fn renamed(person: Person): string {
+    return match person {
+        Person { name: personName, ... } => personName,
+    }
+}
+
+fn payload(value: MaybePerson): string {
+    return match value {
+        MaybePerson.Some(Person { name, ... }) => name,
+        MaybePerson.None => "none",
+    }
+}
+
+fn main() {}"#,
+    );
+
+    assert!(
+        !result.has_errors(),
+        "expected struct patterns to validate and bind fields, got {:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
+fn struct_patterns_report_field_errors() {
+    let missing = check_source(
+        r#"struct Person {
+    name: string
+    age: i32
+}
+
+fn name(person: Person): string {
+    return match person {
+        Person { name } => name,
+    }
+}
+
+fn main() {}"#,
+    );
+
+    assert!(
+        missing.diagnostics.iter().any(|diagnostic| {
+            diagnostic.severity == Severity::Error
+                && diagnostic
+                    .message
+                    .contains("struct pattern `Person` is missing field `age`")
+        }),
+        "expected missing field diagnostic, got {:?}",
+        missing.diagnostics
+    );
+
+    let invalid_fields = check_source(
+        r#"struct Person {
+    name: string
+    age: i32
+}
+
+fn name(person: Person): string {
+    return match person {
+        Person { name, name: otherName, height, ... } => name,
+    }
+}
+
+fn main() {}"#,
+    );
+
+    assert!(
+        invalid_fields.diagnostics.iter().any(|diagnostic| {
+            diagnostic.severity == Severity::Error
+                && diagnostic
+                    .message
+                    .contains("duplicate field `name` in struct pattern `Person`")
+        }),
+        "expected duplicate field diagnostic, got {:?}",
+        invalid_fields.diagnostics
+    );
+    assert!(
+        invalid_fields.diagnostics.iter().any(|diagnostic| {
+            diagnostic.severity == Severity::Error
+                && diagnostic
+                    .message
+                    .contains("unknown field `height` for struct `Person`")
+        }),
+        "expected unknown field diagnostic, got {:?}",
+        invalid_fields.diagnostics
+    );
+
+    let wrong_type = check_source(
+        r#"struct Person {
+    name: string
+    age: i32
+}
+
+fn name(person: Person): string {
+    return match person {
+        Person { name: 1, ... } => "Ada",
+    }
+}
+
+fn main() {}"#,
+    );
+
+    assert!(
+        wrong_type.diagnostics.iter().any(|diagnostic| {
+            diagnostic.severity == Severity::Error
+                && diagnostic
+                    .message
+                    .contains("numeric patterns cannot match a `string` value")
+        }),
+        "expected field type diagnostic, got {:?}",
+        wrong_type.diagnostics
+    );
+}
+
+#[test]
 fn enum_variants_are_namespaced_by_their_enum() {
     let result = check_source(
         r#"enum Left {

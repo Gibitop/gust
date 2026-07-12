@@ -26,6 +26,7 @@ pub enum TokenKind {
     Dot,
     DotDot,
     DotDotEqual,
+    Ellipsis,
     Slash,
     SlashEqual,
     Plus,
@@ -139,7 +140,9 @@ impl<'source> Lexer<'source> {
             ',' => self.single(TokenKind::Comma, start),
             '.' => {
                 if self.match_character('.') {
-                    if self.match_character('=') {
+                    if self.match_character('.') {
+                        self.token(TokenKind::Ellipsis, start, self.position)
+                    } else if self.match_character('=') {
                         self.token(TokenKind::DotDotEqual, start, self.position)
                     } else {
                         self.token(TokenKind::DotDot, start, self.position)

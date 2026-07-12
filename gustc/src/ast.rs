@@ -381,6 +381,12 @@ pub enum Pattern {
         payload: Option<Box<Pattern>>,
         span: Span,
     },
+    Struct {
+        name: String,
+        fields: Vec<StructPatternField>,
+        has_rest: bool,
+        span: Span,
+    },
     Binding {
         name: String,
         mutable: bool,
@@ -405,10 +411,18 @@ pub enum Pattern {
     },
 }
 
+#[derive(Debug, Clone)]
+pub struct StructPatternField {
+    pub name: String,
+    pub pattern: Pattern,
+    pub span: Span,
+}
+
 impl Pattern {
     pub fn span(&self) -> Span {
         match self {
             Pattern::Variant { span, .. }
+            | Pattern::Struct { span, .. }
             | Pattern::Binding { span, .. }
             | Pattern::String { span, .. }
             | Pattern::Number { span, .. }

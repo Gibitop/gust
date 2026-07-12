@@ -255,6 +255,13 @@ fn shift_pattern(pattern: &mut Pattern, offset: usize) {
                 shift_pattern(payload, offset);
             }
         }
+        Pattern::Struct { fields, span, .. } => {
+            shift_span(span, offset);
+            for field in fields {
+                shift_span(&mut field.span, offset);
+                shift_pattern(&mut field.pattern, offset);
+            }
+        }
         Pattern::Binding { span, .. }
         | Pattern::String { span, .. }
         | Pattern::Number { span, .. }

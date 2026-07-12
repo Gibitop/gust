@@ -660,6 +660,15 @@ impl Monomorphizer {
                     type_ref.name = specialized_name(&name, &type_ref.args);
                     type_ref.args.clear();
                 }
+                if let Some(type_ref) = &mut value_type
+                    && self.struct_templates.contains_key(&type_ref.name)
+                    && !type_ref.args.is_empty()
+                {
+                    let name = type_ref.name.clone();
+                    self.specialize_struct(&name, &type_ref.args, type_ref.span);
+                    type_ref.name = specialized_name(&name, &type_ref.args);
+                    type_ref.args.clear();
+                }
                 for branch in branches {
                     let mut scope = HashMap::new();
                     if let Some(value_type) = &value_type {
@@ -712,6 +721,35 @@ impl Monomorphizer {
                     self.rewrite_match_pattern(payload, &payload_type, scope);
                 }
             }
+            Pattern::Struct { name, fields, .. } => {
+                let substitutions = if let Some((generic_name, args)) =
+                    self.specializations.get(&value_type.name).cloned()
+                    && name == &generic_name
+                    && self.struct_templates.contains_key(&generic_name)
+                {
+                    *name = value_type.name.clone();
+                    self.struct_templates[&generic_name]
+                        .type_params
+                        .iter()
+                        .cloned()
+                        .zip(args)
+                        .collect::<HashMap<_, _>>()
+                } else {
+                    HashMap::new()
+                };
+
+                for field in fields {
+                    let Some(mut field_type) = self.match_struct_field_type(name, &field.name)
+                    else {
+                        continue;
+                    };
+                    if !substitutions.is_empty() {
+                        field_type = substitute_type(&field_type, &substitutions);
+                    }
+                    self.rewrite_type(&mut field_type, &HashMap::new());
+                    self.rewrite_match_pattern(&mut field.pattern, &field_type, scope);
+                }
+            }
             Pattern::Binding { name, .. } if name != "_" => {
                 scope.insert(name.clone(), value_type.clone());
             }
@@ -730,6 +768,30 @@ impl Monomorphizer {
             type_ref.name = specialized_name(&name, &type_ref.args);
             type_ref.args.clear();
         }
+        if self.struct_templates.contains_key(&type_ref.name) && !type_ref.args.is_empty() {
+            let name = type_ref.name.clone();
+            self.specialize_struct(&name, &type_ref.args, type_ref.span);
+            type_ref.name = specialized_name(&name, &type_ref.args);
+            type_ref.args.clear();
+        }
+    }
+
+    fn match_struct_field_type(&self, struct_name: &str, field_name: &str) -> Option<TypeRef> {
+        let definition = self
+            .concrete_struct_defs
+            .get(struct_name)
+            .or_else(|| self.struct_templates.get(struct_name))
+            .or_else(|| {
+                self.specializations
+                    .get(struct_name)
+                    .and_then(|(generic_name, _)| self.struct_templates.get(generic_name))
+            })?;
+        definition.members.iter().find_map(|member| {
+            let StructMember::Field(field) = member else {
+                return None;
+            };
+            (field.name == field_name).then(|| field.type_ref.clone())
+        })
     }
 
 }

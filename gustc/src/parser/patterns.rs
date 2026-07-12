@@ -55,6 +55,12 @@ impl Parser {
         while self.match_kind(&TokenKind::Dot) {
             path.push(self.expect_identifier("expected enum variant in match pattern"));
         }
+
+        if self.check_kind(&TokenKind::LeftBrace) {
+            let name = path.join(".");
+            return self.finish_struct_pattern(name, start);
+        }
+
         let variant = path.pop().unwrap_or_default();
         let enum_name = path.join(".");
         if enum_name.is_empty() {
@@ -80,6 +86,54 @@ impl Parser {
             enum_name,
             variant,
             payload,
+            span,
+        }
+    }
+
+    fn finish_struct_pattern(&mut self, name: String, start: Span) -> Pattern {
+        self.expect_kind(&TokenKind::LeftBrace, "`{`");
+        let mut fields = Vec::new();
+        let mut has_rest = false;
+
+        while !self.at_eof() && !self.check_kind(&TokenKind::RightBrace) {
+            if self.match_kind(&TokenKind::Ellipsis) {
+                has_rest = true;
+                if self.match_kind(&TokenKind::Comma) && !self.check_kind(&TokenKind::RightBrace) {
+                    self.error_here("expected `}` after `...` in struct pattern");
+                }
+                break;
+            }
+
+            let field_start = self.current().span;
+            let name = self.expect_identifier("expected field name in struct pattern");
+            let pattern = if self.match_kind(&TokenKind::Colon) {
+                self.parse_pattern_with_bindings(true)
+            } else {
+                Pattern::Binding {
+                    name: name.clone(),
+                    mutable: false,
+                    span: field_start,
+                }
+            };
+            let span = field_start.join(pattern.span());
+            fields.push(crate::ast::StructPatternField {
+                name,
+                pattern,
+                span,
+            });
+
+            if !self.match_kind(&TokenKind::Comma) {
+                break;
+            }
+        }
+
+        self.expect_kind(&TokenKind::RightBrace, "`}`");
+        let span = start.join(self.previous_span());
+
+        Pattern::Struct {
+            name,
+            fields,
+            has_rest,
             span,
         }
     }

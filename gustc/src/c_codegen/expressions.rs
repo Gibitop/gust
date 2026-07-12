@@ -235,7 +235,7 @@ fn push_c_value(source: &mut String, value: &LoweredExpr, structs: &[LoweredStru
 
             for (index, branch) in branches.iter().enumerate() {
                 source.push_str("    ");
-                if index + 1 < branches.len() {
+                if !lowered_pattern_is_unconditional(&branch.pattern) {
                     if index > 0 {
                         source.push_str("else ");
                     }

@@ -1,0 +1,28 @@
+struct Person {
+    name: string
+    age: i32
+}
+
+enum MaybePerson {
+    Some(Person)
+    None
+}
+
+fn label(person: Person): string {
+    return match person {
+        Person { name: personName, ... } => personName,
+    }
+}
+
+fn maybeLabel(value: MaybePerson): string {
+    return match value {
+        MaybePerson.Some(Person { name, ... }) => name,
+        MaybePerson.None => "unknown",
+    }
+}
+
+fn main() {
+    let person = Person { name: "Ada", age: 37 }
+    io.println(label(person))
+    io.println(maybeLabel(MaybePerson.Some(person)))
+}

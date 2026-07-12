@@ -286,6 +286,10 @@ pub enum LoweredPattern {
         variant: String,
         payload: Option<Box<LoweredPattern>>,
     },
+    Struct {
+        name: String,
+        fields: Vec<LoweredStructPatternField>,
+    },
     String(String),
     Number(String),
     Range {
@@ -294,6 +298,12 @@ pub enum LoweredPattern {
         inclusive: bool,
     },
     Wildcard,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LoweredStructPatternField {
+    pub name: String,
+    pub pattern: LoweredPattern,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

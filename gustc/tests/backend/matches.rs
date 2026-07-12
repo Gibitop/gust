@@ -79,6 +79,52 @@ fn main() {
 }
 
 #[test]
+fn struct_patterns_lower_to_field_access_replacements() {
+    let result = check_source(
+        r#"struct Person {
+    name: string
+    age: i32
+}
+
+enum MaybePerson {
+    Some(Person)
+    None
+}
+
+fn personName(person: Person): string {
+    return match person {
+        Person { name, ... } => name,
+    }
+}
+
+fn maybeName(value: MaybePerson): string {
+    return match value {
+        MaybePerson.Some(Person { name: personName, ... }) => personName,
+        MaybePerson.None => "none",
+    }
+}
+
+fn main() {
+    let person = Person { name: "Ada", age: 37 }
+    io.println(personName(person))
+    io.println(maybeName(MaybePerson.Some(person)))
+}"#,
+    );
+
+    assert!(
+        !result.has_errors(),
+        "expected no frontend errors, got {:?}",
+        result.diagnostics
+    );
+
+    let lowered = lower_program(&result.program).expect("struct patterns should lower");
+    let source = emit_c(&lowered);
+
+    assert!(source.contains("->gust_name"));
+    assert!(source.contains(".gust_payload.gust_Some->gust_name"));
+}
+
+#[test]
 fn struct_enum_fields_emit_after_their_enum_definition() {
     let result = check_source(
         r#"struct Spaceship {
