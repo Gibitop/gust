@@ -268,6 +268,11 @@ impl Parser {
         let mut branches = Vec::new();
         while !self.at_eof() && !self.check_kind(&TokenKind::RightBrace) {
             let pattern = self.parse_pattern();
+            let guard = if self.match_keyword(Keyword::If) {
+                Some(self.parse_expression())
+            } else {
+                None
+            };
             self.expect_kind(&TokenKind::FatArrow, "`=>`");
             let body = if self.check_kind(&TokenKind::LeftBrace) {
                 MatchBranchBody::Block(self.parse_block())
@@ -283,6 +288,7 @@ impl Parser {
             let span = pattern.span().join(body.span());
             branches.push(MatchBranch {
                 pattern,
+                guard,
                 body,
                 span,
             });

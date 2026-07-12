@@ -256,12 +256,19 @@ fn push_c_value(source: &mut String, value: &LoweredExpr, structs: &[LoweredStru
 
             for (index, branch) in branches.iter().enumerate() {
                 source.push_str("    ");
-                if !lowered_pattern_is_unconditional(&branch.pattern) {
+                if branch.guard.is_some() || !lowered_pattern_is_unconditional(&branch.pattern) {
                     if index > 0 {
                         source.push_str("else ");
                     }
                     source.push_str("if (");
-                    push_c_match_condition(source, temp_name, &matched_value.type_, &branch.pattern);
+                    push_c_match_branch_condition(
+                        source,
+                        temp_name,
+                        &matched_value.type_,
+                        &branch.pattern,
+                        branch.guard.as_ref(),
+                        structs,
+                    );
                     source.push_str(") {\n");
                 } else {
                     if index > 0 {

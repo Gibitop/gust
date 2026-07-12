@@ -126,12 +126,19 @@ fn push_c_statement(
 
             for (index, branch) in branches.iter().enumerate() {
                 push_c_indent(source, indent + 1);
-                if !lowered_pattern_is_unconditional(&branch.pattern) {
+                if branch.guard.is_some() || !lowered_pattern_is_unconditional(&branch.pattern) {
                     if index > 0 {
                         source.push_str("else ");
                     }
                     source.push_str("if (");
-                    push_c_match_condition(source, temp_name, &value.type_, &branch.pattern);
+                    push_c_match_branch_condition(
+                        source,
+                        temp_name,
+                        &value.type_,
+                        &branch.pattern,
+                        branch.guard.as_ref(),
+                        structs,
+                    );
                     source.push_str(") {\n");
                 } else {
                     if index > 0 {
@@ -151,6 +158,26 @@ fn push_c_statement(
             push_c_indent(source, indent);
             source.push_str("}\n");
         }
+    }
+}
+
+fn push_c_match_branch_condition(
+    source: &mut String,
+    temp_name: &str,
+    value_type: &LoweredType,
+    pattern: &LoweredPattern,
+    guard: Option<&LoweredExpr>,
+    structs: &[LoweredStruct],
+) {
+    let has_pattern_condition = !lowered_pattern_is_unconditional(pattern);
+    if has_pattern_condition {
+        push_c_match_condition(source, temp_name, value_type, pattern);
+    }
+    if let Some(guard) = guard {
+        if has_pattern_condition {
+            source.push_str(" && ");
+        }
+        push_c_value(source, guard, structs);
     }
 }
 

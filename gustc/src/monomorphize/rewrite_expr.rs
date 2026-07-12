@@ -675,6 +675,9 @@ impl Monomorphizer {
                         self.rewrite_match_pattern(&mut branch.pattern, value_type, &mut scope);
                     }
                     self.scopes.push(scope);
+                    if let Some(guard) = &mut branch.guard {
+                        self.rewrite_expr(guard, substitutions);
+                    }
                     match &mut branch.body {
                         MatchBranchBody::Expr(expr) => self.rewrite_expr(expr, substitutions),
                         MatchBranchBody::Block(block) => self.rewrite_block(block, substitutions),

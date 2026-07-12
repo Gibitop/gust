@@ -354,6 +354,7 @@ pub enum UnaryOp {
 #[derive(Debug, Clone)]
 pub struct MatchBranch {
     pub pattern: Pattern,
+    pub guard: Option<Expr>,
     pub body: MatchBranchBody,
     pub span: Span,
 }

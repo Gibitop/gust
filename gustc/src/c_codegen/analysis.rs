@@ -100,6 +100,10 @@ fn statement_uses_type(statement: &LoweredStatement, type_: BasicType) -> bool {
             expr_uses_type(value, type_)
                 || branches.iter().any(|branch| {
                     branch
+                        .guard
+                        .as_ref()
+                        .is_some_and(|guard| expr_uses_type(guard, type_))
+                        || branch
                         .statements
                         .iter()
                         .any(|statement| statement_uses_type(statement, type_))
@@ -144,6 +148,10 @@ fn expr_uses_type(expr: &LoweredExpr, type_: BasicType) -> bool {
                 expr_uses_type(value, type_)
                     || branches.iter().any(|branch| {
                         branch
+                            .guard
+                            .as_ref()
+                            .is_some_and(|guard| expr_uses_type(guard, type_))
+                            || branch
                             .statements
                             .iter()
                             .any(|statement| statement_uses_type(statement, type_))
@@ -272,6 +280,10 @@ fn statement_uses_number_to_string(statement: &LoweredStatement, type_: BasicTyp
             expr_uses_number_to_string(value, type_)
                 || branches.iter().any(|branch| {
                     branch
+                        .guard
+                        .as_ref()
+                        .is_some_and(|guard| expr_uses_number_to_string(guard, type_))
+                        || branch
                         .statements
                         .iter()
                         .any(|statement| statement_uses_number_to_string(statement, type_))
@@ -319,15 +331,19 @@ fn expr_uses_number_to_string(expr: &LoweredExpr, type_: BasicType) -> bool {
         }
         LoweredExprKind::Match {
             value, branches, ..
-        } => {
-            expr_uses_number_to_string(value, type_)
-                || branches.iter().any(|branch| {
-                    branch
-                        .statements
-                        .iter()
-                        .any(|statement| statement_uses_number_to_string(statement, type_))
-                        || expr_uses_number_to_string(&branch.value, type_)
-                })
+            } => {
+                expr_uses_number_to_string(value, type_)
+                    || branches.iter().any(|branch| {
+                        branch
+                            .guard
+                            .as_ref()
+                            .is_some_and(|guard| expr_uses_number_to_string(guard, type_))
+                            || branch
+                            .statements
+                            .iter()
+                            .any(|statement| statement_uses_number_to_string(statement, type_))
+                            || expr_uses_number_to_string(&branch.value, type_)
+                    })
         }
         LoweredExprKind::Call { args, .. } => args
             .iter()
@@ -420,6 +436,10 @@ fn statement_uses_string_equality(statement: &LoweredStatement) -> bool {
             expr_uses_string_equality(value)
                 || branches.iter().any(|branch| {
                     lowered_pattern_uses_string_equality(&branch.pattern)
+                        || branch
+                            .guard
+                            .as_ref()
+                            .is_some_and(expr_uses_string_equality)
                         || branch.statements.iter().any(statement_uses_string_equality)
                 })
         }
@@ -467,6 +487,10 @@ fn expr_uses_string_equality(expr: &LoweredExpr) -> bool {
             expr_uses_string_equality(value)
                 || branches.iter().any(|branch| {
                     lowered_pattern_uses_string_equality(&branch.pattern)
+                        || branch
+                            .guard
+                            .as_ref()
+                            .is_some_and(expr_uses_string_equality)
                         || branch.statements.iter().any(statement_uses_string_equality)
                         || expr_uses_string_equality(&branch.value)
                 })
@@ -555,9 +579,13 @@ fn statement_uses_string_concat(statement: &LoweredStatement) -> bool {
             value, branches, ..
         } => {
             expr_uses_string_concat(value)
-                || branches
-                    .iter()
-                    .any(|branch| branch.statements.iter().any(statement_uses_string_concat))
+                || branches.iter().any(|branch| {
+                    branch
+                        .guard
+                        .as_ref()
+                        .is_some_and(expr_uses_string_concat)
+                        || branch.statements.iter().any(statement_uses_string_concat)
+                })
         }
     }
 }
@@ -594,7 +622,11 @@ fn expr_uses_string_concat(expr: &LoweredExpr) -> bool {
         } => {
             expr_uses_string_concat(value)
                 || branches.iter().any(|branch| {
-                    branch.statements.iter().any(statement_uses_string_concat)
+                    branch
+                        .guard
+                        .as_ref()
+                        .is_some_and(expr_uses_string_concat)
+                        || branch.statements.iter().any(statement_uses_string_concat)
                         || expr_uses_string_concat(&branch.value)
                 })
         }
@@ -687,6 +719,10 @@ fn statement_uses_enum_trait_object(statement: &LoweredStatement) -> bool {
             expr_uses_enum_trait_object(value)
                 || branches.iter().any(|branch| {
                     branch
+                        .guard
+                        .as_ref()
+                        .is_some_and(expr_uses_enum_trait_object)
+                        || branch
                         .statements
                         .iter()
                         .any(statement_uses_enum_trait_object)
@@ -740,6 +776,10 @@ fn expr_uses_enum_trait_object(expr: &LoweredExpr) -> bool {
             expr_uses_enum_trait_object(value)
                 || branches.iter().any(|branch| {
                     branch
+                        .guard
+                        .as_ref()
+                        .is_some_and(expr_uses_enum_trait_object)
+                        || branch
                         .statements
                         .iter()
                         .any(statement_uses_enum_trait_object)
@@ -786,9 +826,10 @@ fn statement_uses_println(statement: &LoweredStatement) -> bool {
             value, branches, ..
         } => {
             expr_uses_println(value)
-                || branches
-                    .iter()
-                    .any(|branch| branch.statements.iter().any(statement_uses_println))
+                || branches.iter().any(|branch| {
+                    branch.guard.as_ref().is_some_and(expr_uses_println)
+                        || branch.statements.iter().any(statement_uses_println)
+                })
         }
         LoweredStatement::While { condition, body } => {
             expr_uses_println(condition) || body.iter().any(statement_uses_println)
@@ -844,7 +885,8 @@ fn expr_uses_println(expr: &LoweredExpr) -> bool {
         } => {
             expr_uses_println(value)
                 || branches.iter().any(|branch| {
-                    branch.statements.iter().any(statement_uses_println)
+                    branch.guard.as_ref().is_some_and(expr_uses_println)
+                        || branch.statements.iter().any(statement_uses_println)
                         || expr_uses_println(&branch.value)
                 })
         }
@@ -950,6 +992,10 @@ fn statement_calls_name(statement: &LoweredStatement, name: &str) -> bool {
             expr_calls_name(value, name)
                 || branches.iter().any(|branch| {
                     branch
+                        .guard
+                        .as_ref()
+                        .is_some_and(|guard| expr_calls_name(guard, name))
+                        || branch
                         .statements
                         .iter()
                         .any(|statement| statement_calls_name(statement, name))
@@ -993,6 +1039,10 @@ fn expr_calls_name(expr: &LoweredExpr, name: &str) -> bool {
             expr_calls_name(value, name)
                 || branches.iter().any(|branch| {
                     branch
+                        .guard
+                        .as_ref()
+                        .is_some_and(|guard| expr_calls_name(guard, name))
+                        || branch
                         .statements
                         .iter()
                         .any(|statement| statement_calls_name(statement, name))

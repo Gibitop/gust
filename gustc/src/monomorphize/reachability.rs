@@ -476,6 +476,9 @@ impl<'items> MethodReachability<'items> {
                 self.visit_expr(value, locals);
                 let mut type_ = None;
                 for branch in branches {
+                    if let Some(guard) = &branch.guard {
+                        self.visit_expr(guard, locals);
+                    }
                     let branch_type = match &branch.body {
                         MatchBranchBody::Expr(expr) => self.visit_expr(expr, locals),
                         MatchBranchBody::Block(block) => {
@@ -596,4 +599,3 @@ fn prune_generic_method_templates(items: &mut [Item]) {
         }
     }
 }
-

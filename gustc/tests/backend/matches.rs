@@ -166,6 +166,56 @@ fn main() {
 }
 
 #[test]
+fn match_guards_lower_to_combined_conditions() {
+    let result = check_source(
+        r#"struct Person {
+    name: string
+    age: i32
+}
+
+enum MaybePerson {
+    Some(Person)
+    None
+}
+
+fn personName(person: Person): string {
+    return match person {
+        Person { name, age } if age >= 18 => name,
+        Person { name, ... } => name,
+    }
+}
+
+fn maybeName(value: MaybePerson): string {
+    return match value {
+        MaybePerson.Some(Person { name, age }) if age >= 18 => name,
+        MaybePerson.Some(Person { name, ... }) => name,
+        MaybePerson.None => "none",
+    }
+}
+
+fn main() {
+    let person = Person { name: "Ada", age: 37 }
+    io.println(personName(person))
+    io.println(maybeName(MaybePerson.Some(person)))
+}"#,
+    );
+
+    assert!(
+        !result.has_errors(),
+        "expected no frontend errors, got {:?}",
+        result.diagnostics
+    );
+
+    let lowered = lower_program(&result.program).expect("match guards should lower");
+    let source = emit_c(&lowered);
+
+    assert!(source.contains(" && "));
+    assert!(source.contains(">= 18"));
+    assert!(source.contains("->gust_age"));
+    assert!(source.contains(".gust_payload.gust_Some->gust_age"));
+}
+
+#[test]
 fn struct_enum_fields_emit_after_their_enum_definition() {
     let result = check_source(
         r#"struct Spaceship {

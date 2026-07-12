@@ -378,6 +378,7 @@ fn lower_for_statement(
                             variant: "Some".to_string(),
                             payload: None,
                         },
+                        guard: None,
                         statements: body,
                     },
                     LoweredMatchStatementBranch {
@@ -386,6 +387,7 @@ fn lower_for_statement(
                             variant: "None".to_string(),
                             payload: None,
                         },
+                        guard: None,
                         statements: vec![LoweredStatement::Break],
                     },
                 ],

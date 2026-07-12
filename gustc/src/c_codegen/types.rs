@@ -198,6 +198,9 @@ fn collect_statement_function_types(statement: &LoweredStatement, types: &mut Ve
         } => {
             collect_expr_function_types(value, types);
             for branch in branches {
+                if let Some(guard) = &branch.guard {
+                    collect_expr_function_types(guard, types);
+                }
                 for statement in &branch.statements {
                     collect_statement_function_types(statement, types);
                 }
@@ -253,6 +256,9 @@ fn collect_expr_function_types(expr: &LoweredExpr, types: &mut Vec<LoweredType>)
         } => {
             collect_expr_function_types(value, types);
             for branch in branches {
+                if let Some(guard) = &branch.guard {
+                    collect_expr_function_types(guard, types);
+                }
                 for statement in &branch.statements {
                     collect_statement_function_types(statement, types);
                 }

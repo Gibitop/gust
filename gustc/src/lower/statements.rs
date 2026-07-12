@@ -358,6 +358,21 @@ fn lower_match_statement(
             diagnostics,
             &temp_name,
         )?;
+        let guard = if let Some(guard) = &branch.guard {
+            Some(lower_expr(
+                guard,
+                &branch_locals,
+                signatures,
+                structs,
+                enums,
+                traits,
+                diagnostics,
+                Some(LoweredType::Basic(BasicType::Bool)),
+                "expected supported match guard in executable builds",
+            )?)
+        } else {
+            None
+        };
         let statements = match &branch.body {
             MatchBranchBody::Block(block) => lower_conditional_block(
                 block,
@@ -384,6 +399,7 @@ fn lower_match_statement(
         };
         lowered_branches.push(LoweredMatchStatementBranch {
             pattern,
+            guard,
             statements,
         });
     }

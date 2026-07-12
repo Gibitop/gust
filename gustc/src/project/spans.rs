@@ -231,6 +231,9 @@ fn shift_expr(expr: &mut Expr, offset: usize) {
             for branch in branches {
                 shift_span(&mut branch.span, offset);
                 shift_pattern(&mut branch.pattern, offset);
+                if let Some(guard) = &mut branch.guard {
+                    shift_expr(guard, offset);
+                }
                 match &mut branch.body {
                     MatchBranchBody::Expr(expr) => shift_expr(expr, offset),
                     MatchBranchBody::Block(block) => shift_block(block, offset),

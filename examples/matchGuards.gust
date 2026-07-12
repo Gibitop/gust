@@ -1,0 +1,30 @@
+struct Person {
+    name: string
+    age: i32
+}
+
+enum MaybePerson {
+    Some(Person)
+    None
+}
+
+fn label(person: Person): string {
+    return match person {
+        Person { name, age } if age >= 18 => name + " is an adult",
+        Person { name, ... } => name + " is young",
+    }
+}
+
+fn maybeLabel(value: MaybePerson): string {
+    return match value {
+        MaybePerson.Some(Person { name, age }) if age >= 18 => name + " is an adult",
+        MaybePerson.Some(Person { name, ... }) => name + " is young",
+        MaybePerson.None => "unknown",
+    }
+}
+
+fn main() {
+    let person = Person { name: "Ada", age: 37 }
+    io.println(label(person))
+    io.println(maybeLabel(MaybePerson.Some(person)))
+}
