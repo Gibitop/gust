@@ -249,6 +249,12 @@ fn shift_expr(expr: &mut Expr, offset: usize) {
 
 fn shift_pattern(pattern: &mut Pattern, offset: usize) {
     match pattern {
+        Pattern::Or { alternatives, span } => {
+            shift_span(span, offset);
+            for alternative in alternatives {
+                shift_pattern(alternative, offset);
+            }
+        }
         Pattern::Variant { payload, span, .. } => {
             shift_span(span, offset);
             if let Some(payload) = payload {

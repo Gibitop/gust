@@ -375,6 +375,10 @@ impl MatchBranchBody {
 
 #[derive(Debug, Clone)]
 pub enum Pattern {
+    Or {
+        alternatives: Vec<Pattern>,
+        span: Span,
+    },
     Variant {
         enum_name: String,
         variant: String,
@@ -425,7 +429,8 @@ pub struct StructPatternField {
 impl Pattern {
     pub fn span(&self) -> Span {
         match self {
-            Pattern::Variant { span, .. }
+            Pattern::Or { span, .. }
+            | Pattern::Variant { span, .. }
             | Pattern::Struct { span, .. }
             | Pattern::Binding { span, .. }
             | Pattern::String { span, .. }

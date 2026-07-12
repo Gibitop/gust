@@ -231,6 +231,19 @@ Nested enum payload patterns are type-checked recursively. A nested variant must
 payload enum it is matching. Exhaustiveness for nested payload patterns may remain conservative,
 but executable matching must test nested tags and bind nested payloads correctly.
 
+## Or match patterns
+
+Match patterns may combine alternatives with `|`, such as
+`Status.Ready | Status.Waiting`. Or-pattern alternatives are validated as separate patterns
+against the same matched value and then merged into one branch scope. Every alternative must bind
+the same names with the same mutability and compatible types, so a shared binding can be used in
+the branch body regardless of which alternative matched.
+
+Executable lowering emits or-pattern tests as `conditionA || conditionB`. When a shared binding
+comes from different payload paths, such as
+`Option.Some(Result.Ok(text)) | Option.Some(Result.Err(text))`, reads of that binding lower to a
+conditional expression that selects the payload for the alternative that matched.
+
 ## Struct match patterns
 
 Struct patterns use Rust-shaped field extraction syntax, such as

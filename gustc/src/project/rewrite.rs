@@ -345,6 +345,11 @@ impl<'names, 'diagnostics> ModuleRewriter<'names, 'diagnostics> {
         bindings: &mut HashSet<String>,
     ) {
         match pattern {
+            Pattern::Or { alternatives, .. } => {
+                for alternative in alternatives {
+                    self.rewrite_pattern(alternative, branch_span, bindings);
+                }
+            }
             Pattern::Variant {
                 enum_name, payload, ..
             } => {

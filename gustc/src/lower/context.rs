@@ -13,7 +13,7 @@ pub struct LoweredParamSignature {
     pub mutable: bool,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct LoweringLocal {
     type_: LoweredType,
     mutable: bool,

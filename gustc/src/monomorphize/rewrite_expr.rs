@@ -700,6 +700,11 @@ impl Monomorphizer {
         scope: &mut HashMap<String, TypeRef>,
     ) {
         match pattern {
+            Pattern::Or { alternatives, .. } => {
+                for alternative in alternatives {
+                    self.rewrite_match_pattern(alternative, value_type, scope);
+                }
+            }
             Pattern::Variant {
                 enum_name,
                 variant,
