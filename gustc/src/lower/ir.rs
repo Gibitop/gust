@@ -291,11 +291,16 @@ pub enum LoweredPattern {
         fields: Vec<LoweredStructPatternField>,
     },
     String(String),
-    Number(String),
+    Bool(bool),
+    Number {
+        value: String,
+        type_: BasicType,
+    },
     Range {
         start: String,
         end: String,
         inclusive: bool,
+        type_: BasicType,
     },
     Wildcard,
 }

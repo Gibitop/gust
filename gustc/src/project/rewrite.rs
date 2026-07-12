@@ -372,6 +372,7 @@ impl<'names, 'diagnostics> ModuleRewriter<'names, 'diagnostics> {
             }
             Pattern::Binding { .. }
             | Pattern::String { .. }
+            | Pattern::Bool { .. }
             | Pattern::Number { .. }
             | Pattern::Range { .. }
             | Pattern::Wildcard { .. } => {}

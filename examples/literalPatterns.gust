@@ -1,0 +1,20 @@
+fn codeLabel(code: u16): string {
+    return match code {
+        200 => "ok",
+        400..=499 => "client error",
+        _ => "other",
+    }
+}
+
+fn flagLabel(flag: bool): string {
+    return match flag {
+        true => "enabled",
+        false => "disabled",
+    }
+}
+
+fn main() {
+    io.println(codeLabel(200))
+    io.println(codeLabel(404))
+    io.println(flagLabel(true))
+}

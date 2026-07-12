@@ -755,6 +755,7 @@ impl Monomorphizer {
             }
             Pattern::Binding { .. }
             | Pattern::String { .. }
+            | Pattern::Bool { .. }
             | Pattern::Number { .. }
             | Pattern::Range { .. }
             | Pattern::Wildcard { .. } => {}
