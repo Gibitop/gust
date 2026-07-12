@@ -357,6 +357,16 @@ impl<'names, 'diagnostics> ModuleRewriter<'names, 'diagnostics> {
                     self.rewrite_pattern(payload, branch_span, bindings);
                 }
             }
+            Pattern::Struct { name, fields, .. } => {
+                if let Some(internal_name) = self.resolve_qualified_name(name, branch_span) {
+                    *name = internal_name;
+                } else if let Some(internal_name) = self.visible_names.get(name) {
+                    *name = internal_name.clone();
+                }
+                for field in fields {
+                    self.rewrite_pattern(&mut field.pattern, branch_span, bindings);
+                }
+            }
             Pattern::Binding { name, .. } if name != "_" => {
                 bindings.insert(name.clone());
             }

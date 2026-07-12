@@ -112,6 +112,7 @@ fn lower_match_pattern(
     value_mutable: bool,
     locals: &mut HashMap<String, LoweringLocal>,
     enums: &HashMap<String, LoweredEnum>,
+    structs: &HashMap<String, LoweredStruct>,
     diagnostics: &mut Vec<Diagnostic>,
     match_value_name: &str,
 ) -> Option<LoweredPattern> {
@@ -125,6 +126,7 @@ fn lower_match_pattern(
         value_mutable,
         locals,
         enums,
+        structs,
         diagnostics,
         &matched_value,
     )
@@ -136,6 +138,7 @@ fn lower_match_pattern_with_expr(
     value_mutable: bool,
     locals: &mut HashMap<String, LoweringLocal>,
     enums: &HashMap<String, LoweredEnum>,
+    structs: &HashMap<String, LoweredStruct>,
     diagnostics: &mut Vec<Diagnostic>,
     matched_value: &LoweredExpr,
 ) -> Option<LoweredPattern> {
@@ -184,6 +187,7 @@ fn lower_match_pattern_with_expr(
                         value_mutable,
                         locals,
                         enums,
+                        structs,
                         diagnostics,
                         &payload_value,
                     )?))
@@ -212,6 +216,98 @@ fn lower_match_pattern_with_expr(
                 enum_name: enum_name.clone(),
                 variant: variant.clone(),
                 payload: lowered_payload,
+            })
+        }
+        (
+            Pattern::Struct {
+                name,
+                fields,
+                has_rest,
+                span,
+            },
+            LoweredType::Struct(value_name),
+        ) => {
+            if name != value_name {
+                diagnostics.push(Diagnostic::error(
+                    *span,
+                    format!("pattern `{name}` does not match struct `{value_name}`"),
+                ));
+                return None;
+            }
+
+            let Some(struct_) = structs.get(name) else {
+                diagnostics.push(Diagnostic::error(
+                    *span,
+                    format!("unknown struct `{name}` in executable build"),
+                ));
+                return None;
+            };
+
+            let mut seen_fields = HashSet::new();
+            let mut lowered_fields = Vec::new();
+            for field in fields {
+                if !seen_fields.insert(field.name.clone()) {
+                    diagnostics.push(Diagnostic::error(
+                        field.span,
+                        format!("duplicate field `{}` in struct pattern `{name}`", field.name),
+                    ));
+                    continue;
+                }
+
+                let Some(field_definition) =
+                    struct_.fields.iter().find(|item| item.name == field.name)
+                else {
+                    diagnostics.push(Diagnostic::error(
+                        field.span,
+                        format!("unknown field `{}` for struct `{name}`", field.name),
+                    ));
+                    continue;
+                };
+
+                let field_value = LoweredExpr {
+                    type_: field_definition.type_.clone(),
+                    kind: LoweredExprKind::FieldAccess {
+                        object: Box::new(matched_value.clone()),
+                        field: field.name.clone(),
+                    },
+                };
+                let pattern = lower_match_pattern_with_expr(
+                    &field.pattern,
+                    &field_definition.type_,
+                    value_mutable,
+                    locals,
+                    enums,
+                    structs,
+                    diagnostics,
+                    &field_value,
+                )?;
+                lowered_fields.push(LoweredStructPatternField {
+                    name: field.name.clone(),
+                    pattern,
+                });
+            }
+
+            if !has_rest {
+                let mut missing = struct_
+                    .fields
+                    .iter()
+                    .filter(|field| !seen_fields.contains(&field.name))
+                    .map(|field| field.name.clone())
+                    .collect::<Vec<_>>();
+                missing.sort();
+                for field in missing {
+                    diagnostics.push(Diagnostic::error(
+                        *span,
+                        format!(
+                            "struct pattern `{name}` is missing field `{field}`; add `...` to ignore remaining fields"
+                        ),
+                    ));
+                }
+            }
+
+            Some(LoweredPattern::Struct {
+                name: name.clone(),
+                fields: lowered_fields,
             })
         }
         (
@@ -246,6 +342,20 @@ fn lower_match_pattern_with_expr(
         }
         (Pattern::String { value, .. }, LoweredType::Basic(BasicType::String)) => {
             Some(LoweredPattern::String(value.clone()))
+        }
+        (Pattern::Number { span, .. }, LoweredType::Basic(BasicType::String)) => {
+            diagnostics.push(Diagnostic::error(
+                *span,
+                "numeric patterns cannot match a `string` value in executable builds",
+            ));
+            None
+        }
+        (Pattern::Range { span, .. }, LoweredType::Basic(BasicType::String)) => {
+            diagnostics.push(Diagnostic::error(
+                *span,
+                "numeric range patterns cannot match a `string` value in executable builds",
+            ));
+            None
         }
         (Pattern::Number { value, span }, LoweredType::Basic(BasicType::I32)) => {
             if number_literal_is_float(value) {

@@ -67,6 +67,77 @@ impl Analyzer {
                 Some(variant.clone())
             }
             (
+                Pattern::Struct {
+                    name,
+                    fields,
+                    has_rest,
+                    span,
+                },
+                Type::Struct(value_name),
+            ) => {
+                if name != value_name {
+                    self.diagnostics.push(Diagnostic::error(
+                        *span,
+                        format!("pattern `{name}` does not match struct `{value_name}`"),
+                    ));
+                    return None;
+                }
+
+                let Some(struct_) = self.structs.get(name).cloned() else {
+                    self.diagnostics.push(Diagnostic::error(
+                        *span,
+                        format!("unknown struct `{name}` in match pattern"),
+                    ));
+                    return None;
+                };
+
+                let mut seen_fields = HashSet::new();
+                for field in fields {
+                    if !seen_fields.insert(field.name.clone()) {
+                        self.diagnostics.push(Diagnostic::error(
+                            field.span,
+                            format!("duplicate field `{}` in struct pattern `{name}`", field.name),
+                        ));
+                        continue;
+                    }
+
+                    let Some(field_type) = struct_.fields.get(&field.name) else {
+                        self.diagnostics.push(Diagnostic::error(
+                            field.span,
+                            format!("unknown field `{}` for struct `{name}`", field.name),
+                        ));
+                        continue;
+                    };
+
+                    self.validate_pattern(
+                        &field.pattern,
+                        field_type,
+                        value_mutable,
+                        None,
+                    );
+                }
+
+                if !has_rest {
+                    let mut missing = struct_
+                        .fields
+                        .keys()
+                        .filter(|name| !seen_fields.contains(*name))
+                        .cloned()
+                        .collect::<Vec<_>>();
+                    missing.sort();
+                    for field in missing {
+                        self.diagnostics.push(Diagnostic::error(
+                            *span,
+                            format!(
+                                "struct pattern `{name}` is missing field `{field}`; add `...` to ignore remaining fields"
+                            ),
+                        ));
+                    }
+                }
+
+                None
+            }
+            (
                 Pattern::Binding {
                     name,
                     mutable,
@@ -130,6 +201,20 @@ impl Analyzer {
                 ));
                 None
             }
+            (Pattern::Struct { span, .. }, Type::Enum(enum_name)) => {
+                self.diagnostics.push(Diagnostic::error(
+                    *span,
+                    format!("struct patterns cannot match enum `{enum_name}`"),
+                ));
+                None
+            }
+            (Pattern::Struct { span, .. }, Type::Basic(type_)) => {
+                self.diagnostics.push(Diagnostic::error(
+                    *span,
+                    format!("struct patterns cannot match a `{}` value", type_.name()),
+                ));
+                None
+            }
             (Pattern::String { span, .. }, Type::Enum(enum_name)) => {
                 self.diagnostics.push(Diagnostic::error(
                     *span,
@@ -148,6 +233,20 @@ impl Analyzer {
                 self.diagnostics.push(Diagnostic::error(
                     *span,
                     format!("numeric range patterns cannot match enum `{enum_name}`"),
+                ));
+                None
+            }
+            (Pattern::Number { span, .. }, Type::Basic(BasicType::String)) => {
+                self.diagnostics.push(Diagnostic::error(
+                    *span,
+                    "numeric patterns cannot match a `string` value",
+                ));
+                None
+            }
+            (Pattern::Range { span, .. }, Type::Basic(BasicType::String)) => {
+                self.diagnostics.push(Diagnostic::error(
+                    *span,
+                    "numeric range patterns cannot match a `string` value",
                 ));
                 None
             }
@@ -189,12 +288,45 @@ impl Analyzer {
                 ));
                 None
             }
+            (Pattern::Struct { span, .. }, _) => {
+                self.diagnostics.push(Diagnostic::error(
+                    *span,
+                    "struct pattern does not apply to the matched value",
+                ));
+                None
+            }
         }
     }
 
     fn pattern_fully_covers_type(&self, pattern: &Pattern, value_type: &Type) -> bool {
         match (pattern, value_type) {
             (Pattern::Wildcard { .. } | Pattern::Binding { .. }, _) => true,
+            (
+                Pattern::Struct {
+                    name,
+                    fields,
+                    has_rest,
+                    ..
+                },
+                Type::Struct(value_name),
+            ) if name == value_name => {
+                let Some(struct_) = self.structs.get(name) else {
+                    return false;
+                };
+                let field_patterns = fields
+                    .iter()
+                    .map(|field| (field.name.as_str(), &field.pattern))
+                    .collect::<HashMap<_, _>>();
+                (*has_rest || field_patterns.len() == struct_.fields.len())
+                    && field_patterns.iter().all(|(field_name, pattern)| {
+                        struct_
+                            .fields
+                            .get(*field_name)
+                            .is_some_and(|field_type| {
+                                self.pattern_fully_covers_type(pattern, field_type)
+                            })
+                    })
+            }
             (Pattern::Variant { .. }, Type::Enum(enum_name)) => {
                 let mut coverage = EnumPatternCoverage::default();
                 self.add_pattern_coverage(&mut coverage, pattern, value_type);

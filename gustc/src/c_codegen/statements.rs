@@ -126,7 +126,7 @@ fn push_c_statement(
 
             for (index, branch) in branches.iter().enumerate() {
                 push_c_indent(source, indent + 1);
-                if index + 1 < branches.len() {
+                if !lowered_pattern_is_unconditional(&branch.pattern) {
                     if index > 0 {
                         source.push_str("else ");
                     }
@@ -174,6 +174,23 @@ fn push_c_match_condition(source: &mut String, temp_name: &str, pattern: &Lowere
             }
             source.push(')');
         }
+        LoweredPattern::Struct { fields, .. } => {
+            if fields.is_empty() {
+                source.push('1');
+            } else {
+                source.push('(');
+                for (index, field) in fields.iter().enumerate() {
+                    if index > 0 {
+                        source.push_str(" && ");
+                    }
+                    let mut field_name = temp_name.to_string();
+                    field_name.push_str("->");
+                    push_c_local_name(&mut field_name, &field.name);
+                    push_c_match_condition(source, &field_name, &field.pattern);
+                }
+                source.push(')');
+            }
+        }
         LoweredPattern::String(value) => {
             source.push_str("gust_rt_string_equal(");
             source.push_str(temp_name);
@@ -206,6 +223,19 @@ fn push_c_match_condition(source: &mut String, temp_name: &str, pattern: &Lowere
             source.push(')');
         }
         LoweredPattern::Wildcard => source.push('1'),
+    }
+}
+
+fn lowered_pattern_is_unconditional(pattern: &LoweredPattern) -> bool {
+    match pattern {
+        LoweredPattern::Wildcard => true,
+        LoweredPattern::Struct { fields, .. } => fields
+            .iter()
+            .all(|field| lowered_pattern_is_unconditional(&field.pattern)),
+        LoweredPattern::Variant { .. }
+        | LoweredPattern::String(_)
+        | LoweredPattern::Number(_)
+        | LoweredPattern::Range { .. } => false,
     }
 }
 

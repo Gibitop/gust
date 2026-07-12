@@ -84,6 +84,7 @@ fn simple_kind_eq(left: &TokenKind, right: &TokenKind) -> bool {
             | (TokenKind::Dot, TokenKind::Dot)
             | (TokenKind::DotDot, TokenKind::DotDot)
             | (TokenKind::DotDotEqual, TokenKind::DotDotEqual)
+            | (TokenKind::Ellipsis, TokenKind::Ellipsis)
             | (TokenKind::Slash, TokenKind::Slash)
             | (TokenKind::SlashEqual, TokenKind::SlashEqual)
             | (TokenKind::Plus, TokenKind::Plus)

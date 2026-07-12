@@ -223,6 +223,19 @@ Nested enum payload patterns are type-checked recursively. A nested variant must
 payload enum it is matching. Exhaustiveness for nested payload patterns may remain conservative,
 but executable matching must test nested tags and bind nested payloads correctly.
 
+## Struct match patterns
+
+Struct patterns use Rust-shaped field extraction syntax, such as
+`Person { name, age }` and `Person { name: personName, ... }`. A shorthand field is equivalent to
+`field: field`. Field entries are checked against the matched struct, duplicate and unknown fields
+are rejected, and omitting a field without `...` is an error. Field subpatterns are type-checked
+against the declared field type.
+
+Struct patterns bind fields into the match branch scope. They can appear anywhere a nested pattern
+is accepted, including enum payloads such as `Option.Some(Person { name, ... })`. Executable
+lowering treats field bindings as replacements for field-access expressions on the matched value,
+so extraction does not require extra source-level local declarations.
+
 ## Extension functions
 
 An extension function is declared at the top level with `fn Type.functionName(...)`.

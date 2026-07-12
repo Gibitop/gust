@@ -339,12 +339,13 @@ fn lower_match_statement(
     if !matches!(
         value.type_,
         LoweredType::Enum(_)
+            | LoweredType::Struct(_)
             | LoweredType::Basic(BasicType::String)
             | LoweredType::Basic(BasicType::I32)
     ) {
         diagnostics.push(Diagnostic::error(
             expr.span,
-            "match statements require an enum, `string`, or `i32` value in executable builds",
+            "match statements require an enum, struct, `string`, or `i32` value in executable builds",
         ));
         return None;
     }
@@ -359,6 +360,7 @@ fn lower_match_statement(
             value_mutable,
             &mut branch_locals,
             enums,
+            structs,
             diagnostics,
             &temp_name,
         )?;

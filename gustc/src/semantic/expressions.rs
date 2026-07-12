@@ -223,6 +223,7 @@ impl Analyzer {
                 let mut seen = HashSet::new();
                 let mut enum_coverage = EnumPatternCoverage::default();
                 let mut has_wildcard = false;
+                let mut struct_covered = false;
                 let mut branch_type = None;
 
                 for branch in branches {
@@ -230,6 +231,11 @@ impl Analyzer {
                         self.diagnostics.push(Diagnostic::error(
                             branch.pattern.span(),
                             "match branches after a wildcard are unreachable",
+                        ));
+                    } else if struct_covered {
+                        self.diagnostics.push(Diagnostic::error(
+                            branch.pattern.span(),
+                            "match branches after a covering pattern are unreachable",
                         ));
                     }
                     self.push_scope();
@@ -255,6 +261,17 @@ impl Analyzer {
                                 &branch.pattern,
                                 &value_type,
                             );
+                        }
+                        (Type::Struct(_), Pattern::Struct { .. }) => {
+                            self.validate_pattern(
+                                &branch.pattern,
+                                &value_type,
+                                value_mutable,
+                                None,
+                            );
+                            if self.pattern_fully_covers_type(&branch.pattern, &value_type) {
+                                struct_covered = true;
+                            }
                         }
                         (Type::Basic(BasicType::String), Pattern::String { value, span }) => {
                             if !seen.insert(value.clone()) {
@@ -306,6 +323,15 @@ impl Analyzer {
                                 );
                             }
                         }
+                        (Type::Struct(_), Pattern::Wildcard { span }) => {
+                            if has_wildcard {
+                                self.diagnostics.push(Diagnostic::error(
+                                    *span,
+                                    "duplicate wildcard match branch",
+                                ));
+                            }
+                            has_wildcard = true;
+                        }
                         (Type::Enum(enum_name), Pattern::String { span, .. }) => {
                             self.diagnostics.push(Diagnostic::error(
                                 *span,
@@ -353,6 +379,14 @@ impl Analyzer {
                                     type_.name()
                                 ),
                             ));
+                        }
+                        (Type::Struct(_), _) => {
+                            self.validate_pattern(
+                                &branch.pattern,
+                                &value_type,
+                                value_mutable,
+                                None,
+                            );
                         }
                         (Type::Unknown, _) => {
                             self.validate_pattern(
@@ -423,16 +457,25 @@ impl Analyzer {
                         expr.span,
                         "non-exhaustive match for `i32`; add a wildcard branch",
                     ));
+                } else if matches!(value_type, Type::Struct(_)) && !has_wildcard && !struct_covered {
+                    self.diagnostics.push(Diagnostic::error(
+                        expr.span,
+                        format!(
+                            "non-exhaustive match for struct `{}`; add a wildcard branch or a covering struct pattern",
+                            value_type.name()
+                        ),
+                    ));
                 } else if !matches!(
                     value_type,
                     Type::Enum(_)
                         | Type::Basic(BasicType::String)
                         | Type::Basic(BasicType::I32)
+                        | Type::Struct(_)
                         | Type::Unknown
                 ) {
                     self.diagnostics.push(Diagnostic::error(
                         value.span,
-                        "match expressions require an enum, `string`, or `i32` value",
+                        "match expressions require an enum, struct, `string`, or `i32` value",
                     ));
                 }
 
