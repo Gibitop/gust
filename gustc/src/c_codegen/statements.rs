@@ -198,20 +198,30 @@ fn push_c_match_condition(source: &mut String, temp_name: &str, pattern: &Lowere
             push_c_string_literal(source, value);
             source.push(')');
         }
-        LoweredPattern::Number(value) => {
+        LoweredPattern::Bool(value) => {
             source.push_str(temp_name);
             source.push_str(" == ");
-            push_c_number_literal(source, value, &LoweredType::Basic(BasicType::I32));
+            if *value {
+                source.push_str("true");
+            } else {
+                source.push_str("false");
+            }
+        }
+        LoweredPattern::Number { value, type_ } => {
+            source.push_str(temp_name);
+            source.push_str(" == ");
+            push_c_number_literal(source, value, &LoweredType::Basic(*type_));
         }
         LoweredPattern::Range {
             start,
             end,
             inclusive,
+            type_,
         } => {
             source.push('(');
             source.push_str(temp_name);
             source.push_str(" >= ");
-            push_c_number_literal(source, start, &LoweredType::Basic(BasicType::I32));
+            push_c_number_literal(source, start, &LoweredType::Basic(*type_));
             source.push_str(" && ");
             source.push_str(temp_name);
             if *inclusive {
@@ -219,7 +229,7 @@ fn push_c_match_condition(source: &mut String, temp_name: &str, pattern: &Lowere
             } else {
                 source.push_str(" < ");
             }
-            push_c_number_literal(source, end, &LoweredType::Basic(BasicType::I32));
+            push_c_number_literal(source, end, &LoweredType::Basic(*type_));
             source.push(')');
         }
         LoweredPattern::Wildcard => source.push('1'),
@@ -234,7 +244,8 @@ fn lowered_pattern_is_unconditional(pattern: &LoweredPattern) -> bool {
             .all(|field| lowered_pattern_is_unconditional(&field.pattern)),
         LoweredPattern::Variant { .. }
         | LoweredPattern::String(_)
-        | LoweredPattern::Number(_)
+        | LoweredPattern::Bool(_)
+        | LoweredPattern::Number { .. }
         | LoweredPattern::Range { .. } => false,
     }
 }

@@ -343,6 +343,9 @@ fn lower_match_pattern_with_expr(
         (Pattern::String { value, .. }, LoweredType::Basic(BasicType::String)) => {
             Some(LoweredPattern::String(value.clone()))
         }
+        (Pattern::Bool { value, .. }, LoweredType::Basic(BasicType::Bool)) => {
+            Some(LoweredPattern::Bool(*value))
+        }
         (Pattern::Number { span, .. }, LoweredType::Basic(BasicType::String)) => {
             diagnostics.push(Diagnostic::error(
                 *span,
@@ -357,15 +360,21 @@ fn lower_match_pattern_with_expr(
             ));
             None
         }
-        (Pattern::Number { value, span }, LoweredType::Basic(BasicType::I32)) => {
-            if number_literal_is_float(value) {
+        (Pattern::Number { value, span }, LoweredType::Basic(type_)) if type_.is_integer() => {
+            if !integer_pattern_literal_is_valid(value, *type_) {
                 diagnostics.push(Diagnostic::error(
                     *span,
-                    "numeric match patterns for `i32` require integer literals in executable builds",
+                    format!(
+                        "numeric match patterns for `{}` require integer literals in range for executable builds",
+                        type_.name()
+                    ),
                 ));
                 return None;
             }
-            Some(LoweredPattern::Number(value.clone()))
+            Some(LoweredPattern::Number {
+                value: value.clone(),
+                type_: *type_,
+            })
         }
         (
             Pattern::Range {
@@ -374,12 +383,17 @@ fn lower_match_pattern_with_expr(
                 inclusive,
                 span,
             },
-            LoweredType::Basic(BasicType::I32),
-        ) => {
-            if number_literal_is_float(start) || number_literal_is_float(end) {
+            LoweredType::Basic(type_),
+        ) if type_.is_integer() => {
+            if !integer_pattern_literal_is_valid(start, *type_)
+                || !integer_pattern_literal_is_valid(end, *type_)
+            {
                 diagnostics.push(Diagnostic::error(
                     *span,
-                    "numeric range patterns for `i32` require integer literal bounds in executable builds",
+                    format!(
+                        "numeric range patterns for `{}` require integer literal bounds in range for executable builds",
+                        type_.name()
+                    ),
                 ));
                 return None;
             }
@@ -387,6 +401,7 @@ fn lower_match_pattern_with_expr(
                 start: start.clone(),
                 end: end.clone(),
                 inclusive: *inclusive,
+                type_: *type_,
             })
         }
         (Pattern::Wildcard { .. }, _) => Some(LoweredPattern::Wildcard),
@@ -413,4 +428,40 @@ fn number_pair_contains_float(left: &Expr, right: &Expr) -> bool {
         && matches!(&right.kind, ExprKind::Number(_))
         && (matches!(&left.kind, ExprKind::Number(value) if number_literal_is_float(value))
             || matches!(&right.kind, ExprKind::Number(value) if number_literal_is_float(value)))
+}
+
+fn match_value_type_is_supported(type_: &LoweredType) -> bool {
+    matches!(
+        type_,
+        LoweredType::Enum(_)
+            | LoweredType::Struct(_)
+            | LoweredType::Basic(BasicType::String | BasicType::Bool)
+    ) || matches!(type_, LoweredType::Basic(type_) if type_.is_integer())
+}
+
+fn integer_pattern_literal_is_valid(value: &str, type_: BasicType) -> bool {
+    if number_literal_is_float(value) {
+        return false;
+    }
+    let Ok(value) = value.parse::<u128>() else {
+        return false;
+    };
+    integer_type_max(type_).is_some_and(|max| value <= max)
+}
+
+fn integer_type_max(type_: BasicType) -> Option<u128> {
+    match type_ {
+        BasicType::U8 => Some(u8::MAX as u128),
+        BasicType::U16 => Some(u16::MAX as u128),
+        BasicType::U32 => Some(u32::MAX as u128),
+        BasicType::U64 => Some(u64::MAX as u128),
+        BasicType::U128 => Some(u128::MAX),
+        BasicType::Usize => Some(u64::MAX as u128),
+        BasicType::I8 => Some(i8::MAX as u128),
+        BasicType::I16 => Some(i16::MAX as u128),
+        BasicType::I32 => Some(i32::MAX as u128),
+        BasicType::I64 => Some(i64::MAX as u128),
+        BasicType::I128 => Some(i128::MAX as u128),
+        _ => None,
+    }
 }

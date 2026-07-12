@@ -224,6 +224,8 @@ impl Analyzer {
                 let mut enum_coverage = EnumPatternCoverage::default();
                 let mut has_wildcard = false;
                 let mut struct_covered = false;
+                let mut bool_true_covered = false;
+                let mut bool_false_covered = false;
                 let mut branch_type = None;
 
                 for branch in branches {
@@ -281,31 +283,65 @@ impl Analyzer {
                                 ));
                             }
                         }
-                        (Type::Basic(BasicType::I32), Pattern::Number { value, span }) => {
-                            if number_literal_is_float(value) {
+                        (Type::Basic(BasicType::Bool), Pattern::Bool { value, span }) => {
+                            let already_covered = if *value {
+                                std::mem::replace(&mut bool_true_covered, true)
+                            } else {
+                                std::mem::replace(&mut bool_false_covered, true)
+                            };
+                            if already_covered {
                                 self.diagnostics.push(Diagnostic::error(
                                     *span,
-                                    "numeric match patterns for `i32` require integer literals",
+                                    format!("duplicate match branch for bool `{value}`"),
+                                ));
+                            }
+                        }
+                        (Type::Basic(type_), Pattern::Number { value, span })
+                            if type_.is_integer() =>
+                        {
+                            if !integer_pattern_literal_is_valid(value, *type_) {
+                                self.diagnostics.push(Diagnostic::error(
+                                    *span,
+                                    format!(
+                                        "numeric match patterns for `{}` require integer literals in range",
+                                        type_.name()
+                                    ),
                                 ));
                             }
                         }
                         (
-                            Type::Basic(BasicType::I32),
+                            Type::Basic(type_),
                             Pattern::Range {
                                 start, end, span, ..
                             },
-                        ) => {
-                            if number_literal_is_float(start) || number_literal_is_float(end) {
+                        ) if type_.is_integer() => {
+                            if !integer_pattern_literal_is_valid(start, *type_)
+                                || !integer_pattern_literal_is_valid(end, *type_)
+                            {
                                 self.diagnostics.push(Diagnostic::error(
                                     *span,
-                                    "numeric range patterns for `i32` require integer literal bounds",
+                                    format!(
+                                        "numeric range patterns for `{}` require integer literal bounds in range",
+                                        type_.name()
+                                    ),
                                 ));
                             }
                         }
                         (
                             Type::Enum(_)
                             | Type::Basic(BasicType::String)
-                            | Type::Basic(BasicType::I32),
+                            | Type::Basic(BasicType::Bool)
+                            | Type::Basic(BasicType::U8)
+                            | Type::Basic(BasicType::U16)
+                            | Type::Basic(BasicType::U32)
+                            | Type::Basic(BasicType::U64)
+                            | Type::Basic(BasicType::U128)
+                            | Type::Basic(BasicType::Usize)
+                            | Type::Basic(BasicType::I8)
+                            | Type::Basic(BasicType::I16)
+                            | Type::Basic(BasicType::I32)
+                            | Type::Basic(BasicType::I64)
+                            | Type::Basic(BasicType::I128),
                             Pattern::Wildcard { span },
                         ) => {
                             if has_wildcard {
@@ -368,16 +404,42 @@ impl Analyzer {
                                 format!("numeric range patterns cannot match enum `{enum_name}`"),
                             ));
                         }
-                        (Type::Basic(type_), Pattern::Number { span, .. })
-                        | (Type::Basic(type_), Pattern::Range { span, .. })
-                            if *type_ != BasicType::I32 =>
-                        {
+                        (Type::Enum(enum_name), Pattern::Bool { span, .. }) => {
                             self.diagnostics.push(Diagnostic::error(
                                 *span,
-                                format!(
-                                    "numeric match patterns currently require an `i32` match value, got `{}`",
-                                    type_.name()
-                                ),
+                                format!("bool patterns cannot match enum `{enum_name}`"),
+                            ));
+                        }
+                        (Type::Basic(BasicType::String), Pattern::Bool { span, .. }) => {
+                            self.diagnostics.push(Diagnostic::error(
+                                *span,
+                                "bool patterns cannot match a `string` value",
+                            ));
+                        }
+                        (Type::Basic(type_), Pattern::Number { span, .. })
+                        | (Type::Basic(type_), Pattern::Range { span, .. }) => {
+                            if type_.is_float() {
+                                self.diagnostics.push(Diagnostic::error(
+                                    *span,
+                                    format!(
+                                        "numeric match patterns do not support floating-point match values, got `{}`",
+                                        type_.name()
+                                    ),
+                                ));
+                            } else {
+                                self.diagnostics.push(Diagnostic::error(
+                                    *span,
+                                    format!(
+                                        "numeric match patterns cannot match a `{}` value",
+                                        type_.name()
+                                    ),
+                                ));
+                            }
+                        }
+                        (Type::Basic(type_), Pattern::Bool { span, .. }) => {
+                            self.diagnostics.push(Diagnostic::error(
+                                *span,
+                                format!("bool patterns cannot match a `{}` value", type_.name()),
                             ));
                         }
                         (Type::Struct(_), _) => {
@@ -452,10 +514,23 @@ impl Analyzer {
                         expr.span,
                         "non-exhaustive match for `string`; add a wildcard branch",
                     ));
-                } else if value_type == Type::Basic(BasicType::I32) && !has_wildcard {
+                } else if value_type == Type::Basic(BasicType::Bool)
+                    && !has_wildcard
+                    && !(bool_true_covered && bool_false_covered)
+                {
                     self.diagnostics.push(Diagnostic::error(
                         expr.span,
-                        "non-exhaustive match for `i32`; add a wildcard branch",
+                        "non-exhaustive match for `bool`; cover `true` and `false` or add a wildcard branch",
+                    ));
+                } else if matches!(&value_type, Type::Basic(type_) if type_.is_integer())
+                    && !has_wildcard
+                {
+                    self.diagnostics.push(Diagnostic::error(
+                        expr.span,
+                        format!(
+                            "non-exhaustive match for `{}`; add a wildcard branch",
+                            value_type.name()
+                        ),
                     ));
                 } else if matches!(value_type, Type::Struct(_)) && !has_wildcard && !struct_covered {
                     self.diagnostics.push(Diagnostic::error(
@@ -469,13 +544,14 @@ impl Analyzer {
                     value_type,
                     Type::Enum(_)
                         | Type::Basic(BasicType::String)
-                        | Type::Basic(BasicType::I32)
+                        | Type::Basic(BasicType::Bool)
                         | Type::Struct(_)
                         | Type::Unknown
-                ) {
+                ) && !matches!(&value_type, Type::Basic(type_) if type_.is_integer())
+                {
                     self.diagnostics.push(Diagnostic::error(
                         value.span,
-                        "match expressions require an enum, struct, `string`, or `i32` value",
+                        "match expressions require an enum, struct, `string`, `bool`, or integer value",
                     ));
                 }
 

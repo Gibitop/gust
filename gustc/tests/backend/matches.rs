@@ -216,6 +216,55 @@ fn main() {
 }
 
 #[test]
+fn integer_and_bool_literal_patterns_emit_typed_c_conditions() {
+    let result = check_source(
+        r#"fn codeLabel(code: u64): string {
+    return match code {
+        200 => "ok",
+        400..=499 => "client error",
+        _ => "other",
+    }
+}
+
+fn wideLabel(value: u128): string {
+    return match value {
+        340282366920938463463374607431768211455 => "max",
+        _ => "other",
+    }
+}
+
+fn flagLabel(flag: bool): string {
+    return match flag {
+        true => "true",
+        false => "false",
+    }
+}
+
+fn main() {
+    io.println(codeLabel(200))
+    io.println(wideLabel(340282366920938463463374607431768211455))
+    io.println(flagLabel(true))
+}"#,
+    );
+
+    assert!(
+        !result.has_errors(),
+        "expected no frontend errors, got {:?}",
+        result.diagnostics
+    );
+
+    let lowered = lower_program(&result.program).expect("literal patterns should lower");
+    let source = emit_c(&lowered);
+
+    assert!(source.contains(" == 200"));
+    assert!(source.contains(" >= 400"));
+    assert!(source.contains(" <= 499"));
+    assert!(source.contains(" == true"));
+    assert!(source.contains("(unsigned __int128)"));
+    assert!(!source.contains("340282366920938463463374607431768211455"));
+}
+
+#[test]
 fn mutable_enum_payload_patterns_lower_to_payload_access() {
     let result = check_source(
         r#"struct StringContainer {

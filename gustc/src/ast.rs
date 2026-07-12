@@ -396,6 +396,10 @@ pub enum Pattern {
         value: String,
         span: Span,
     },
+    Bool {
+        value: bool,
+        span: Span,
+    },
     Number {
         value: String,
         span: Span,
@@ -425,6 +429,7 @@ impl Pattern {
             | Pattern::Struct { span, .. }
             | Pattern::Binding { span, .. }
             | Pattern::String { span, .. }
+            | Pattern::Bool { span, .. }
             | Pattern::Number { span, .. }
             | Pattern::Range { span, .. }
             | Pattern::Wildcard { span } => *span,

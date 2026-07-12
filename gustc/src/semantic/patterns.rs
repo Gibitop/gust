@@ -170,11 +170,15 @@ impl Analyzer {
                 None
             }
             (Pattern::String { .. }, Type::Basic(BasicType::String)) => None,
-            (Pattern::Number { value, span }, Type::Basic(BasicType::I32)) => {
-                if number_literal_is_float(value) {
+            (Pattern::Bool { .. }, Type::Basic(BasicType::Bool)) => None,
+            (Pattern::Number { value, span }, Type::Basic(type_)) if type_.is_integer() => {
+                if !integer_pattern_literal_is_valid(value, *type_) {
                     self.diagnostics.push(Diagnostic::error(
                         *span,
-                        "numeric match patterns for `i32` require integer literals",
+                        format!(
+                            "numeric match patterns for `{}` require integer literals in range",
+                            type_.name()
+                        ),
                     ));
                 }
                 None
@@ -183,12 +187,17 @@ impl Analyzer {
                 Pattern::Range {
                     start, end, span, ..
                 },
-                Type::Basic(BasicType::I32),
-            ) => {
-                if number_literal_is_float(start) || number_literal_is_float(end) {
+                Type::Basic(type_),
+            ) if type_.is_integer() => {
+                if !integer_pattern_literal_is_valid(start, *type_)
+                    || !integer_pattern_literal_is_valid(end, *type_)
+                {
                     self.diagnostics.push(Diagnostic::error(
                         *span,
-                        "numeric range patterns for `i32` require integer literal bounds",
+                        format!(
+                            "numeric range patterns for `{}` require integer literal bounds in range",
+                            type_.name()
+                        ),
                     ));
                 }
                 None
@@ -236,6 +245,13 @@ impl Analyzer {
                 ));
                 None
             }
+            (Pattern::Bool { span, .. }, Type::Enum(enum_name)) => {
+                self.diagnostics.push(Diagnostic::error(
+                    *span,
+                    format!("bool patterns cannot match enum `{enum_name}`"),
+                ));
+                None
+            }
             (Pattern::Number { span, .. }, Type::Basic(BasicType::String)) => {
                 self.diagnostics.push(Diagnostic::error(
                     *span,
@@ -250,15 +266,32 @@ impl Analyzer {
                 ));
                 None
             }
-            (Pattern::Number { span, .. }, Type::Basic(type_))
-            | (Pattern::Range { span, .. }, Type::Basic(type_)) => {
+            (Pattern::Bool { span, .. }, Type::Basic(BasicType::String)) => {
                 self.diagnostics.push(Diagnostic::error(
                     *span,
-                    format!(
-                        "numeric match patterns currently require an `i32` match value, got `{}`",
-                        type_.name()
-                    ),
+                    "bool patterns cannot match a `string` value",
                 ));
+                None
+            }
+            (Pattern::Number { span, .. }, Type::Basic(type_))
+            | (Pattern::Range { span, .. }, Type::Basic(type_)) => {
+                if type_.is_float() {
+                    self.diagnostics.push(Diagnostic::error(
+                        *span,
+                        format!(
+                            "numeric match patterns do not support floating-point match values, got `{}`",
+                            type_.name()
+                        ),
+                    ));
+                } else {
+                    self.diagnostics.push(Diagnostic::error(
+                        *span,
+                        format!(
+                            "numeric match patterns cannot match a `{}` value",
+                            type_.name()
+                        ),
+                    ));
+                }
                 None
             }
             (Pattern::String { span, .. }, _) => {
@@ -266,6 +299,16 @@ impl Analyzer {
                     *span,
                     format!(
                         "string patterns cannot match a `{}` value",
+                        value_type.name()
+                    ),
+                ));
+                None
+            }
+            (Pattern::Bool { span, .. }, _) => {
+                self.diagnostics.push(Diagnostic::error(
+                    *span,
+                    format!(
+                        "bool patterns cannot match a `{}` value",
                         value_type.name()
                     ),
                 ));
@@ -515,4 +558,31 @@ struct EnumPatternCoverage {
 struct VariantPatternCoverage {
     full: bool,
     payload: Option<Box<EnumPatternCoverage>>,
+}
+
+fn integer_pattern_literal_is_valid(value: &str, type_: BasicType) -> bool {
+    if number_literal_is_float(value) {
+        return false;
+    }
+    let Ok(value) = value.parse::<u128>() else {
+        return false;
+    };
+    integer_type_max(type_).is_some_and(|max| value <= max)
+}
+
+fn integer_type_max(type_: BasicType) -> Option<u128> {
+    match type_ {
+        BasicType::U8 => Some(u8::MAX as u128),
+        BasicType::U16 => Some(u16::MAX as u128),
+        BasicType::U32 => Some(u32::MAX as u128),
+        BasicType::U64 => Some(u64::MAX as u128),
+        BasicType::U128 => Some(u128::MAX),
+        BasicType::Usize => Some(u64::MAX as u128),
+        BasicType::I8 => Some(i8::MAX as u128),
+        BasicType::I16 => Some(i16::MAX as u128),
+        BasicType::I32 => Some(i32::MAX as u128),
+        BasicType::I64 => Some(i64::MAX as u128),
+        BasicType::I128 => Some(i128::MAX as u128),
+        _ => None,
+    }
 }

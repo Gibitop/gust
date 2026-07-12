@@ -136,8 +136,16 @@ Bounded range literals use Rust-shaped syntax. `start..end` creates an exclusive
 endpoints and requires the corresponding standard-library range types to be imported. Both range
 types implement `Iterable<i32>` through standard-library code, so `for value in 0..10` works when
 `std/range.gust` is part of the loaded module graph. Open-ended and full ranges are not implemented
-yet. Match patterns also accept `i32` exact numeric literals and bounded ranges, such as
-`0`, `1..5`, and `5..=8`; numeric matches require a wildcard branch for exhaustiveness.
+yet.
+
+## Literal match patterns
+
+Match literal patterns support `string`, `bool`, and integer primitives. String patterns compare by
+value equality. Integer literal and bounded range patterns use the matched integer type for
+validation and executable lowering, and integer matches still require a wildcard branch because
+coverage is treated conservatively. Bool matches are exhaustive when both `true` and `false` are
+covered. Floating-point match patterns are intentionally rejected rather than lowered as exact
+comparisons. Char patterns are deferred until the language settles char equality and diagnostics.
 
 ## Numeric literals
 

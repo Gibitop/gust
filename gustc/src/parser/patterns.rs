@@ -19,6 +19,22 @@ impl Parser {
             return Pattern::String { value, span: start };
         }
 
+        if self.current_keyword() == Some(Keyword::False) {
+            self.advance();
+            return Pattern::Bool {
+                value: false,
+                span: start,
+            };
+        }
+
+        if self.current_keyword() == Some(Keyword::True) {
+            self.advance();
+            return Pattern::Bool {
+                value: true,
+                span: start,
+            };
+        }
+
         if let TokenKind::Number(value) = self.current().kind.clone() {
             self.advance();
             let inclusive = if self.match_kind(&TokenKind::DotDotEqual) {

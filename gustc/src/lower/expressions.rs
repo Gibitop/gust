@@ -1438,16 +1438,10 @@ fn lower_expr(
                 None,
                 "expected supported match value in executable builds",
             )?;
-            if !matches!(
-                value.type_,
-                LoweredType::Enum(_)
-                    | LoweredType::Struct(_)
-                    | LoweredType::Basic(BasicType::String)
-                    | LoweredType::Basic(BasicType::I32)
-            ) {
+            if !match_value_type_is_supported(&value.type_) {
                 diagnostics.push(Diagnostic::error(
                     expr.span,
-                    "match expressions require an enum, struct, `string`, or `i32` value in executable builds",
+                    "match expressions require an enum, struct, `string`, `bool`, or integer value in executable builds",
                 ));
                 return None;
             }

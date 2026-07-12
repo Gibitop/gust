@@ -844,6 +844,124 @@ fn main() {}"#,
 }
 
 #[test]
+fn integer_and_bool_literal_patterns_validate() {
+    let result = check_source(
+        r#"fn codeLabel(code: u16): string {
+    return match code {
+        200 => "ok",
+        400..=499 => "client error",
+        _ => "other",
+    }
+}
+
+fn wideLabel(value: u128): string {
+    return match value {
+        340282366920938463463374607431768211455 => "max",
+        _ => "other",
+    }
+}
+
+fn flagLabel(flag: bool): string {
+    return match flag {
+        true => "true",
+        false => "false",
+    }
+}
+
+fn main() {}"#,
+    );
+
+    assert!(
+        !result.has_errors(),
+        "expected integer and bool patterns to validate, got {:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
+fn integer_patterns_require_wildcards_and_in_range_literals() {
+    let missing_wildcard = check_source(
+        r#"fn label(value: u8): string {
+    return match value {
+        1 => "one",
+    }
+}
+
+fn main() {}"#,
+    );
+
+    assert!(
+        missing_wildcard.diagnostics.iter().any(|diagnostic| diagnostic
+            .message
+            .contains("non-exhaustive match for `u8`; add a wildcard branch")),
+        "expected integer exhaustiveness diagnostic, got {:?}",
+        missing_wildcard.diagnostics
+    );
+
+    let out_of_range = check_source(
+        r#"fn label(value: u8): string {
+    return match value {
+        256 => "too large",
+        _ => "other",
+    }
+}
+
+fn main() {}"#,
+    );
+
+    assert!(
+        out_of_range.diagnostics.iter().any(|diagnostic| diagnostic
+            .message
+            .contains("numeric match patterns for `u8` require integer literals in range")),
+        "expected range diagnostic, got {:?}",
+        out_of_range.diagnostics
+    );
+}
+
+#[test]
+fn bool_patterns_are_exhaustive_only_when_both_values_are_covered() {
+    let result = check_source(
+        r#"fn label(value: bool): string {
+    return match value {
+        true => "yes",
+    }
+}
+
+fn main() {}"#,
+    );
+
+    assert!(
+        result.diagnostics.iter().any(|diagnostic| diagnostic
+            .message
+            .contains("non-exhaustive match for `bool`; cover `true` and `false` or add a wildcard branch")),
+        "expected bool exhaustiveness diagnostic, got {:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
+fn float_match_patterns_are_rejected() {
+    let result = check_source(
+        r#"fn label(value: f64): string {
+    return match value {
+        1.0 => "one",
+        _ => "other",
+    }
+}
+
+fn main() {}"#,
+    );
+
+    assert!(
+        result.diagnostics.iter().any(|diagnostic| diagnostic
+            .message
+            .contains("numeric match patterns do not support floating-point match values")),
+        "expected float pattern diagnostic, got {:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
 fn block_match_branches_and_shared_string_rebinding_validate() {
     let result = check_source(
         r#"enum Being {

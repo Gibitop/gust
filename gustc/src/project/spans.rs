@@ -264,6 +264,7 @@ fn shift_pattern(pattern: &mut Pattern, offset: usize) {
         }
         Pattern::Binding { span, .. }
         | Pattern::String { span, .. }
+        | Pattern::Bool { span, .. }
         | Pattern::Number { span, .. }
         | Pattern::Range { span, .. }
         | Pattern::Wildcard { span } => shift_span(span, offset),
