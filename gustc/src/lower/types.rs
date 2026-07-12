@@ -169,6 +169,14 @@ fn infer_expr_type(
             op: UnaryOp::Negate,
             operand,
         } => infer_expr_type(operand, locals, signatures, structs, enums, traits),
+        ExprKind::Cast { type_ref, .. } => lower_value_type_ref(
+            type_ref,
+            structs,
+            enums,
+            traits,
+            &mut Vec::new(),
+            "unsupported cast target type in executable builds",
+        ),
         ExprKind::Binary {
             left,
             op:
@@ -497,4 +505,3 @@ fn lower_type_expression(
         None
     }
 }
-

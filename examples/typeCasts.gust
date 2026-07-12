@@ -1,0 +1,15 @@
+fn main() {
+    let byte = 300 as u8
+    let signed = byte as i32
+    let decimal = signed as f64
+    let saturated = 999.9 as u8
+    let nan = (0.0 / 0.0) as i32
+    let letter = 65 as char
+    let codePoint = letter as u32
+
+    io.println(byte.toString())
+    io.println(decimal.toString())
+    io.println(saturated.toString())
+    io.println(nan.toString())
+    io.println(codePoint.toString())
+}

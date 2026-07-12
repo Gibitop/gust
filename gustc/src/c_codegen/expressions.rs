@@ -110,6 +110,25 @@ fn push_c_value(source: &mut String, value: &LoweredExpr, structs: &[LoweredStru
             push_c_value(source, operand, structs);
             source.push(')');
         }
+        LoweredExprKind::Cast { value, type_ } => {
+            if let (
+                LoweredType::Basic(source_type @ (BasicType::F32 | BasicType::F64)),
+                LoweredType::Basic(target_type),
+            ) = (&value.type_, type_)
+                && target_type.is_integer()
+            {
+                push_c_float_to_int_cast_name(source, *source_type, *target_type);
+                source.push('(');
+                push_c_value(source, value, structs);
+                source.push(')');
+            } else {
+                source.push_str("((");
+                push_c_type(source, type_);
+                source.push(')');
+                push_c_value(source, value, structs);
+                source.push(')');
+            }
+        }
         LoweredExprKind::Arithmetic { left, op, right } => {
             if *op == BinaryOp::Remainder
                 && matches!(

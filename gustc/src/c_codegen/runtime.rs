@@ -300,6 +300,115 @@ fn push_c_raw_buffer_clone_element(source: &mut String, type_: &LoweredType) {
     }
 }
 
+fn push_c_float_to_int_cast_name(source: &mut String, source_type: BasicType, target_type: BasicType) {
+    source.push_str("gust_rt_");
+    source.push_str(source_type.name());
+    source.push_str("_to_");
+    source.push_str(target_type.name());
+}
+
+fn push_c_float_to_int_cast_helper(
+    source: &mut String,
+    source_type: BasicType,
+    target_type: BasicType,
+) {
+    source.push_str("static ");
+    source.push_str(c_basic_type(target_type));
+    source.push(' ');
+    push_c_float_to_int_cast_name(source, source_type, target_type);
+    source.push('(');
+    source.push_str(c_basic_type(source_type));
+    source.push_str(" value) {\n");
+    source.push_str("    if (value != value) {\n");
+    source.push_str("        return 0;\n");
+    source.push_str("    }\n");
+    source.push_str("    long double widened = (long double)value;\n");
+    source.push_str("    if (widened <= ");
+    push_c_float_to_int_min_bound(source, target_type);
+    source.push_str(") {\n");
+    source.push_str("        return ");
+    push_c_integer_min_value(source, target_type);
+    source.push_str(";\n");
+    source.push_str("    }\n");
+    source.push_str("    if (widened >= ");
+    push_c_float_to_int_max_bound(source, target_type);
+    source.push_str(") {\n");
+    source.push_str("        return ");
+    push_c_integer_max_value(source, target_type);
+    source.push_str(";\n");
+    source.push_str("    }\n");
+    source.push_str("    return (");
+    source.push_str(c_basic_type(target_type));
+    source.push_str(")value;\n");
+    source.push_str("}\n\n");
+}
+
+fn push_c_float_to_int_min_bound(source: &mut String, type_: BasicType) {
+    if is_unsigned_integer_type(type_) {
+        source.push_str("0.0L");
+    } else {
+        source.push_str("(long double)(");
+        push_c_integer_min_value(source, type_);
+        source.push(')');
+    }
+}
+
+fn push_c_float_to_int_max_bound(source: &mut String, type_: BasicType) {
+    source.push_str("(long double)(");
+    push_c_integer_max_value(source, type_);
+    source.push(')');
+}
+
+fn push_c_integer_min_value(source: &mut String, type_: BasicType) {
+    match type_ {
+        BasicType::U8
+        | BasicType::U16
+        | BasicType::U32
+        | BasicType::U64
+        | BasicType::U128
+        | BasicType::Usize => source.push('0'),
+        BasicType::I8 => source.push_str("INT8_MIN"),
+        BasicType::I16 => source.push_str("INT16_MIN"),
+        BasicType::I32 => source.push_str("INT32_MIN"),
+        BasicType::I64 => source.push_str("INT64_MIN"),
+        BasicType::I128 => source.push_str("(-((__int128)(((unsigned __int128)-1) >> 1)) - 1)"),
+        BasicType::String | BasicType::Char | BasicType::Bool | BasicType::F32 | BasicType::F64 => {
+            unreachable!("only integer cast targets have integer bounds")
+        }
+    }
+}
+
+fn push_c_integer_max_value(source: &mut String, type_: BasicType) {
+    match type_ {
+        BasicType::U8 => source.push_str("UINT8_MAX"),
+        BasicType::U16 => source.push_str("UINT16_MAX"),
+        BasicType::U32 => source.push_str("UINT32_MAX"),
+        BasicType::U64 => source.push_str("UINT64_MAX"),
+        BasicType::U128 => source.push_str("((unsigned __int128)-1)"),
+        BasicType::Usize => source.push_str("((size_t)-1)"),
+        BasicType::I8 => source.push_str("INT8_MAX"),
+        BasicType::I16 => source.push_str("INT16_MAX"),
+        BasicType::I32 => source.push_str("INT32_MAX"),
+        BasicType::I64 => source.push_str("INT64_MAX"),
+        BasicType::I128 => source.push_str("((__int128)(((unsigned __int128)-1) >> 1))"),
+        BasicType::String | BasicType::Char | BasicType::Bool | BasicType::F32 | BasicType::F64 => {
+            unreachable!("only integer cast targets have integer bounds")
+        }
+    }
+}
+
+fn is_unsigned_integer_type(type_: BasicType) -> bool {
+    matches!(
+        type_,
+        BasicType::U8
+            | BasicType::U16
+            | BasicType::U32
+            | BasicType::U64
+            | BasicType::U128
+            | BasicType::Usize
+    )
+}
+
 fn push_c_number_to_string_helper(source: &mut String, type_: BasicType) {
     if type_ == BasicType::U128 {
         source
@@ -383,4 +492,3 @@ fn push_c_number_to_string_helper(source: &mut String, type_: BasicType) {
     );
     source.push_str("}\n\n");
 }
-

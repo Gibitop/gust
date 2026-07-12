@@ -34,7 +34,7 @@ impl Parser {
     }
 
     fn parse_binary_expression(&mut self, min_precedence: u8) -> Expr {
-        let mut left = self.parse_unary_expression();
+        let mut left = self.parse_cast_expression();
 
         while let Some((op, precedence)) = self.current_binary_op() {
             if precedence < min_precedence {
@@ -55,6 +55,26 @@ impl Parser {
         }
 
         left
+    }
+
+    fn parse_cast_expression(&mut self) -> Expr {
+        let mut expr = self.parse_unary_expression();
+
+        while self.match_keyword(Keyword::As) {
+            let type_ref = self
+                .parse_type()
+                .unwrap_or_else(|| self.missing_type(self.current().span));
+            let span = expr.span.join(type_ref.span);
+            expr = Expr {
+                kind: ExprKind::Cast {
+                    value: Box::new(expr),
+                    type_ref,
+                },
+                span,
+            };
+        }
+
+        expr
     }
 
     fn parse_unary_expression(&mut self) -> Expr {

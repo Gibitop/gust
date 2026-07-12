@@ -286,6 +286,7 @@ impl Analyzer {
             | ExprKind::Bool(_)
             | ExprKind::Range { .. }
             | ExprKind::Binary { .. }
+            | ExprKind::Cast { .. }
             | ExprKind::Unary { .. } => true,
             ExprKind::Array(_)
             | ExprKind::CollectionLiteral { .. }

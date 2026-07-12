@@ -72,6 +72,87 @@ fn main() {
 }
 
 #[test]
+fn numeric_as_casts_validate() {
+    let result = check_source(
+        r#"
+fn main() {
+    let integer = 42 as u8
+    let wider = integer as i64
+    let decimal = wider as f64
+    let narrowed = decimal as i32
+    let codePoint = 'A' as u32
+    let letter = 65 as char
+    let typedByte: u8 = 214
+    let typedLetter = typedByte as char
+}
+"#,
+    );
+
+    assert!(
+        !result.has_errors(),
+        "expected numeric casts to validate, got {:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
+fn as_casts_reject_unsupported_types() {
+    let result = check_source(
+        r#"
+fn main() {
+    let text = "42" as i32
+    let invalid = 42 as string
+    let intValue: i32 = 65
+    let invalidChar = intValue as char
+    let invalidFloatChar = 65.0 as char
+    let invalidCharFloat = 'A' as f64
+}
+"#,
+    );
+
+    assert!(
+        result
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.message.contains("got `string` as `i32`")),
+        "expected nonnumeric source cast error, got {:?}",
+        result.diagnostics
+    );
+    assert!(
+        result
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.message.contains("got `i32` as `string`")),
+        "expected nonnumeric target cast error, got {:?}",
+        result.diagnostics
+    );
+    assert!(
+        result
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.message.contains("got `i32` as `char`")),
+        "expected non-u8 char target cast error, got {:?}",
+        result.diagnostics
+    );
+    assert!(
+        result
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.message.contains("got `f64` as `char`")),
+        "expected float-to-char cast error, got {:?}",
+        result.diagnostics
+    );
+    assert!(
+        result
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.message.contains("got `char` as `f64`")),
+        "expected char-to-float cast error, got {:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
 fn bool_literals_validate_as_bool() {
     let result = check_source(
         r#"
@@ -315,4 +396,3 @@ fn main() {}
         result.diagnostics
     );
 }
-

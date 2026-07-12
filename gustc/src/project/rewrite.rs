@@ -320,6 +320,10 @@ impl<'names, 'diagnostics> ModuleRewriter<'names, 'diagnostics> {
             ExprKind::Unary { operand, .. } | ExprKind::PostfixIncrement(operand) => {
                 self.rewrite_expr(operand);
             }
+            ExprKind::Cast { value, type_ref } => {
+                self.rewrite_type(type_ref);
+                self.rewrite_expr(value);
+            }
             ExprKind::Match { value, branches } => {
                 self.rewrite_expr(value);
                 for branch in branches {

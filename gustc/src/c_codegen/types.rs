@@ -216,6 +216,7 @@ fn collect_expr_function_types(expr: &LoweredExpr, types: &mut Vec<LoweredType>)
         LoweredExprKind::PostfixIncrement(operand)
         | LoweredExprKind::Not(operand)
         | LoweredExprKind::Negate(operand)
+        | LoweredExprKind::Cast { value: operand, .. }
         | LoweredExprKind::FieldAccess {
             object: operand, ..
         }

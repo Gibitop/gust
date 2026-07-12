@@ -10,6 +10,7 @@ fn expression_has_mutable_capability(expr: &Expr, locals: &HashMap<String, Lower
         | ExprKind::Bool(_)
         | ExprKind::Range { .. }
         | ExprKind::Binary { .. }
+        | ExprKind::Cast { .. }
         | ExprKind::Unary { .. } => true,
         ExprKind::Call { callee, .. } => {
             matches!(&callee.kind, ExprKind::Member { name, .. } if name == "clone")
@@ -82,6 +83,7 @@ fn lowered_expression_has_mutable_capability(
         | LoweredExprKind::Arithmetic { .. }
         | LoweredExprKind::Logical { .. }
         | LoweredExprKind::Comparison { .. }
+        | LoweredExprKind::Cast { .. }
         | LoweredExprKind::NumberToString(_)
         | LoweredExprKind::CollectionLiteral { .. }
         | LoweredExprKind::Closure { .. } => true,

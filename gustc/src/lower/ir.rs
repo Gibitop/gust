@@ -197,6 +197,10 @@ pub enum LoweredExprKind {
     StringConcat(Box<LoweredExpr>, Box<LoweredExpr>),
     Not(Box<LoweredExpr>),
     Negate(Box<LoweredExpr>),
+    Cast {
+        value: Box<LoweredExpr>,
+        type_: LoweredType,
+    },
     Arithmetic {
         left: Box<LoweredExpr>,
         op: BinaryOp,

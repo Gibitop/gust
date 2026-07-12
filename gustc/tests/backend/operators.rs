@@ -144,6 +144,50 @@ fn numeric_add_preserves_annotated_integer_type() {
 }
 
 #[test]
+fn numeric_as_casts_lower_and_emit_c_casts() {
+    let result = check_source(
+        r#"fn main() {
+    let value = 300 as u8
+    let widened = value as i64
+    let decimal = widened as f64
+    let saturated = 999.9 as u8
+    let nan = (0.0 / 0.0) as i32
+    let letter = 65 as char
+    let codePoint = letter as u32
+}"#,
+    );
+
+    assert!(
+        !result.has_errors(),
+        "expected no frontend errors, got {:?}",
+        result.diagnostics
+    );
+
+    let lowered = lower_program(&result.program).expect("numeric casts should lower");
+    let LoweredStatement::Local { value, .. } = &lowered.statements[0] else {
+        panic!("expected lowered local");
+    };
+    let LoweredExprKind::Cast { value: inner, type_ } = &value.kind else {
+        panic!("expected lowered cast");
+    };
+
+    assert_eq!(value.type_, basic(BasicType::U8));
+    assert_eq!(*type_, basic(BasicType::U8));
+    assert_eq!(inner.type_, basic(BasicType::I32));
+
+    let source = emit_c(&lowered);
+    assert!(source.contains("uint8_t gust_value = ((uint8_t)300);"));
+    assert!(source.contains("int64_t gust_widened = ((int64_t)gust_value);"));
+    assert!(source.contains("double gust_decimal = ((double)gust_widened);"));
+    assert!(source.contains("static uint8_t gust_rt_f64_to_u8(double value)"));
+    assert!(source.contains("static int32_t gust_rt_f64_to_i32(double value)"));
+    assert!(source.contains("uint8_t gust_saturated = gust_rt_f64_to_u8(999.9);"));
+    assert!(source.contains("int32_t gust_nan = gust_rt_f64_to_i32((0.0 / 0.0));"));
+    assert!(source.contains("uint32_t gust_letter = ((uint32_t)65);"));
+    assert!(source.contains("uint32_t gust_codePoint = ((uint32_t)gust_letter);"));
+}
+
+#[test]
 fn logical_operators_lower_and_emit_native_c() {
     let result = check_source(
         r#"fn main() {
@@ -199,4 +243,3 @@ fn main() {
     assert!(source.contains("(false && gust_fn_"));
     assert!(source.contains("(true || gust_fn_"));
 }
-

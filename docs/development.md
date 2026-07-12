@@ -160,6 +160,22 @@ equality follows IEEE semantics, including `NaN != NaN`.
 
 The executable backend maps `i128` and `u128` to the C compiler's 128-bit integer extension.
 
+## Numeric casts
+
+`value as Type` supports explicit casts between numeric primitive types, from `char` to integer
+types, and from `u8` to `char`. Unsuffixed integer literals may be contextually typed as `u8` for
+`as char`, matching Rust behaviour for expressions such as `65 as char`. Other nonnumeric source or
+target types are rejected.
+
+Numeric casts follow Rust semantics. Integer-to-integer casts preserve same-width bit patterns,
+truncate when narrowing, sign-extend signed values when widening, and zero-extend unsigned values
+when widening. Float-to-integer casts round toward zero, convert `NaN` to `0`, and saturate values
+outside the integer type's range to that type's minimum or maximum. Integer-to-float and
+float-to-float casts produce the closest representable value, rounding ties to even when needed;
+overflow produces infinity with the input sign. `char as integer` casts the Unicode scalar value's
+code point and then applies the numeric cast rules. `u8 as char` produces the corresponding code
+point.
+
 ## Numeric string conversion
 
 Every numeric primitive has a built-in `toString(): string` method. It is an intrinsic member,

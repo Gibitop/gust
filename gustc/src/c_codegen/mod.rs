@@ -11,10 +11,12 @@ pub fn emit_c(program: &LoweredProgram) -> String {
     let uses_string = program_uses_type(program, BasicType::String);
     let uses_string_equality = program_uses_string_equality(program);
     let number_to_string_types = number_to_string_types(program);
+    let float_to_int_casts = float_to_int_casts(program);
     let uses_bool = program_uses_type(program, BasicType::Bool)
         || uses_string_equality
         || number_to_string_types.contains(&BasicType::I128)
-        || program_uses_match_or(program);
+        || program_uses_match_or(program)
+        || !float_to_int_casts.is_empty();
     let uses_usize = uses_string
         || program_uses_type(program, BasicType::Usize)
         || program
@@ -119,6 +121,10 @@ pub fn emit_c(program: &LoweredProgram) -> String {
 
     for type_ in number_to_string_types {
         push_c_number_to_string_helper(&mut source, type_);
+    }
+
+    for (source_type, target_type) in float_to_int_casts {
+        push_c_float_to_int_cast_helper(&mut source, source_type, target_type);
     }
 
     if uses_string_equality {

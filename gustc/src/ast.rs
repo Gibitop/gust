@@ -280,6 +280,10 @@ pub enum ExprKind {
         op: BinaryOp,
         right: Box<Expr>,
     },
+    Cast {
+        value: Box<Expr>,
+        type_ref: TypeRef,
+    },
     Unary {
         op: UnaryOp,
         operand: Box<Expr>,

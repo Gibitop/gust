@@ -472,6 +472,10 @@ impl<'items> MethodReachability<'items> {
             ExprKind::Unary { operand, .. } | ExprKind::PostfixIncrement(operand) => {
                 self.visit_expr(operand, locals)
             }
+            ExprKind::Cast { value, type_ref } => {
+                self.visit_expr(value, locals);
+                Some(type_ref.name.clone())
+            }
             ExprKind::Match { value, branches } => {
                 self.visit_expr(value, locals);
                 let mut type_ = None;
