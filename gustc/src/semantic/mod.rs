@@ -28,4 +28,5 @@ include!("expressions.rs");
 include!("calls.rs");
 include!("operators.rs");
 include!("patterns.rs");
+include!("usefulness.rs");
 include!("scope.rs");

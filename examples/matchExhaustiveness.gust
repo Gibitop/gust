@@ -1,0 +1,48 @@
+fn main() {
+    io.println(shapeLabel(Shape.Circle(Point { x: true, y: false })))
+    io.println(shapeLabel(Shape.Circle(Point { x: false, y: true })))
+    io.println(shapeLabel(Shape.Box(Size { width: 2, height: 3 })))
+    io.println(shapeLabel(Shape.Empty))
+
+    let adult = Person { name: "Ada", age: 37 }
+    let child = Person { name: "Grace", age: 12 }
+    io.println(personLabel(adult))
+    io.println(personLabel(child))
+}
+
+enum Shape {
+    Circle(Point)
+    Box(Size)
+    Empty
+}
+
+struct Point {
+    x: bool
+    y: bool
+}
+
+struct Size {
+    width: i32
+    height: i32
+}
+
+struct Person {
+    name: string
+    age: i32
+}
+
+fn shapeLabel(shape: Shape): string {
+    return match shape {
+        Shape.Circle(Point { x: true, ... }) => "circle with x",
+        Shape.Circle(Point { x: false, ... }) => "circle without x",
+        Shape.Box(Size { width, ... }) => "box width " + width.toString(),
+        Shape.Empty => "empty",
+    }
+}
+
+fn personLabel(person: Person): string {
+    return match person {
+        Person { name, age } if age >= 18 => name + " is an adult",
+        Person { name, ... } => name + " is young",
+    }
+}

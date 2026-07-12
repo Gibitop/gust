@@ -228,8 +228,23 @@ has mutable capability. This keeps immutable enum views from creating mutable ac
 managed values while allowing mutable enum methods to mutate struct payloads through `match self`.
 
 Nested enum payload patterns are type-checked recursively. A nested variant must belong to the
-payload enum it is matching. Exhaustiveness for nested payload patterns may remain conservative,
-but executable matching must test nested tags and bind nested payloads correctly.
+payload enum it is matching. Executable matching tests nested tags and binds nested payloads
+correctly.
+
+## Match exhaustiveness and usefulness
+
+Match checking uses a usefulness-style algorithm (in the spirit of Maranget / Rust). Relative to
+the unguarded patterns already seen, each new pattern must match at least one previously uncovered
+value; otherwise the branch is unreachable. A match is exhaustive when a wildcard would not be
+useful against those patterns. Or-pattern alternatives are checked the same way, so a redundant
+alternative inside `|` can be reported even when the overall branch is still useful.
+
+Guarded branches are still checked for usefulness against prior unguarded coverage, but they are
+not added to the covered set, so a guard cannot make a match exhaustive by itself. Nested enum
+payloads, struct patterns (including `...`), bools, and or-patterns participate in coverage.
+Integer and string matches remain non-exhaustive without a wildcard or other covering binding,
+because those types are treated as infinite for coverage purposes. Non-exhaustive diagnostics
+include a representative missing pattern when one can be constructed.
 
 ## Or match patterns
 
@@ -264,9 +279,10 @@ Match branches may include an `if` guard after the pattern, such as
 the pattern matches, and it may use bindings introduced by that pattern. Non-boolean guards are
 rejected.
 
-Guarded branches do not count toward exhaustiveness, duplicate coverage, or covering-pattern
-detection, because the guard may fail at runtime. A later unguarded branch is still required for
-any value the guarded pattern alone would otherwise cover.
+Guarded branches do not count toward exhaustiveness: they are checked for usefulness against prior
+unguarded coverage, but they are not added to the covered set, because the guard may fail at
+runtime. A later unguarded branch is still required for any value the guarded pattern alone would
+otherwise cover.
 
 Executable lowering combines the pattern test and guard with `&&`, so a branch becomes
 `if (patternCondition && guard)`. A wildcard or otherwise unconditional pattern with a guard still

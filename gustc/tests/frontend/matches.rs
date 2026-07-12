@@ -1205,3 +1205,177 @@ fn main() {
         result.diagnostics
     );
 }
+
+#[test]
+fn nested_enum_exhaustiveness_reports_missing_inner_variant() {
+    let result = check_source(
+        r#"enum Option {
+    Some(Result)
+    None
+}
+
+enum Result {
+    Ok(string)
+    Err(string)
+}
+
+fn label(value: Option): string {
+    return match value {
+        Option.Some(Result.Ok(text)) => text,
+        Option.None => "none",
+    }
+}
+
+fn main() {}"#,
+    );
+
+    assert!(
+        result.diagnostics.iter().any(|diagnostic| {
+            diagnostic.severity == Severity::Error
+                && diagnostic.message.contains("non-exhaustive match for enum `Option`")
+                && diagnostic.message.contains("Some(Result.Err(_))")
+        }),
+        "expected nested missing pattern diagnostic, got {:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
+fn nested_enum_partial_payload_is_not_duplicate_of_sibling_variant() {
+    let result = check_source(
+        r#"enum Option {
+    Some(Result)
+    None
+}
+
+enum Result {
+    Ok(string)
+    Err(string)
+}
+
+fn label(value: Option): string {
+    return match value {
+        Option.Some(Result.Ok(text)) => text,
+        Option.Some(Result.Err(error)) => error,
+        Option.None => "none",
+    }
+}
+
+fn main() {}"#,
+    );
+
+    assert!(
+        !result.has_errors(),
+        "expected complementary nested payload arms to be exhaustive, got {:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
+fn struct_patterns_with_rest_participate_in_exhaustiveness() {
+    let covered = check_source(
+        r#"struct Person {
+    name: string
+    age: i32
+}
+
+fn label(person: Person): string {
+    return match person {
+        Person { name, ... } => name,
+    }
+}
+
+fn main() {}"#,
+    );
+
+    assert!(
+        !covered.has_errors(),
+        "expected covering struct rest pattern to be exhaustive, got {:?}",
+        covered.diagnostics
+    );
+
+    let missing = check_source(
+        r#"struct Flag {
+    on: bool
+}
+
+fn label(flag: Flag): string {
+    return match flag {
+        Flag { on: true } => "on",
+    }
+}
+
+fn main() {}"#,
+    );
+
+    assert!(
+        missing.diagnostics.iter().any(|diagnostic| {
+            diagnostic.severity == Severity::Error
+                && diagnostic.message.contains("non-exhaustive match for struct `Flag`")
+                && diagnostic.message.contains("on: false")
+        }),
+        "expected missing struct field pattern diagnostic, got {:?}",
+        missing.diagnostics
+    );
+}
+
+#[test]
+fn guarded_struct_patterns_do_not_make_match_exhaustive() {
+    let result = check_source(
+        r#"struct Person {
+    name: string
+    age: i32
+}
+
+fn label(person: Person): string {
+    return match person {
+        Person { name, age } if age >= 18 => name,
+    }
+}
+
+fn main() {}"#,
+    );
+
+    assert!(
+        result.diagnostics.iter().any(|diagnostic| {
+            diagnostic.severity == Severity::Error
+                && diagnostic
+                    .message
+                    .contains("non-exhaustive match for struct `Person`")
+        }),
+        "expected guarded struct arm not to exhaust the match, got {:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
+fn unreachable_or_pattern_alternative_is_reported() {
+    let result = check_source(
+        r#"enum Status {
+    Ready
+    Waiting
+    Done
+}
+
+fn label(status: Status): string {
+    return match status {
+        Status.Ready => "ready",
+        Status.Ready | Status.Waiting => "active",
+        Status.Done => "done",
+    }
+}
+
+fn main() {}"#,
+    );
+
+    assert!(
+        result.diagnostics.iter().any(|diagnostic| {
+            diagnostic.severity == Severity::Error
+                && diagnostic
+                    .message
+                    .contains("unreachable or-pattern alternative `Ready`")
+        }),
+        "expected unreachable or-alternative diagnostic, got {:?}",
+        result.diagnostics
+    );
+}
