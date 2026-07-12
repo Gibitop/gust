@@ -217,6 +217,37 @@ impl Analyzer {
             ExprKind::Binary { left, op, right } => {
                 self.validate_comparison(expr.span, left, *op, right)
             }
+            ExprKind::Cast { value, type_ref } => {
+                let target_type = self.type_ref_without_diagnostics(Some(type_ref));
+                let source_context = cast_source_context(value, &target_type);
+                let value_type = self.validate_expr_with_context(value, source_context);
+
+                if matches!(target_type, Type::Unknown) {
+                    self.diagnostics.push(Diagnostic::error(
+                        type_ref.span,
+                        format!("unknown cast target type `{}`", type_ref.name),
+                    ));
+                    return Type::Unknown;
+                }
+
+                if matches!(value_type, Type::Unknown) {
+                    return Type::Unknown;
+                }
+
+                if cast_is_supported(&value_type, &target_type) {
+                    target_type
+                } else {
+                    self.diagnostics.push(Diagnostic::error(
+                        expr.span,
+                        format!(
+                            "`as` casts only support numeric primitive casts, `char` to integer casts, and `u8` to `char`, got `{}` as `{}`",
+                            value_type.name(),
+                            target_type.name()
+                        ),
+                    ));
+                    Type::Unknown
+                }
+            }
             ExprKind::Match { value, branches } => {
                 let value_type = self.validate_expr(value);
                 let value_mutable = self.expr_has_mutable_capability(value);
@@ -623,4 +654,25 @@ impl Analyzer {
         }
     }
 
+}
+
+fn cast_source_context(value: &Expr, target_type: &Type) -> Option<Type> {
+    if matches!(target_type, Type::Basic(BasicType::Char))
+        && matches!(&value.kind, ExprKind::Number(value) if !number_literal_is_float(value))
+    {
+        Some(Type::Basic(BasicType::U8))
+    } else {
+        None
+    }
+}
+
+fn cast_is_supported(source_type: &Type, target_type: &Type) -> bool {
+    match (source_type, target_type) {
+        (Type::Basic(source), Type::Basic(target)) => {
+            (source.is_numeric() && target.is_numeric())
+                || (*source == BasicType::Char && target.is_integer())
+                || (*source == BasicType::U8 && *target == BasicType::Char)
+        }
+        _ => false,
+    }
 }

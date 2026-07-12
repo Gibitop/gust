@@ -790,6 +790,10 @@ impl Monomorphizer {
             ExprKind::Unary { operand, .. } | ExprKind::PostfixIncrement(operand) => {
                 self.rewrite_expr(operand, substitutions);
             }
+            ExprKind::Cast { value, type_ref } => {
+                self.rewrite_type(type_ref, substitutions);
+                self.rewrite_expr(value, substitutions);
+            }
             ExprKind::Match { value, branches } => {
                 self.rewrite_expr(value, substitutions);
                 let mut value_type = self.infer_expr_type(value);

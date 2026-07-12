@@ -403,6 +403,54 @@ fn lower_expr(
                 kind: LoweredExprKind::Negate(Box::new(operand)),
             }
         }
+        ExprKind::Cast { value, type_ref } => {
+            let target_type = lower_value_type_ref(
+                type_ref,
+                structs,
+                enums,
+                traits,
+                diagnostics,
+                "unsupported cast target type in executable builds",
+            )?;
+            let source_context = if target_type == LoweredType::Basic(BasicType::Char)
+                && matches!(&value.kind, ExprKind::Number(value) if !number_literal_is_float(value))
+            {
+                Some(LoweredType::Basic(BasicType::U8))
+            } else {
+                None
+            };
+            let value = lower_expr(
+                value,
+                locals,
+                signatures,
+                structs,
+                enums,
+                traits,
+                diagnostics,
+                source_context,
+                "expected supported cast source in executable builds",
+            )?;
+
+            if !lowered_cast_is_supported(&value.type_, &target_type) {
+                diagnostics.push(Diagnostic::error(
+                    expr.span,
+                    format!(
+                        "`as` casts only support numeric primitive casts, `char` to integer casts, and `u8` to `char` in executable builds, got `{}` as `{}`",
+                        value.type_.name(),
+                        target_type.name()
+                    ),
+                ));
+                return None;
+            }
+
+            LoweredExpr {
+                type_: target_type.clone(),
+                kind: LoweredExprKind::Cast {
+                    value: Box::new(value),
+                    type_: target_type,
+                },
+            }
+        }
         ExprKind::Binary {
             left,
             op: op @ (BinaryOp::LogicalAnd | BinaryOp::LogicalOr),
@@ -2041,4 +2089,15 @@ fn infer_lambda_function_type(
         params,
         return_type: Box::new(return_type),
     })
+}
+
+fn lowered_cast_is_supported(source_type: &LoweredType, target_type: &LoweredType) -> bool {
+    match (source_type, target_type) {
+        (LoweredType::Basic(source), LoweredType::Basic(target)) => {
+            (source.is_numeric() && target.is_numeric())
+                || (*source == BasicType::Char && target.is_integer())
+                || (*source == BasicType::U8 && *target == BasicType::Char)
+        }
+        _ => false,
+    }
 }

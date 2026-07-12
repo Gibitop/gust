@@ -103,6 +103,7 @@ fn collect_expr_captures(expr: &Expr, available: &HashSet<String>, captured: &mu
         | ExprKind::Unary {
             operand: object, ..
         }
+        | ExprKind::Cast { value: object, .. }
         | ExprKind::PostfixIncrement(object) => collect_expr_captures(object, available, captured),
         ExprKind::Binary { left, right, .. } => {
             collect_expr_captures(left, available, captured);
@@ -295,6 +296,7 @@ fn collect_lambda_expr_captures(
         | ExprKind::Unary {
             operand: object, ..
         }
+        | ExprKind::Cast { value: object, .. }
         | ExprKind::PostfixIncrement(object) => {
             collect_lambda_expr_captures(object, available, lambda_locals, captured)
         }

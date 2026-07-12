@@ -235,6 +235,7 @@ impl Monomorphizer {
             ExprKind::Unary { operand, .. } | ExprKind::PostfixIncrement(operand) => {
                 self.infer_expr_type(operand)
             }
+            ExprKind::Cast { type_ref, .. } => Some(self.expanded_type(type_ref)),
             ExprKind::Binary { left, right, .. } => {
                 let left = self.infer_expr_type(left)?;
                 let right = self.infer_expr_type(right)?;

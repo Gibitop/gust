@@ -226,6 +226,10 @@ fn shift_expr(expr: &mut Expr, offset: usize) {
         ExprKind::Unary { operand, .. } | ExprKind::PostfixIncrement(operand) => {
             shift_expr(operand, offset);
         }
+        ExprKind::Cast { value, type_ref } => {
+            shift_expr(value, offset);
+            shift_type(type_ref, offset);
+        }
         ExprKind::Match { value, branches } => {
             shift_expr(value, offset);
             for branch in branches {

@@ -115,7 +115,8 @@ fn expr_uses_type(expr: &LoweredExpr, type_: BasicType) -> bool {
             }
             LoweredExprKind::PostfixIncrement(operand)
             | LoweredExprKind::Not(operand)
-            | LoweredExprKind::Negate(operand) => expr_uses_type(operand, type_),
+            | LoweredExprKind::Negate(operand)
+            | LoweredExprKind::Cast { value: operand, .. } => expr_uses_type(operand, type_),
             LoweredExprKind::Logical { left, right, .. }
             | LoweredExprKind::Arithmetic { left, right, .. }
             | LoweredExprKind::Comparison { left, right, .. } => {
@@ -199,6 +200,211 @@ fn number_to_string_types(program: &LoweredProgram) -> Vec<BasicType> {
     .collect()
 }
 
+fn float_to_int_casts(program: &LoweredProgram) -> Vec<(BasicType, BasicType)> {
+    let mut casts = HashSet::new();
+    for function in &program.functions {
+        for statement in &function.statements {
+            collect_statement_float_to_int_casts(statement, &mut casts);
+        }
+        collect_expr_float_to_int_casts(&function.return_value, &mut casts);
+    }
+    for function in &program.closure_functions {
+        for statement in &function.statements {
+            collect_statement_float_to_int_casts(statement, &mut casts);
+        }
+        collect_expr_float_to_int_casts(&function.return_value, &mut casts);
+    }
+    for statement in &program.statements {
+        collect_statement_float_to_int_casts(statement, &mut casts);
+    }
+    let mut casts = casts.into_iter().collect::<Vec<_>>();
+    casts.sort_by_key(|(source, target)| (source.name(), target.name()));
+    casts
+}
+
+fn collect_statement_float_to_int_casts(
+    statement: &LoweredStatement,
+    casts: &mut HashSet<(BasicType, BasicType)>,
+) {
+    match statement {
+        LoweredStatement::Local { value, .. }
+        | LoweredStatement::LocalCell { value, .. }
+        | LoweredStatement::Println(value)
+        | LoweredStatement::Expr(value) => collect_expr_float_to_int_casts(value, casts),
+        LoweredStatement::Assignment { target, value } => {
+            collect_expr_float_to_int_casts(target, casts);
+            collect_expr_float_to_int_casts(value, casts);
+        }
+        LoweredStatement::Return(value) => {
+            if let Some(value) = value {
+                collect_expr_float_to_int_casts(value, casts);
+            }
+        }
+        LoweredStatement::If {
+            condition,
+            then_branch,
+            else_branch,
+        } => {
+            collect_expr_float_to_int_casts(condition, casts);
+            for statement in then_branch {
+                collect_statement_float_to_int_casts(statement, casts);
+            }
+            if let Some(else_branch) = else_branch {
+                for statement in else_branch {
+                    collect_statement_float_to_int_casts(statement, casts);
+                }
+            }
+        }
+        LoweredStatement::While { condition, body } => {
+            collect_expr_float_to_int_casts(condition, casts);
+            for statement in body {
+                collect_statement_float_to_int_casts(statement, casts);
+            }
+        }
+        LoweredStatement::Match {
+            value, decision, ..
+        } => {
+            collect_expr_float_to_int_casts(value, casts);
+            collect_decision_float_to_int_casts(decision, casts);
+        }
+        LoweredStatement::Break | LoweredStatement::Continue => {}
+    }
+}
+
+fn collect_expr_float_to_int_casts(
+    expr: &LoweredExpr,
+    casts: &mut HashSet<(BasicType, BasicType)>,
+) {
+    match &expr.kind {
+        LoweredExprKind::Cast { value, type_ } => {
+            if let (
+                LoweredType::Basic(source @ (BasicType::F32 | BasicType::F64)),
+                LoweredType::Basic(target),
+            ) = (&value.type_, type_)
+                && target.is_integer()
+            {
+                casts.insert((*source, *target));
+            }
+            collect_expr_float_to_int_casts(value, casts);
+        }
+        LoweredExprKind::StringConcat(left, right)
+        | LoweredExprKind::Logical { left, right, .. }
+        | LoweredExprKind::Arithmetic { left, right, .. }
+        | LoweredExprKind::Comparison { left, right, .. } => {
+            collect_expr_float_to_int_casts(left, casts);
+            collect_expr_float_to_int_casts(right, casts);
+        }
+        LoweredExprKind::PostfixIncrement(operand)
+        | LoweredExprKind::Not(operand)
+        | LoweredExprKind::Negate(operand)
+        | LoweredExprKind::FieldAccess {
+            object: operand, ..
+        }
+        | LoweredExprKind::TraitObject { value: operand, .. }
+        | LoweredExprKind::Clone(operand)
+        | LoweredExprKind::NumberToString(operand) => {
+            collect_expr_float_to_int_casts(operand, casts);
+        }
+        LoweredExprKind::StructLiteral { fields, .. } => {
+            for field in fields {
+                collect_expr_float_to_int_casts(&field.value, casts);
+            }
+        }
+        LoweredExprKind::EnumLiteral { payload, .. } => {
+            if let Some(payload) = payload {
+                collect_expr_float_to_int_casts(payload, casts);
+            }
+        }
+        LoweredExprKind::Match {
+            value, decision, ..
+        } => {
+            collect_expr_float_to_int_casts(value, casts);
+            collect_decision_float_to_int_casts(decision, casts);
+        }
+        LoweredExprKind::Call { args, .. } => {
+            for arg in args {
+                collect_expr_float_to_int_casts(arg, casts);
+            }
+        }
+        LoweredExprKind::CollectionLiteral { items, .. } => {
+            for item in items {
+                collect_expr_float_to_int_casts(item, casts);
+            }
+        }
+        LoweredExprKind::IndirectCall { callee, args } => {
+            collect_expr_float_to_int_casts(callee, casts);
+            for arg in args {
+                collect_expr_float_to_int_casts(arg, casts);
+            }
+        }
+        LoweredExprKind::DynamicCall { object, args, .. } => {
+            collect_expr_float_to_int_casts(object, casts);
+            for arg in args {
+                collect_expr_float_to_int_casts(arg, casts);
+            }
+        }
+        LoweredExprKind::Void
+        | LoweredExprKind::StringLiteral(_)
+        | LoweredExprKind::BoolLiteral(_)
+        | LoweredExprKind::NumberLiteral(_)
+        | LoweredExprKind::Local(_)
+        | LoweredExprKind::LocalCell(_)
+        | LoweredExprKind::CapturedLocal { .. }
+        | LoweredExprKind::Closure { .. } => {}
+    }
+}
+
+fn collect_decision_float_to_int_casts(
+    decision: &LoweredMatchDecision,
+    casts: &mut HashSet<(BasicType, BasicType)>,
+) {
+    match decision {
+        LoweredMatchDecision::Arms { arms } => {
+            for arm in arms {
+                collect_decision_float_to_int_casts(arm, casts);
+            }
+        }
+        LoweredMatchDecision::Test {
+            test,
+            then,
+            else_,
+            ..
+        } => {
+            if let LoweredMatchTest::Guard(guard) = test {
+                collect_expr_float_to_int_casts(guard, casts);
+            }
+            collect_decision_float_to_int_casts(then, casts);
+            collect_decision_float_to_int_casts(else_, casts);
+        }
+        LoweredMatchDecision::Bind { then, .. } => {
+            collect_decision_float_to_int_casts(then, casts);
+        }
+        LoweredMatchDecision::Or {
+            alternatives,
+            then,
+            else_,
+            ..
+        } => {
+            for alternative in alternatives {
+                collect_decision_float_to_int_casts(alternative, casts);
+            }
+            collect_decision_float_to_int_casts(then, casts);
+            collect_decision_float_to_int_casts(else_, casts);
+        }
+        LoweredMatchDecision::Body { statements, value } => {
+            for statement in statements {
+                collect_statement_float_to_int_casts(statement, casts);
+            }
+            if let Some(value) = value {
+                collect_expr_float_to_int_casts(value, casts);
+            }
+        }
+        LoweredMatchDecision::Matched
+        | LoweredMatchDecision::Fail
+        | LoweredMatchDecision::End => {}
+    }
+}
+
 fn program_uses_number_to_string(program: &LoweredProgram, type_: BasicType) -> bool {
     program.functions.iter().any(|function| {
         function
@@ -279,6 +485,7 @@ fn expr_uses_number_to_string(expr: &LoweredExpr, type_: BasicType) -> bool {
         LoweredExprKind::PostfixIncrement(operand)
         | LoweredExprKind::Not(operand)
         | LoweredExprKind::Negate(operand)
+        | LoweredExprKind::Cast { value: operand, .. }
         | LoweredExprKind::FieldAccess {
             object: operand, ..
         }
@@ -396,7 +603,8 @@ fn expr_uses_string_equality(expr: &LoweredExpr) -> bool {
     match &expr.kind {
         LoweredExprKind::PostfixIncrement(operand)
         | LoweredExprKind::Not(operand)
-        | LoweredExprKind::Negate(operand) => expr_uses_string_equality(operand),
+        | LoweredExprKind::Negate(operand)
+        | LoweredExprKind::Cast { value: operand, .. } => expr_uses_string_equality(operand),
         LoweredExprKind::Logical { left, right, .. }
         | LoweredExprKind::Arithmetic { left, right, .. } => {
             expr_uses_string_equality(left) || expr_uses_string_equality(right)
@@ -499,7 +707,8 @@ fn expr_uses_string_concat(expr: &LoweredExpr) -> bool {
         LoweredExprKind::StringConcat(_, _) => true,
         LoweredExprKind::PostfixIncrement(operand)
         | LoweredExprKind::Not(operand)
-        | LoweredExprKind::Negate(operand) => expr_uses_string_concat(operand),
+        | LoweredExprKind::Negate(operand)
+        | LoweredExprKind::Cast { value: operand, .. } => expr_uses_string_concat(operand),
         LoweredExprKind::Logical { left, right, .. }
         | LoweredExprKind::Arithmetic { left, right, .. }
         | LoweredExprKind::Comparison { left, right, .. } => {
@@ -626,6 +835,7 @@ fn expr_uses_enum_trait_object(expr: &LoweredExpr) -> bool {
         LoweredExprKind::PostfixIncrement(operand)
         | LoweredExprKind::Not(operand)
         | LoweredExprKind::Negate(operand)
+        | LoweredExprKind::Cast { value: operand, .. }
         | LoweredExprKind::FieldAccess {
             object: operand, ..
         }
@@ -723,6 +933,7 @@ fn expr_uses_println(expr: &LoweredExpr) -> bool {
         LoweredExprKind::PostfixIncrement(operand)
         | LoweredExprKind::Not(operand)
         | LoweredExprKind::Negate(operand)
+        | LoweredExprKind::Cast { value: operand, .. }
         | LoweredExprKind::FieldAccess {
             object: operand, ..
         }
@@ -860,7 +1071,8 @@ fn expr_calls_name(expr: &LoweredExpr, name: &str) -> bool {
         }
         LoweredExprKind::PostfixIncrement(operand)
         | LoweredExprKind::Not(operand)
-        | LoweredExprKind::Negate(operand) => expr_calls_name(operand, name),
+        | LoweredExprKind::Negate(operand)
+        | LoweredExprKind::Cast { value: operand, .. } => expr_calls_name(operand, name),
         LoweredExprKind::Logical { left, right, .. }
         | LoweredExprKind::Arithmetic { left, right, .. }
         | LoweredExprKind::Comparison { left, right, .. } => {
