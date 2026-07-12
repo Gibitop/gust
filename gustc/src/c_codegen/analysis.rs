@@ -129,6 +129,15 @@ fn expr_uses_type(expr: &LoweredExpr, type_: BasicType) -> bool {
                 .as_ref()
                 .is_some_and(|payload| expr_uses_type(payload, type_)),
             LoweredExprKind::EnumPayload { object, .. } => expr_uses_type(object, type_),
+            LoweredExprKind::MatchPatternBinding {
+                matched_value,
+                alternatives,
+            } => {
+                expr_uses_type(matched_value, type_)
+                    || alternatives
+                        .iter()
+                        .any(|alternative| expr_uses_type(&alternative.value, type_))
+            }
             LoweredExprKind::Match {
                 value, branches, ..
             } => {
@@ -299,6 +308,15 @@ fn expr_uses_number_to_string(expr: &LoweredExpr, type_: BasicType) -> bool {
         LoweredExprKind::EnumLiteral { payload, .. } => payload
             .as_ref()
             .is_some_and(|payload| expr_uses_number_to_string(payload, type_)),
+        LoweredExprKind::MatchPatternBinding {
+            matched_value,
+            alternatives,
+        } => {
+            expr_uses_number_to_string(matched_value, type_)
+                || alternatives
+                    .iter()
+                    .any(|alternative| expr_uses_number_to_string(&alternative.value, type_))
+        }
         LoweredExprKind::Match {
             value, branches, ..
         } => {
@@ -401,7 +419,7 @@ fn statement_uses_string_equality(statement: &LoweredStatement) -> bool {
         } => {
             expr_uses_string_equality(value)
                 || branches.iter().any(|branch| {
-                    matches!(branch.pattern, LoweredPattern::String(_))
+                    lowered_pattern_uses_string_equality(&branch.pattern)
                         || branch.statements.iter().any(statement_uses_string_equality)
                 })
         }
@@ -433,12 +451,22 @@ fn expr_uses_string_equality(expr: &LoweredExpr) -> bool {
             .as_ref()
             .is_some_and(|payload| expr_uses_string_equality(payload)),
         LoweredExprKind::EnumPayload { object, .. } => expr_uses_string_equality(object),
+        LoweredExprKind::MatchPatternBinding {
+            matched_value,
+            alternatives,
+        } => {
+            expr_uses_string_equality(matched_value)
+                || alternatives.iter().any(|alternative| {
+                    lowered_pattern_uses_string_equality(&alternative.pattern)
+                        || expr_uses_string_equality(&alternative.value)
+                })
+        }
         LoweredExprKind::Match {
             value, branches, ..
         } => {
             expr_uses_string_equality(value)
                 || branches.iter().any(|branch| {
-                    matches!(branch.pattern, LoweredPattern::String(_))
+                    lowered_pattern_uses_string_equality(&branch.pattern)
                         || branch.statements.iter().any(statement_uses_string_equality)
                         || expr_uses_string_equality(&branch.value)
                 })
@@ -466,6 +494,25 @@ fn expr_uses_string_equality(expr: &LoweredExpr) -> bool {
         | LoweredExprKind::CapturedLocal { .. }
         | LoweredExprKind::Closure { .. }
         | LoweredExprKind::MatchValue(_) => false,
+    }
+}
+
+fn lowered_pattern_uses_string_equality(pattern: &LoweredPattern) -> bool {
+    match pattern {
+        LoweredPattern::Or(alternatives) => alternatives
+            .iter()
+            .any(lowered_pattern_uses_string_equality),
+        LoweredPattern::Variant { payload, .. } => payload
+            .as_ref()
+            .is_some_and(|payload| lowered_pattern_uses_string_equality(payload)),
+        LoweredPattern::Struct { fields, .. } => fields
+            .iter()
+            .any(|field| lowered_pattern_uses_string_equality(&field.pattern)),
+        LoweredPattern::String(_) => true,
+        LoweredPattern::Bool(_)
+        | LoweredPattern::Number { .. }
+        | LoweredPattern::Range { .. }
+        | LoweredPattern::Wildcard => false,
     }
 }
 
@@ -533,6 +580,15 @@ fn expr_uses_string_concat(expr: &LoweredExpr) -> bool {
             .as_ref()
             .is_some_and(|payload| expr_uses_string_concat(payload)),
         LoweredExprKind::EnumPayload { object, .. } => expr_uses_string_concat(object),
+        LoweredExprKind::MatchPatternBinding {
+            matched_value,
+            alternatives,
+        } => {
+            expr_uses_string_concat(matched_value)
+                || alternatives
+                    .iter()
+                    .any(|alternative| expr_uses_string_concat(&alternative.value))
+        }
         LoweredExprKind::Match {
             value, branches, ..
         } => {
@@ -669,6 +725,15 @@ fn expr_uses_enum_trait_object(expr: &LoweredExpr) -> bool {
         LoweredExprKind::EnumLiteral { payload, .. } => payload
             .as_ref()
             .is_some_and(|payload| expr_uses_enum_trait_object(payload)),
+        LoweredExprKind::MatchPatternBinding {
+            matched_value,
+            alternatives,
+        } => {
+            expr_uses_enum_trait_object(matched_value)
+                || alternatives
+                    .iter()
+                    .any(|alternative| expr_uses_enum_trait_object(&alternative.value))
+        }
         LoweredExprKind::Match {
             value, branches, ..
         } => {
@@ -765,6 +830,15 @@ fn expr_uses_println(expr: &LoweredExpr) -> bool {
         LoweredExprKind::EnumLiteral { payload, .. } => payload
             .as_ref()
             .is_some_and(|payload| expr_uses_println(payload)),
+        LoweredExprKind::MatchPatternBinding {
+            matched_value,
+            alternatives,
+        } => {
+            expr_uses_println(matched_value)
+                || alternatives
+                    .iter()
+                    .any(|alternative| expr_uses_println(&alternative.value))
+        }
         LoweredExprKind::Match {
             value, branches, ..
         } => {
@@ -904,6 +978,15 @@ fn expr_calls_name(expr: &LoweredExpr, name: &str) -> bool {
             .as_ref()
             .is_some_and(|payload| expr_calls_name(payload, name)),
         LoweredExprKind::EnumPayload { object, .. } => expr_calls_name(object, name),
+        LoweredExprKind::MatchPatternBinding {
+            matched_value,
+            alternatives,
+        } => {
+            expr_calls_name(matched_value, name)
+                || alternatives
+                    .iter()
+                    .any(|alternative| expr_calls_name(&alternative.value, name))
+        }
         LoweredExprKind::Match {
             value, branches, ..
         } => {

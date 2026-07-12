@@ -79,6 +79,47 @@ fn main() {
 }
 
 #[test]
+fn or_patterns_emit_or_conditions_and_bind_matching_payloads() {
+    let result = check_source(
+        r#"enum Option {
+    Some(Result)
+    None
+}
+
+enum Result {
+    Ok(string)
+    Err(string)
+}
+
+fn label(value: Option): string {
+    return match value {
+        Option.Some(Result.Ok(text)) | Option.Some(Result.Err(text)) => text,
+        Option.None => "none",
+    }
+}
+
+fn main() {
+    io.println(label(Option.Some(Result.Ok("ready"))))
+    io.println(label(Option.Some(Result.Err("waiting"))))
+}"#,
+    );
+
+    assert!(
+        !result.has_errors(),
+        "expected no frontend errors, got {:?}",
+        result.diagnostics
+    );
+
+    let lowered = lower_program(&result.program).expect("or-patterns should lower");
+    let source = emit_c(&lowered);
+
+    assert!(source.contains(" || "));
+    assert!(source.contains(" ? "));
+    assert!(source.contains(".gust_payload.gust_Some.gust_payload.gust_Ok"));
+    assert!(source.contains(".gust_payload.gust_Some.gust_payload.gust_Err"));
+}
+
+#[test]
 fn struct_patterns_lower_to_field_access_replacements() {
     let result = check_source(
         r#"struct Person {

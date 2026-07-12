@@ -239,6 +239,15 @@ fn collect_expr_function_types(expr: &LoweredExpr, types: &mut Vec<LoweredType>)
                 collect_expr_function_types(payload, types);
             }
         }
+        LoweredExprKind::MatchPatternBinding {
+            matched_value,
+            alternatives,
+        } => {
+            collect_expr_function_types(matched_value, types);
+            for alternative in alternatives {
+                collect_expr_function_types(&alternative.value, types);
+            }
+        }
         LoweredExprKind::Match {
             value, branches, ..
         } => {
@@ -329,4 +338,3 @@ fn c_basic_type(type_: BasicType) -> &'static str {
         BasicType::F64 => "double",
     }
 }
-

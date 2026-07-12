@@ -223,6 +223,7 @@ impl Analyzer {
                 let mut seen = HashSet::new();
                 let mut enum_coverage = EnumPatternCoverage::default();
                 let mut has_wildcard = false;
+                let mut covering_pattern_seen = false;
                 let mut struct_covered = false;
                 let mut bool_true_covered = false;
                 let mut bool_false_covered = false;
@@ -234,7 +235,7 @@ impl Analyzer {
                             branch.pattern.span(),
                             "match branches after a wildcard are unreachable",
                         ));
-                    } else if struct_covered {
+                    } else if covering_pattern_seen || struct_covered {
                         self.diagnostics.push(Diagnostic::error(
                             branch.pattern.span(),
                             "match branches after a covering pattern are unreachable",
@@ -242,16 +243,95 @@ impl Analyzer {
                     }
                     self.push_scope();
                     match (&value_type, &branch.pattern) {
-                        (Type::Enum(_), Pattern::Variant { .. }) => {
-                            if let Some(variant_name) = self.validate_pattern(
+                        (_, Pattern::Or { .. }) => {
+                            self.validate_pattern(
                                 &branch.pattern,
                                 &value_type,
                                 value_mutable,
                                 None,
-                            ) {
-                                let fully_covers_variant = self
-                                    .pattern_fully_covers_variant_payload(&branch.pattern, &value_type);
-                                if fully_covers_variant && !seen.insert(variant_name.clone()) {
+                            );
+                            match &value_type {
+                                Type::Enum(_) => {
+                                    for variant_name in self
+                                        .pattern_fully_covered_variants(&branch.pattern, &value_type)
+                                    {
+                                        if !seen.insert(variant_name.clone()) {
+                                            self.diagnostics.push(Diagnostic::error(
+                                                branch.pattern.span(),
+                                                format!(
+                                                    "duplicate match branch for variant `{variant_name}`"
+                                                ),
+                                            ));
+                                        }
+                                    }
+                                    self.add_pattern_coverage(
+                                        &mut enum_coverage,
+                                        &branch.pattern,
+                                        &value_type,
+                                    );
+                                    if self.pattern_fully_covers_type(&branch.pattern, &value_type) {
+                                        covering_pattern_seen = true;
+                                    }
+                                }
+                                Type::Struct(_) => {
+                                    if self.pattern_fully_covers_type(&branch.pattern, &value_type) {
+                                        struct_covered = true;
+                                    }
+                                }
+                                Type::Basic(BasicType::String) => {
+                                    for (value, span) in self.pattern_string_values(&branch.pattern) {
+                                        if !seen.insert(value.clone()) {
+                                            self.diagnostics.push(Diagnostic::error(
+                                                span,
+                                                format!(
+                                                    "duplicate match branch for string `{value}`"
+                                                ),
+                                            ));
+                                        }
+                                    }
+                                    if self.pattern_fully_covers_type(&branch.pattern, &value_type) {
+                                        has_wildcard = true;
+                                    }
+                                }
+                                Type::Basic(BasicType::Bool) => {
+                                    for (value, span) in self.pattern_bool_values(&branch.pattern) {
+                                        let already_covered = if value {
+                                            std::mem::replace(&mut bool_true_covered, true)
+                                        } else {
+                                            std::mem::replace(&mut bool_false_covered, true)
+                                        };
+                                        if already_covered {
+                                            self.diagnostics.push(Diagnostic::error(
+                                                span,
+                                                format!(
+                                                    "duplicate match branch for bool `{value}`"
+                                                ),
+                                            ));
+                                        }
+                                    }
+                                    if self.pattern_fully_covers_type(&branch.pattern, &value_type) {
+                                        covering_pattern_seen = true;
+                                    }
+                                }
+                                Type::Basic(type_) if type_.is_integer() => {
+                                    if self.pattern_fully_covers_type(&branch.pattern, &value_type) {
+                                        has_wildcard = true;
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+                        (Type::Enum(_), Pattern::Variant { .. }) => {
+                            self.validate_pattern(
+                                &branch.pattern,
+                                &value_type,
+                                value_mutable,
+                                None,
+                            );
+                            for variant_name in self
+                                .pattern_fully_covered_variants(&branch.pattern, &value_type)
+                            {
+                                if !seen.insert(variant_name.clone()) {
                                     self.diagnostics.push(Diagnostic::error(
                                         branch.pattern.span(),
                                         format!("duplicate match branch for variant `{variant_name}`"),
@@ -263,6 +343,9 @@ impl Analyzer {
                                 &branch.pattern,
                                 &value_type,
                             );
+                            if self.pattern_fully_covers_type(&branch.pattern, &value_type) {
+                                covering_pattern_seen = true;
+                            }
                         }
                         (Type::Struct(_), Pattern::Struct { .. }) => {
                             self.validate_pattern(

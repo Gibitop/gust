@@ -213,6 +213,27 @@ fn push_c_value(source: &mut String, value: &LoweredExpr, structs: &[LoweredStru
             source.push_str(".gust_payload.");
             push_c_local_name(source, variant);
         }
+        LoweredExprKind::MatchPatternBinding {
+            matched_value,
+            alternatives,
+        } => {
+            source.push('(');
+            for (index, alternative) in alternatives.iter().enumerate() {
+                if index + 1 == alternatives.len() {
+                    push_c_value(source, &alternative.value, structs);
+                } else {
+                    push_c_match_condition_for_value(
+                        source,
+                        matched_value,
+                        &alternative.pattern,
+                    );
+                    source.push_str(" ? ");
+                    push_c_value(source, &alternative.value, structs);
+                    source.push_str(" : ");
+                }
+            }
+            source.push(')');
+        }
         LoweredExprKind::MatchValue(name) => source.push_str(name),
         LoweredExprKind::Match {
             value: matched_value,
@@ -240,7 +261,7 @@ fn push_c_value(source: &mut String, value: &LoweredExpr, structs: &[LoweredStru
                         source.push_str("else ");
                     }
                     source.push_str("if (");
-                    push_c_match_condition(source, temp_name, &branch.pattern);
+                    push_c_match_condition(source, temp_name, &matched_value.type_, &branch.pattern);
                     source.push_str(") {\n");
                 } else {
                     if index > 0 {

@@ -8,6 +8,22 @@ impl Analyzer {
     ) -> Option<String> {
         match (pattern, value_type) {
             (
+                Pattern::Or {
+                    alternatives,
+                    span,
+                },
+                _,
+            ) => {
+                self.validate_or_pattern(
+                    alternatives,
+                    *span,
+                    value_type,
+                    value_mutable,
+                    payload_origin,
+                );
+                None
+            }
+            (
                 Pattern::Variant {
                     enum_name: pattern_enum_name,
                     variant,
@@ -341,9 +357,124 @@ impl Analyzer {
         }
     }
 
+    fn validate_or_pattern(
+        &mut self,
+        alternatives: &[Pattern],
+        span: Span,
+        value_type: &Type,
+        value_mutable: bool,
+        payload_origin: Option<(&str, &str)>,
+    ) {
+        if alternatives.is_empty() {
+            return;
+        }
+
+        let mut alternative_bindings = Vec::new();
+        for alternative in alternatives {
+            self.push_scope();
+            self.validate_pattern(alternative, value_type, value_mutable, payload_origin);
+            alternative_bindings.push(self.scopes.pop().unwrap_or_default());
+        }
+
+        let first_bindings = alternative_bindings
+            .first()
+            .expect("or-pattern should have a first alternative");
+        let mut expected_names = first_bindings.keys().cloned().collect::<Vec<_>>();
+        expected_names.sort();
+
+        for bindings in alternative_bindings.iter().skip(1) {
+            let mut names = bindings.keys().cloned().collect::<Vec<_>>();
+            names.sort();
+
+            for name in expected_names.iter().filter(|name| !bindings.contains_key(*name)) {
+                self.diagnostics.push(Diagnostic::error(
+                    span,
+                    format!(
+                        "or-pattern alternatives must bind the same names; binding `{name}` is missing from an alternative"
+                    ),
+                ));
+            }
+
+            for name in names.iter().filter(|name| !first_bindings.contains_key(*name)) {
+                self.diagnostics.push(Diagnostic::error(
+                    span,
+                    format!(
+                        "or-pattern alternatives must bind the same names; binding `{name}` is not present in the first alternative"
+                    ),
+                ));
+            }
+        }
+
+        for name in &expected_names {
+            let Some(expected) = first_bindings.get(name) else {
+                continue;
+            };
+            for bindings in alternative_bindings.iter().skip(1) {
+                let Some(binding) = bindings.get(name) else {
+                    continue;
+                };
+
+                if expected.mutable != binding.mutable {
+                    self.diagnostics.push(Diagnostic::error(
+                        span,
+                        format!(
+                            "or-pattern binding `{name}` must use the same mutability in every alternative"
+                        ),
+                    ));
+                }
+
+                if !self.types_are_compatible(&expected.type_, &binding.type_)
+                    || !self.types_are_compatible(&binding.type_, &expected.type_)
+                {
+                    self.diagnostics.push(Diagnostic::error(
+                        span,
+                        format!(
+                            "or-pattern binding `{name}` has incompatible types: expected `{}`, got `{}`",
+                            expected.type_.name(),
+                            binding.type_.name()
+                        ),
+                    ));
+                }
+            }
+        }
+
+        if let Some(scope) = self.scopes.last_mut() {
+            for name in expected_names {
+                if let Some(binding) = first_bindings.get(&name) {
+                    scope.insert(name, binding.clone());
+                }
+            }
+        }
+    }
+
     fn pattern_fully_covers_type(&self, pattern: &Pattern, value_type: &Type) -> bool {
         match (pattern, value_type) {
             (Pattern::Wildcard { .. } | Pattern::Binding { .. }, _) => true,
+            (Pattern::Or { alternatives, .. }, Type::Enum(enum_name)) => {
+                let mut coverage = EnumPatternCoverage::default();
+                for alternative in alternatives {
+                    self.add_pattern_coverage(&mut coverage, alternative, value_type);
+                }
+                self.enum_coverage_is_exhaustive(&coverage, enum_name)
+            }
+            (Pattern::Or { alternatives, .. }, Type::Basic(BasicType::Bool)) => {
+                let mut true_covered = false;
+                let mut false_covered = false;
+                for alternative in alternatives {
+                    match alternative {
+                        Pattern::Bool { value: true, .. } => true_covered = true,
+                        Pattern::Bool { value: false, .. } => false_covered = true,
+                        _ if self.pattern_fully_covers_type(alternative, value_type) => {
+                            return true;
+                        }
+                        _ => {}
+                    }
+                }
+                true_covered && false_covered
+            }
+            (Pattern::Or { alternatives, .. }, _) => alternatives
+                .iter()
+                .any(|alternative| self.pattern_fully_covers_type(alternative, value_type)),
             (
                 Pattern::Struct {
                     name,
@@ -417,6 +548,49 @@ impl Analyzer {
         }
     }
 
+    fn pattern_fully_covered_variants(
+        &self,
+        pattern: &Pattern,
+        value_type: &Type,
+    ) -> Vec<String> {
+        match pattern {
+            Pattern::Or { alternatives, .. } => alternatives
+                .iter()
+                .flat_map(|alternative| {
+                    self.pattern_fully_covered_variants(alternative, value_type)
+                })
+                .collect(),
+            Pattern::Variant { variant, .. }
+                if self.pattern_fully_covers_variant_payload(pattern, value_type) =>
+            {
+                vec![variant.clone()]
+            }
+            _ => Vec::new(),
+        }
+    }
+
+    fn pattern_string_values(&self, pattern: &Pattern) -> Vec<(String, Span)> {
+        match pattern {
+            Pattern::Or { alternatives, .. } => alternatives
+                .iter()
+                .flat_map(|alternative| self.pattern_string_values(alternative))
+                .collect(),
+            Pattern::String { value, span } => vec![(value.clone(), *span)],
+            _ => Vec::new(),
+        }
+    }
+
+    fn pattern_bool_values(&self, pattern: &Pattern) -> Vec<(bool, Span)> {
+        match pattern {
+            Pattern::Or { alternatives, .. } => alternatives
+                .iter()
+                .flat_map(|alternative| self.pattern_bool_values(alternative))
+                .collect(),
+            Pattern::Bool { value, span } => vec![(*value, *span)],
+            _ => Vec::new(),
+        }
+    }
+
     fn add_pattern_coverage(
         &self,
         coverage: &mut EnumPatternCoverage,
@@ -424,6 +598,11 @@ impl Analyzer {
         value_type: &Type,
     ) {
         match (pattern, value_type) {
+            (Pattern::Or { alternatives, .. }, _) => {
+                for alternative in alternatives {
+                    self.add_pattern_coverage(coverage, alternative, value_type);
+                }
+            }
             (Pattern::Wildcard { .. } | Pattern::Binding { .. }, Type::Enum(_)) => {
                 coverage.wildcard = true;
             }

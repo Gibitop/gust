@@ -4,6 +4,31 @@ impl Parser {
     }
 
     fn parse_pattern_with_bindings(&mut self, allow_binding: bool) -> Pattern {
+        let first = self.parse_single_pattern_with_bindings(allow_binding);
+        let mut alternatives = vec![first];
+
+        while self.match_kind(&TokenKind::Pipe) {
+            alternatives.push(self.parse_single_pattern_with_bindings(allow_binding));
+        }
+
+        if alternatives.len() == 1 {
+            alternatives.pop().expect("single alternative should exist")
+        } else {
+            let span = alternatives
+                .first()
+                .expect("or-pattern should have a first alternative")
+                .span()
+                .join(
+                    alternatives
+                        .last()
+                        .expect("or-pattern should have a last alternative")
+                        .span(),
+                );
+            Pattern::Or { alternatives, span }
+        }
+    }
+
+    fn parse_single_pattern_with_bindings(&mut self, allow_binding: bool) -> Pattern {
         let start = self.current().span;
         if allow_binding && self.match_keyword(Keyword::Mut) {
             let name = self.expect_identifier("expected pattern binding");

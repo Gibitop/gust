@@ -131,7 +131,7 @@ fn push_c_statement(
                         source.push_str("else ");
                     }
                     source.push_str("if (");
-                    push_c_match_condition(source, temp_name, &branch.pattern);
+                    push_c_match_condition(source, temp_name, &value.type_, &branch.pattern);
                     source.push_str(") {\n");
                 } else {
                     if index > 0 {
@@ -154,8 +154,41 @@ fn push_c_statement(
     }
 }
 
-fn push_c_match_condition(source: &mut String, temp_name: &str, pattern: &LoweredPattern) {
+fn push_c_match_condition(
+    source: &mut String,
+    temp_name: &str,
+    value_type: &LoweredType,
+    pattern: &LoweredPattern,
+) {
+    let matched_value = LoweredExpr {
+        type_: value_type.clone(),
+        kind: LoweredExprKind::MatchValue(temp_name.to_string()),
+    };
+    push_c_match_condition_for_value(source, &matched_value, pattern);
+}
+
+fn push_c_match_condition_for_value(
+    source: &mut String,
+    matched_value: &LoweredExpr,
+    pattern: &LoweredPattern,
+) {
+    let mut value = String::new();
+    push_c_value(&mut value, matched_value, &[]);
+    push_c_match_condition_for_name(source, &value, pattern);
+}
+
+fn push_c_match_condition_for_name(source: &mut String, temp_name: &str, pattern: &LoweredPattern) {
     match pattern {
+        LoweredPattern::Or(alternatives) => {
+            source.push('(');
+            for (index, alternative) in alternatives.iter().enumerate() {
+                if index > 0 {
+                    source.push_str(" || ");
+                }
+                push_c_match_condition_for_name(source, temp_name, alternative);
+            }
+            source.push(')');
+        }
         LoweredPattern::Variant {
             enum_name,
             variant,
@@ -170,7 +203,7 @@ fn push_c_match_condition(source: &mut String, temp_name: &str, pattern: &Lowere
                 let mut payload_name = temp_name.to_string();
                 payload_name.push_str(".gust_payload.");
                 push_c_local_name(&mut payload_name, variant);
-                push_c_match_condition(source, &payload_name, payload);
+                push_c_match_condition_for_name(source, &payload_name, payload);
             }
             source.push(')');
         }
@@ -186,7 +219,7 @@ fn push_c_match_condition(source: &mut String, temp_name: &str, pattern: &Lowere
                     let mut field_name = temp_name.to_string();
                     field_name.push_str("->");
                     push_c_local_name(&mut field_name, &field.name);
-                    push_c_match_condition(source, &field_name, &field.pattern);
+                    push_c_match_condition_for_name(source, &field_name, &field.pattern);
                 }
                 source.push(')');
             }
@@ -239,6 +272,9 @@ fn push_c_match_condition(source: &mut String, temp_name: &str, pattern: &Lowere
 fn lowered_pattern_is_unconditional(pattern: &LoweredPattern) -> bool {
     match pattern {
         LoweredPattern::Wildcard => true,
+        LoweredPattern::Or(alternatives) => alternatives
+            .iter()
+            .any(lowered_pattern_is_unconditional),
         LoweredPattern::Struct { fields, .. } => fields
             .iter()
             .all(|field| lowered_pattern_is_unconditional(&field.pattern)),

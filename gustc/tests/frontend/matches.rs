@@ -246,6 +246,120 @@ fn main() {}"#,
 }
 
 #[test]
+fn enum_or_patterns_validate_and_count_for_exhaustiveness() {
+    let result = check_source(
+        r#"enum Status {
+    Ready
+    Waiting
+    Done
+}
+
+fn label(status: Status): string {
+    return match status {
+        Status.Ready | Status.Waiting => "active",
+        Status.Done => "done",
+    }
+}
+
+fn main() {}"#,
+    );
+
+    assert!(
+        !result.has_errors(),
+        "expected enum or-patterns to validate, got {:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
+fn or_pattern_bindings_must_match_across_alternatives() {
+    let result = check_source(
+        r#"enum Result {
+    Ok(string)
+    Err(string)
+}
+
+fn label(result: Result): string {
+    return match result {
+        Result.Ok(text) | Result.Err(error) => text,
+    }
+}
+
+fn main() {}"#,
+    );
+
+    assert!(
+        result.diagnostics.iter().any(|diagnostic| {
+            diagnostic.severity == Severity::Error
+                && diagnostic
+                    .message
+                    .contains("or-pattern alternatives must bind the same names")
+        }),
+        "expected or-pattern binding diagnostic, got {:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
+fn duplicate_and_unreachable_checks_understand_or_patterns() {
+    let duplicate = check_source(
+        r#"enum Status {
+    Ready
+    Waiting
+    Done
+}
+
+fn label(status: Status): string {
+    return match status {
+        Status.Ready | Status.Waiting => "active",
+        Status.Ready => "ready",
+        Status.Done => "done",
+    }
+}
+
+fn main() {}"#,
+    );
+
+    assert!(
+        duplicate.diagnostics.iter().any(|diagnostic| {
+            diagnostic.severity == Severity::Error
+                && diagnostic
+                    .message
+                    .contains("duplicate match branch for variant `Ready`")
+        }),
+        "expected duplicate variant diagnostic, got {:?}",
+        duplicate.diagnostics
+    );
+
+    let unreachable = check_source(
+        r#"enum Status {
+    Ready
+    Waiting
+}
+
+fn label(status: Status): string {
+    return match status {
+        Status.Ready | Status.Waiting => "active",
+        Status.Ready => "ready",
+    }
+}
+
+fn main() {}"#,
+    );
+
+    assert!(
+        unreachable.diagnostics.iter().any(|diagnostic| {
+            diagnostic.severity == Severity::Error
+                && diagnostic
+                    .message
+                    .contains("match branches after a covering pattern are unreachable")
+        }),
+        "expected unreachable branch diagnostic, got {:?}",
+        unreachable.diagnostics
+    );
+}
+
+#[test]
 fn enum_payloads_and_match_branches_are_type_checked() {
     let result = check_source(
         r#"enum Result {

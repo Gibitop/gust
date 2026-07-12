@@ -89,6 +89,7 @@ fn lowered_expression_has_mutable_capability(
         | LoweredExprKind::PostfixIncrement(_)
         | LoweredExprKind::EnumLiteral { .. }
         | LoweredExprKind::EnumPayload { .. }
+        | LoweredExprKind::MatchPatternBinding { .. }
         | LoweredExprKind::MatchValue(_)
         | LoweredExprKind::Match { .. } => false,
     }
@@ -143,6 +144,23 @@ fn lower_match_pattern_with_expr(
     matched_value: &LoweredExpr,
 ) -> Option<LoweredPattern> {
     match (pattern, value_type) {
+        (
+            Pattern::Or {
+                alternatives,
+                span,
+            },
+            _,
+        ) => lower_or_match_pattern(
+            alternatives,
+            *span,
+            value_type,
+            value_mutable,
+            locals,
+            enums,
+            structs,
+            diagnostics,
+            matched_value,
+        ),
         (
             Pattern::Variant {
                 enum_name,
@@ -413,6 +431,138 @@ fn lower_match_pattern_with_expr(
             None
         }
     }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn lower_or_match_pattern(
+    alternatives: &[Pattern],
+    span: Span,
+    value_type: &LoweredType,
+    value_mutable: bool,
+    locals: &mut HashMap<String, LoweringLocal>,
+    enums: &HashMap<String, LoweredEnum>,
+    structs: &HashMap<String, LoweredStruct>,
+    diagnostics: &mut Vec<Diagnostic>,
+    matched_value: &LoweredExpr,
+) -> Option<LoweredPattern> {
+    let mut lowered_alternatives = Vec::new();
+    let mut alternative_locals = Vec::new();
+
+    for alternative in alternatives {
+        let mut locals_for_alternative = locals.clone();
+        let lowered = lower_match_pattern_with_expr(
+            alternative,
+            value_type,
+            value_mutable,
+            &mut locals_for_alternative,
+            enums,
+            structs,
+            diagnostics,
+            matched_value,
+        )?;
+        lowered_alternatives.push(lowered);
+        alternative_locals.push(locals_for_alternative);
+    }
+
+    let mut binding_names = alternative_locals
+        .first()
+        .map(|bindings| changed_local_names(locals, bindings))
+        .unwrap_or_default();
+    binding_names.sort();
+
+    for bindings in alternative_locals.iter().skip(1) {
+        let mut names = changed_local_names(locals, bindings);
+        names.sort();
+        if names != binding_names {
+            diagnostics.push(Diagnostic::error(
+                span,
+                "or-pattern alternatives must bind the same names in executable builds",
+            ));
+            return None;
+        }
+    }
+
+    for name in binding_names {
+        let bindings = alternative_locals
+            .iter()
+            .filter_map(|locals| locals.get(&name))
+            .collect::<Vec<_>>();
+        let Some(first) = bindings.first().copied() else {
+            continue;
+        };
+        if bindings
+            .iter()
+            .any(|binding| binding.type_ != first.type_ || binding.mutable != first.mutable)
+        {
+            diagnostics.push(Diagnostic::error(
+                span,
+                format!("or-pattern binding `{name}` is inconsistent in executable builds"),
+            ));
+            return None;
+        }
+
+        let replacements = bindings
+            .iter()
+            .map(|binding| binding.replacement.clone())
+            .collect::<Vec<_>>();
+        let replacement = if replacements
+            .iter()
+            .all(|replacement| replacement == &replacements[0])
+        {
+            replacements[0].clone()
+        } else if replacements.iter().all(Option::is_some) {
+            if first.mutable {
+                diagnostics.push(Diagnostic::error(
+                    span,
+                    format!(
+                        "mutable or-pattern binding `{name}` is not supported in executable builds"
+                    ),
+                ));
+                return None;
+            }
+
+            Some(LoweredExpr {
+                type_: first.type_.clone(),
+                kind: LoweredExprKind::MatchPatternBinding {
+                    matched_value: Box::new(matched_value.clone()),
+                    alternatives: lowered_alternatives
+                        .iter()
+                        .cloned()
+                        .zip(replacements.into_iter().flatten())
+                        .map(|(pattern, value)| LoweredPatternBindingAlternative {
+                            pattern,
+                            value,
+                        })
+                        .collect(),
+                },
+            })
+        } else {
+            replacements[0].clone()
+        };
+
+        locals.insert(
+            name,
+            LoweringLocal {
+                type_: first.type_.clone(),
+                mutable: first.mutable,
+                replacement,
+                captured: first.captured,
+            },
+        );
+    }
+
+    Some(LoweredPattern::Or(lowered_alternatives))
+}
+
+fn changed_local_names(
+    base: &HashMap<String, LoweringLocal>,
+    locals: &HashMap<String, LoweringLocal>,
+) -> Vec<String> {
+    locals
+        .iter()
+        .filter(|(name, local)| base.get(*name) != Some(*local))
+        .map(|(name, _)| name.clone())
+        .collect()
 }
 
 fn mutable_member_root(expr: &Expr) -> Option<&str> {

@@ -1,0 +1,37 @@
+fn main() {
+    io.println(statusLabel(Status.Ready))
+    io.println(statusLabel(Status.Waiting))
+    io.println(valueLabel(Option.Some(Result.Ok("ready"))))
+    io.println(valueLabel(Option.Some(Result.Err("waiting"))))
+    io.println(valueLabel(Option.None))
+}
+
+enum Status {
+    Ready
+    Waiting
+    Done
+}
+
+fn statusLabel(status: Status): string {
+    return match status {
+        Status.Ready | Status.Waiting => "active",
+        Status.Done => "done",
+    }
+}
+
+enum Option {
+    Some(Result)
+    None
+}
+
+enum Result {
+    Ok(string)
+    Err(string)
+}
+
+fn valueLabel(value: Option): string {
+    return match value {
+        Option.Some(Result.Ok(text)) | Option.Some(Result.Err(text)) => text,
+        Option.None => "none",
+    }
+}

@@ -225,6 +225,10 @@ pub enum LoweredExprKind {
         object: Box<LoweredExpr>,
         variant: String,
     },
+    MatchPatternBinding {
+        matched_value: Box<LoweredExpr>,
+        alternatives: Vec<LoweredPatternBindingAlternative>,
+    },
     MatchValue(String),
     Match {
         value: Box<LoweredExpr>,
@@ -281,6 +285,7 @@ pub struct LoweredMatchStatementBranch {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LoweredPattern {
+    Or(Vec<LoweredPattern>),
     Variant {
         enum_name: String,
         variant: String,
@@ -303,6 +308,12 @@ pub enum LoweredPattern {
         type_: BasicType,
     },
     Wildcard,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LoweredPatternBindingAlternative {
+    pub pattern: LoweredPattern,
+    pub value: LoweredExpr,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
