@@ -5,6 +5,9 @@ fn void_expr() -> LoweredExpr {
     }
 }
 
+// Struct literal lowering needs local scope, callable signatures, known types, and diagnostics to
+// validate each field against executable-build type information in one pass.
+#[allow(clippy::too_many_arguments)]
 fn lower_struct_init(
     expr: &Expr,
     name: &str,
@@ -106,6 +109,9 @@ fn lower_struct_init(
     })
 }
 
+// Range literals are lowered through standard-library structs, so this helper needs the same
+// expression-lowering environment plus both endpoint expressions.
+#[allow(clippy::too_many_arguments)]
 fn lower_range_literal(
     expr: &Expr,
     start: &Expr,
@@ -196,6 +202,9 @@ fn lower_range_literal(
     })
 }
 
+// Expression lowering is the central executable-build dispatcher; keeping the shared tables,
+// diagnostics, expected type, and diagnostic message explicit keeps call sites readable.
+#[allow(clippy::too_many_arguments)]
 fn lower_expr(
     expr: &Expr,
     locals: &HashMap<String, LoweringLocal>,
@@ -1556,6 +1565,9 @@ fn lower_expr(
     Some(lowered)
 }
 
+// Collection literals lower through trait-provided constructor/add functions, so they need the
+// expression environment and collection metadata together.
+#[allow(clippy::too_many_arguments)]
 fn lower_collection_literal(
     span: Span,
     items: &[Expr],
@@ -1651,6 +1663,9 @@ fn lowered_type_implements_trait(
         .is_some_and(|trait_| trait_.impls.iter().any(|impl_| impl_.self_type == *type_))
 }
 
+// Lambda lowering bridges outer locals, inferred function type, body lowering, and closure state;
+// those inputs are intentionally explicit because captures depend on the caller's local scope.
+#[allow(clippy::too_many_arguments)]
 fn lower_lambda_expr(
     span: Span,
     function: &FunctionDecl,
@@ -1898,6 +1913,9 @@ fn lower_lambda_expr(
     })
 }
 
+// Inferring a lambda's function type needs the outer local scope and all shared type/function
+// tables, matching the later lambda body lowering path.
+#[allow(clippy::too_many_arguments)]
 fn infer_lambda_function_type(
     span: Span,
     function: &FunctionDecl,
@@ -2003,4 +2021,3 @@ fn infer_lambda_function_type(
         return_type: Box::new(return_type),
     })
 }
-

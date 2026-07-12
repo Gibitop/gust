@@ -278,7 +278,7 @@ impl Parser {
                     statements: vec![statement],
                 })
             } else {
-                MatchBranchBody::Expr(self.parse_expression())
+                MatchBranchBody::Expr(Box::new(self.parse_expression()))
             };
             let span = pattern.span().join(body.span());
             branches.push(MatchBranch {

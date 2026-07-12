@@ -1,3 +1,6 @@
+// Loop lowering threads the same locals, signatures, type tables, diagnostics, and return context
+// as statement lowering, so keeping these arguments explicit matches the surrounding lowering API.
+#[allow(clippy::too_many_arguments)]
 fn lower_while_statement(
     statement: &Stmt,
     locals: &HashMap<String, LoweringLocal>,
@@ -115,6 +118,9 @@ fn coerce_to_iterator(
     })
 }
 
+// `for` lowering needs the full executable lowering environment to resolve iterator traits,
+// synthesize calls, and lower the loop body without hiding control-flow context in globals.
+#[allow(clippy::too_many_arguments)]
 fn lower_for_statement(
     statement: &Stmt,
     locals: &HashMap<String, LoweringLocal>,
@@ -385,4 +391,3 @@ fn lower_for_statement(
         },
     ]
 }
-

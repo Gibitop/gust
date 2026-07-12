@@ -386,9 +386,9 @@ fn push_c_trait_thunk_name(
         stable_name_hash(&format!("{trait_name} for {type_name}.{method_name}"))
     ));
     push_c_identifier_suffix(source, trait_name);
-    source.push_str("_");
+    source.push('_');
     push_c_identifier_suffix(source, type_name);
-    source.push_str("_");
+    source.push('_');
     push_c_identifier_suffix(source, method_name);
 }
 
@@ -413,4 +413,3 @@ fn push_c_function_type_name(source: &mut String, type_: &LoweredType) {
     source.push_str("gust_fn_type_");
     source.push_str(&format!("{:08x}", stable_name_hash(&type_name_key(type_))));
 }
-

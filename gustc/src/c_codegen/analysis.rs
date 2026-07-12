@@ -344,11 +344,11 @@ fn program_uses_string_concat(program: &LoweredProgram) -> bool {
     program
         .functions
         .iter()
-        .any(|function| function_uses_string_concat(function))
+        .any(function_uses_string_concat)
         || program
             .closure_functions
             .iter()
-            .any(|function| closure_function_uses_string_concat(function))
+            .any(closure_function_uses_string_concat)
         || program.statements.iter().any(statement_uses_string_concat)
 }
 
@@ -950,4 +950,3 @@ fn expr_calls_name(expr: &LoweredExpr, name: &str) -> bool {
         | LoweredExprKind::MatchValue(_) => false,
     }
 }
-

@@ -25,23 +25,20 @@ impl Monomorphizer {
                 receiver_type.span,
             );
         }
-        if !self.member_returns.contains_key(&key) {
-            if let Some((_, mut substitutions, function)) =
+        if !self.member_returns.contains_key(&key)
+            && let Some((_, mut substitutions, function)) =
                 self.method_template(&receiver_type, method_name, static_)
-            {
-                substitutions.extend(
-                    function
-                        .type_params
-                        .iter()
-                        .cloned()
-                        .zip(args.iter().cloned()),
-                );
-                if let Some(return_type) =
-                    self.method_return_type(&receiver_type, &function, static_)
-                {
-                    self.member_returns
-                        .insert(key, substitute_type(&return_type, &substitutions));
-                }
+        {
+            substitutions.extend(
+                function
+                    .type_params
+                    .iter()
+                    .cloned()
+                    .zip(args.iter().cloned()),
+            );
+            if let Some(return_type) = self.method_return_type(&receiver_type, &function, static_) {
+                self.member_returns
+                    .insert(key, substitute_type(&return_type, &substitutions));
             }
         }
         self.pending.push_back(PendingSpecialization::Method {

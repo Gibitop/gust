@@ -1,3 +1,6 @@
+// Statement lowering helpers carry the current local scope plus shared executable type/function
+// tables; splitting that state here would make this pipeline less direct than its call sites.
+#[allow(clippy::too_many_arguments)]
 fn lower_if_statement(
     statement: &Stmt,
     locals: &HashMap<String, LoweringLocal>,
@@ -74,6 +77,9 @@ fn lower_if_statement(
     })
 }
 
+// Conditional blocks need mutable local scope, shared lowering tables, diagnostics, and the
+// expected return type so branch-local bindings and returns are handled consistently.
+#[allow(clippy::too_many_arguments)]
 fn lower_conditional_block(
     block: &Block,
     locals: &mut HashMap<String, LoweringLocal>,
@@ -197,6 +203,9 @@ fn lower_conditional_block(
     statements
 }
 
+// Expression statements share the statement-lowering environment so calls, matches, increments,
+// and returns all report diagnostics against the same executable context.
+#[allow(clippy::too_many_arguments)]
 fn lower_expression_statement(
     expr: &Expr,
     locals: &HashMap<String, LoweringLocal>,
@@ -299,6 +308,9 @@ fn lower_expression_statement(
     .map(LoweredStatement::Expr)
 }
 
+// Match statements need both pattern-specific local mutation and the shared lowering tables used
+// by nested branch statements, so the full context stays explicit at this boundary.
+#[allow(clippy::too_many_arguments)]
 fn lower_match_statement(
     expr: &Expr,
     locals: &HashMap<String, LoweringLocal>,
@@ -387,6 +399,9 @@ fn lower_match_statement(
     })
 }
 
+// Block-bodied match expression branches lower setup statements and the final value together,
+// which requires both statement context and the expression's expected result type.
+#[allow(clippy::too_many_arguments)]
 fn lower_match_expression_branch_block(
     block: &Block,
     locals: &mut HashMap<String, LoweringLocal>,
@@ -608,9 +623,7 @@ fn lower_local_statement(
         None
     };
 
-    let Some(value) = value else {
-        return None;
-    };
+    let value = value?;
 
     if !can_lower {
         return None;
@@ -756,4 +769,3 @@ fn lower_assignment_statement(
         value,
     })
 }
-

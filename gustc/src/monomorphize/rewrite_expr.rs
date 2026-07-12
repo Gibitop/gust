@@ -621,8 +621,6 @@ impl Monomorphizer {
                         self.specialize_struct(name, args, expr.span);
                         *name = specialized_name(name, args);
                         args.clear();
-                    } else {
-                        return;
                     }
                 } else if self.concrete_structs.contains(name) && !args.is_empty() {
                     self.diagnostics.push(Diagnostic::error(
