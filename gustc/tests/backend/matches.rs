@@ -74,8 +74,9 @@ fn main() {
     let lowered = lower_program(&result.program).expect("nested enum matches should lower");
     let source = emit_c(&lowered);
 
-    assert!(source.contains(".gust_payload.gust_Some.gust_tag"));
-    assert!(source.contains("&&"));
+    assert!(source.contains(".gust_payload.gust_Some"));
+    assert!(source.contains("_payload_"));
+    assert!(source.contains(".gust_tag =="));
 }
 
 #[test]
@@ -113,10 +114,10 @@ fn main() {
     let lowered = lower_program(&result.program).expect("or-patterns should lower");
     let source = emit_c(&lowered);
 
-    assert!(source.contains(" || "));
-    assert!(source.contains(" ? "));
-    assert!(source.contains(".gust_payload.gust_Some.gust_payload.gust_Ok"));
-    assert!(source.contains(".gust_payload.gust_Some.gust_payload.gust_Err"));
+    assert!(source.contains("bool gust_internal_match_or_"));
+    assert!(source.contains(" = true;"));
+    assert!(source.contains(".gust_payload.gust_Ok"));
+    assert!(source.contains(".gust_payload.gust_Err"));
 }
 
 #[test]
@@ -162,7 +163,7 @@ fn main() {
     let source = emit_c(&lowered);
 
     assert!(source.contains("->gust_name"));
-    assert!(source.contains(".gust_payload.gust_Some->gust_name"));
+    assert!(source.contains(".gust_payload.gust_Some"));
 }
 
 #[test]
@@ -209,10 +210,9 @@ fn main() {
     let lowered = lower_program(&result.program).expect("match guards should lower");
     let source = emit_c(&lowered);
 
-    assert!(source.contains(" && "));
     assert!(source.contains(">= 18"));
     assert!(source.contains("->gust_age"));
-    assert!(source.contains(".gust_payload.gust_Some->gust_age"));
+    assert!(source.contains(".gust_payload.gust_Some"));
 }
 
 #[test]

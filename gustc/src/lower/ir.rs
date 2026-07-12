@@ -123,7 +123,7 @@ pub enum LoweredStatement {
     Match {
         value: LoweredExpr,
         temp_name: String,
-        branches: Vec<LoweredMatchStatementBranch>,
+        decision: Box<LoweredMatchDecision>,
     },
 }
 
@@ -221,19 +221,10 @@ pub enum LoweredExprKind {
         variant: String,
         payload: Option<Box<LoweredExpr>>,
     },
-    EnumPayload {
-        object: Box<LoweredExpr>,
-        variant: String,
-    },
-    MatchPatternBinding {
-        matched_value: Box<LoweredExpr>,
-        alternatives: Vec<LoweredPatternBindingAlternative>,
-    },
-    MatchValue(String),
     Match {
         value: Box<LoweredExpr>,
         temp_name: String,
-        branches: Vec<LoweredMatchBranch>,
+        decision: Box<LoweredMatchDecision>,
     },
     FieldAccess {
         object: Box<LoweredExpr>,
@@ -271,18 +262,76 @@ pub enum LoweredExprKind {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct LoweredMatchBranch {
-    pub pattern: LoweredPattern,
-    pub guard: Option<LoweredExpr>,
-    pub statements: Vec<LoweredStatement>,
-    pub value: LoweredExpr,
+pub enum LoweredMatchDecision {
+    Arms {
+        arms: Vec<LoweredMatchDecision>,
+    },
+    Test {
+        subject: String,
+        test: LoweredMatchTest,
+        then: Box<LoweredMatchDecision>,
+        else_: Box<LoweredMatchDecision>,
+    },
+    Bind {
+        name: String,
+        type_: LoweredType,
+        source: LoweredMatchBindSource,
+        declare: bool,
+        then: Box<LoweredMatchDecision>,
+    },
+    Or {
+        bindings: Vec<LoweredMatchOrBinding>,
+        alternatives: Vec<LoweredMatchDecision>,
+        then: Box<LoweredMatchDecision>,
+        else_: Box<LoweredMatchDecision>,
+    },
+    Matched,
+    Body {
+        statements: Vec<LoweredStatement>,
+        value: Option<LoweredExpr>,
+    },
+    Fail,
+    End,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct LoweredMatchStatementBranch {
-    pub pattern: LoweredPattern,
-    pub guard: Option<LoweredExpr>,
-    pub statements: Vec<LoweredStatement>,
+pub enum LoweredMatchTest {
+    EnumTag {
+        enum_name: String,
+        variant: String,
+    },
+    StringEq(String),
+    BoolEq(bool),
+    NumberEq {
+        value: String,
+        type_: BasicType,
+    },
+    Range {
+        start: String,
+        end: String,
+        inclusive: bool,
+        type_: BasicType,
+    },
+    Guard(Box<LoweredExpr>),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LoweredMatchBindSource {
+    EnumPayload {
+        subject: String,
+        variant: String,
+    },
+    StructField {
+        subject: String,
+        field: String,
+    },
+    Subject(String),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LoweredMatchOrBinding {
+    pub name: String,
+    pub type_: LoweredType,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -297,6 +346,9 @@ pub enum LoweredPattern {
         name: String,
         fields: Vec<LoweredStructPatternField>,
     },
+    Binding {
+        name: String,
+    },
     String(String),
     Bool(bool),
     Number {
@@ -310,12 +362,6 @@ pub enum LoweredPattern {
         type_: BasicType,
     },
     Wildcard,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct LoweredPatternBindingAlternative {
-    pub pattern: LoweredPattern,
-    pub value: LoweredExpr,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -344,8 +344,9 @@ fn lower_match_statement(
         return None;
     }
 
-    let mut lowered_branches = Vec::new();
+    let mut compiled_branches = Vec::new();
     let temp_name = match_temp_name(expr.span);
+    let mut temp_counter = 0;
     for branch in branches {
         let mut branch_locals = locals.clone();
         let pattern = lower_match_pattern(
@@ -356,7 +357,6 @@ fn lower_match_statement(
             enums,
             structs,
             diagnostics,
-            &temp_name,
         )?;
         let guard = if let Some(guard) = &branch.guard {
             Some(lower_expr(
@@ -397,17 +397,27 @@ fn lower_match_statement(
             .into_iter()
             .collect(),
         };
-        lowered_branches.push(LoweredMatchStatementBranch {
+        compiled_branches.push(CompiledMatchBranch {
             pattern,
             guard,
             statements,
+            value: None,
         });
     }
+
+    let decision = compile_match_branches(
+        compiled_branches,
+        &temp_name,
+        &value.type_,
+        enums,
+        structs,
+        &mut temp_counter,
+    );
 
     Some(LoweredStatement::Match {
         value,
         temp_name,
-        branches: lowered_branches,
+        decision: Box::new(decision),
     })
 }
 

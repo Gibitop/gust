@@ -1445,9 +1445,10 @@ fn lower_expr(
                 ));
                 return None;
             }
-            let mut lowered_branches = Vec::new();
+            let mut compiled_branches = Vec::new();
             let mut result_type = None;
             let temp_name = match_temp_name(expr.span);
+            let mut temp_counter = 0;
 
             for branch in branches {
                 let mut branch_locals = locals.clone();
@@ -1459,7 +1460,6 @@ fn lower_expr(
                     enums,
                     structs,
                     diagnostics,
-                    &temp_name,
                 )?;
                 let guard = if let Some(guard) = &branch.guard {
                     Some(lower_expr(
@@ -1505,11 +1505,11 @@ fn lower_expr(
                     )?,
                 };
                 result_type.get_or_insert_with(|| branch_value.type_.clone());
-                lowered_branches.push(LoweredMatchBranch {
+                compiled_branches.push(CompiledMatchBranch {
                     pattern,
                     guard,
                     statements,
-                    value: branch_value,
+                    value: Some(branch_value),
                 });
             }
 
@@ -1521,12 +1521,21 @@ fn lower_expr(
                 return None;
             };
 
+            let decision = compile_match_branches(
+                compiled_branches,
+                &temp_name,
+                &value.type_,
+                enums,
+                structs,
+                &mut temp_counter,
+            );
+
             LoweredExpr {
                 type_: result_type,
                 kind: LoweredExprKind::Match {
                     value: Box::new(value),
                     temp_name,
-                    branches: lowered_branches,
+                    decision: Box::new(decision),
                 },
             }
         }

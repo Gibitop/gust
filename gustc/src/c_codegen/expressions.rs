@@ -208,90 +208,29 @@ fn push_c_value(source: &mut String, value: &LoweredExpr, structs: &[LoweredStru
 
             source.push_str(" }");
         }
-        LoweredExprKind::EnumPayload { object, variant } => {
-            push_c_value(source, object, structs);
-            source.push_str(".gust_payload.");
-            push_c_local_name(source, variant);
-        }
-        LoweredExprKind::MatchPatternBinding {
-            matched_value,
-            alternatives,
-        } => {
-            source.push('(');
-            for (index, alternative) in alternatives.iter().enumerate() {
-                if index + 1 == alternatives.len() {
-                    push_c_value(source, &alternative.value, structs);
-                } else {
-                    push_c_match_condition_for_value(
-                        source,
-                        matched_value,
-                        &alternative.pattern,
-                    );
-                    source.push_str(" ? ");
-                    push_c_value(source, &alternative.value, structs);
-                    source.push_str(" : ");
-                }
-            }
-            source.push(')');
-        }
-        LoweredExprKind::MatchValue(name) => source.push_str(name),
         LoweredExprKind::Match {
             value: matched_value,
             temp_name,
-            branches,
+            decision,
         } => {
             let result_name = format!("{temp_name}_result");
 
             source.push_str("({\n    ");
             push_c_type(source, &matched_value.type_);
             source.push(' ');
-            source.push_str(temp_name);
+            push_c_local_name(source, temp_name);
             source.push_str(" = ");
             push_c_value(source, matched_value, structs);
             source.push_str(";\n    ");
             push_c_type(source, &value.type_);
             source.push(' ');
-            source.push_str(&result_name);
+            push_c_local_name(source, &result_name);
             source.push_str(";\n");
 
-            for (index, branch) in branches.iter().enumerate() {
-                source.push_str("    ");
-                if branch.guard.is_some() || !lowered_pattern_is_unconditional(&branch.pattern) {
-                    if index > 0 {
-                        source.push_str("else ");
-                    }
-                    source.push_str("if (");
-                    push_c_match_branch_condition(
-                        source,
-                        temp_name,
-                        &matched_value.type_,
-                        &branch.pattern,
-                        branch.guard.as_ref(),
-                        structs,
-                    );
-                    source.push_str(") {\n");
-                } else {
-                    if index > 0 {
-                        source.push_str("else ");
-                    }
-                    source.push_str("{\n");
-                }
-
-                for statement in &branch.statements {
-                    push_c_statement(source, statement, 2, structs);
-                }
-
-                push_c_indent(source, 2);
-                source.push_str(&result_name);
-                source.push_str(" = ");
-                push_c_value(source, &branch.value, structs);
-                source.push_str(";\n");
-
-                source.push_str("    }\n");
-            }
+            push_c_match_decision(source, decision, temp_name, Some(&result_name), 1, structs);
 
             source.push_str("    ");
-            source.push_str(&result_name);
+            push_c_local_name(source, &result_name);
             source.push_str(";\n})");
         }
         LoweredExprKind::FieldAccess { object, field } => {

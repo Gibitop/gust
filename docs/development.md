@@ -228,10 +228,18 @@ has mutable capability. This keeps immutable enum views from creating mutable ac
 managed values while allowing mutable enum methods to mutate struct payloads through `match self`.
 
 Nested enum payload patterns are type-checked recursively. A nested variant must belong to the
-payload enum it is matching. Executable matching tests nested tags and binds nested payloads
-correctly.
+payload enum it is matching. Executable lowering compiles patterns into a match decision tree of tag/literal/range
+tests, temporary bindings, and branch bodies. Nested payloads and struct fields are
+bound to stable temporaries after their checks pass, so the matched expression is
+evaluated once and bindings do not re-traverse nested access paths.
 
-## Match exhaustiveness and usefulness
+## Match decision tree lowering
+
+Executable matches lower through an internal decision representation before C emission.
+The tree can test enum tags, struct field subpatterns, literals, ranges, and guards.
+Successful checks bind payloads and fields to temporaries that later tests and branch
+bodies use. The matched value is evaluated once into a match temporary; nested patterns
+do not re-evaluate that expression.
 
 Match checking uses a usefulness-style algorithm (in the spirit of Maranget / Rust). Relative to
 the unguarded patterns already seen, each new pattern must match at least one previously uncovered
@@ -254,10 +262,9 @@ against the same matched value and then merged into one branch scope. Every alte
 the same names with the same mutability and compatible types, so a shared binding can be used in
 the branch body regardless of which alternative matched.
 
-Executable lowering emits or-pattern tests as `conditionA || conditionB`. When a shared binding
-comes from different payload paths, such as
-`Option.Some(Result.Ok(text)) | Option.Some(Result.Err(text))`, reads of that binding lower to a
-conditional expression that selects the payload for the alternative that matched.
+Executable lowering emits or-pattern alternatives as sequential attempts that share
+predeclared binding temporaries. When any alternative matches, the branch body runs
+with those bindings; otherwise the decision tree continues to the next branch.
 
 ## Struct match patterns
 
@@ -269,8 +276,8 @@ against the declared field type.
 
 Struct patterns bind fields into the match branch scope. They can appear anywhere a nested pattern
 is accepted, including enum payloads such as `Option.Some(Person { name, ... })`. Executable
-lowering treats field bindings as replacements for field-access expressions on the matched value,
-so extraction does not require extra source-level local declarations.
+lowering binds each extracted field to a temporary after outer checks pass, so branch bodies use
+stable locals rather than repeated field-access expressions.
 
 ## Match guards
 
@@ -284,9 +291,10 @@ unguarded coverage, but they are not added to the covered set, because the guard
 runtime. A later unguarded branch is still required for any value the guarded pattern alone would
 otherwise cover.
 
-Executable lowering combines the pattern test and guard with `&&`, so a branch becomes
-`if (patternCondition && guard)`. A wildcard or otherwise unconditional pattern with a guard still
-emits an `if` whose condition is only the guard.
+Executable lowering evaluates the guard only after pattern tests succeed and their
+bindings are in scope. A failed guard continues the decision tree at the next branch.
+A wildcard or otherwise unconditional pattern with a guard still emits an `if` whose
+condition is only the guard.
 
 ## Extension functions
 

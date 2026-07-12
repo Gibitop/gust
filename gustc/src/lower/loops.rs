@@ -323,16 +323,7 @@ fn lower_for_statement(
         LoweringLocal {
             type_: item_type.clone(),
             mutable: false,
-            replacement: Some(LoweredExpr {
-                type_: item_type.clone(),
-                kind: LoweredExprKind::EnumPayload {
-                    object: Box::new(LoweredExpr {
-                        type_: next_method.return_type.clone(),
-                        kind: LoweredExprKind::MatchValue(match_value_name.clone()),
-                    }),
-                    variant: "Some".to_string(),
-                },
-            }),
+            replacement: None,
             captured: false,
         },
     );
@@ -358,6 +349,44 @@ fn lower_for_statement(
         },
     };
 
+    let decision = LoweredMatchDecision::Arms {
+        arms: vec![
+            LoweredMatchDecision::Test {
+                subject: match_value_name.clone(),
+                test: LoweredMatchTest::EnumTag {
+                    enum_name: option_name.clone(),
+                    variant: "Some".to_string(),
+                },
+                then: Box::new(LoweredMatchDecision::Bind {
+                    name: name.clone(),
+                    type_: item_type,
+                    source: LoweredMatchBindSource::EnumPayload {
+                        subject: match_value_name.clone(),
+                        variant: "Some".to_string(),
+                    },
+                    declare: true,
+                    then: Box::new(LoweredMatchDecision::Body {
+                        statements: body,
+                        value: None,
+                    }),
+                }),
+                else_: Box::new(LoweredMatchDecision::Fail),
+            },
+            LoweredMatchDecision::Test {
+                subject: match_value_name.clone(),
+                test: LoweredMatchTest::EnumTag {
+                    enum_name: option_name.clone(),
+                    variant: "None".to_string(),
+                },
+                then: Box::new(LoweredMatchDecision::Body {
+                    statements: vec![LoweredStatement::Break],
+                    value: None,
+                }),
+                else_: Box::new(LoweredMatchDecision::Fail),
+            },
+        ],
+    };
+
     vec![
         LoweredStatement::Local {
             name: iterator_name,
@@ -371,26 +400,7 @@ fn lower_for_statement(
             body: vec![LoweredStatement::Match {
                 value: next,
                 temp_name: match_value_name,
-                branches: vec![
-                    LoweredMatchStatementBranch {
-                        pattern: LoweredPattern::Variant {
-                            enum_name: option_name.clone(),
-                            variant: "Some".to_string(),
-                            payload: None,
-                        },
-                        guard: None,
-                        statements: body,
-                    },
-                    LoweredMatchStatementBranch {
-                        pattern: LoweredPattern::Variant {
-                            enum_name: option_name.clone(),
-                            variant: "None".to_string(),
-                            payload: None,
-                        },
-                        guard: None,
-                        statements: vec![LoweredStatement::Break],
-                    },
-                ],
+                decision: Box::new(decision),
             }],
         },
     ]
