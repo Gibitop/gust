@@ -4,3 +4,15 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+
+[[test]]
+name = "frontend"
+path = "tests/frontend/mod.rs"
+
+[[test]]
+name = "backend"
+path = "tests/backend/mod.rs"
+
+[[test]]
+name = "project"
+path = "tests/project/mod.rs"
