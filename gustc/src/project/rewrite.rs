@@ -115,6 +115,11 @@ impl<'names, 'diagnostics> ModuleRewriter<'names, 'diagnostics> {
                 self.rewrite_function(function);
             }
             Item::Extension(extension) => {
+                self.scopes
+                    .push(extension.type_params.iter().cloned().collect());
+                for bound in &mut extension.type_param_bounds {
+                    self.rewrite_type(&mut bound.trait_ref);
+                }
                 self.rewrite_type(&mut extension.type_ref);
                 if let Some(name) = &mut extension.function.name
                     && let Some(internal_name) = self.local_extensions.get(name)
@@ -122,6 +127,7 @@ impl<'names, 'diagnostics> ModuleRewriter<'names, 'diagnostics> {
                     *name = internal_name.clone();
                 }
                 self.rewrite_function(&mut extension.function);
+                self.scopes.pop();
             }
             Item::Import(_) => {}
         }
@@ -271,7 +277,10 @@ impl<'names, 'diagnostics> ModuleRewriter<'names, 'diagnostics> {
                 }
             }
             ExprKind::Member { object, .. } => self.rewrite_expr(object),
-            ExprKind::GenericMember { object, args, .. } => {
+            ExprKind::GenericMember { object, name, args } => {
+                if let Some(internal_name) = self.visible_extensions.get(name) {
+                    *name = internal_name.clone();
+                }
                 self.rewrite_expr(object);
                 for arg in args {
                     self.rewrite_type(arg);

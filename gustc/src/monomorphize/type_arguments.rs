@@ -180,9 +180,18 @@ impl Monomorphizer {
 
         let receiver = self.expanded_type(receiver);
         self.extensions.iter().any(|extension| {
-            extension.static_ == static_
-                && extension.function.name.as_deref() == Some(method_name)
-                && type_name(&self.expanded_type(&extension.type_ref)) == type_name(&receiver)
+            if extension.static_ != static_
+                || extension.function.name.as_deref() != Some(method_name)
+            {
+                return false;
+            }
+            let receiver_type_params = self.extension_receiver_type_params(extension);
+            self.solve_type_arguments(
+                "extension",
+                &receiver_type_params,
+                vec![(extension.type_ref.clone(), receiver.clone())],
+            )
+            .is_ok()
         })
     }
 
@@ -424,6 +433,153 @@ impl Monomorphizer {
                 continue;
             };
             let mut expected = substitute_type(type_ref, &method_substitutions);
+            self.rewrite_type(&mut expected, substitutions);
+            self.apply_expr_context(arg, &expected);
+        }
+    }
+
+    fn resolve_extension(
+        &mut self,
+        receiver: &TypeRef,
+        method_name: &str,
+        static_: bool,
+        explicit_args: Option<&[TypeRef]>,
+        args: &[Expr],
+        expected_return: Option<&TypeRef>,
+    ) -> Result<Option<ExtensionResolution>, String> {
+        let receiver = self.expanded_type(receiver);
+        let mut candidates = Vec::new();
+
+        for (template_index, extension) in self.extensions.clone().iter().enumerate() {
+            if extension.static_ != static_
+                || extension.function.name.as_deref() != Some(method_name)
+                || !self.is_generic_extension_template(extension)
+            {
+                continue;
+            }
+
+            let receiver_type_params = self.extension_receiver_type_params(extension);
+            let Ok(receiver_type_args) = self.solve_type_arguments(
+                "extension",
+                &receiver_type_params,
+                vec![(extension.type_ref.clone(), receiver.clone())],
+            ) else {
+                continue;
+            };
+            let mut substitutions = receiver_type_params
+                .iter()
+                .cloned()
+                .zip(receiver_type_args.iter().cloned())
+                .collect::<HashMap<_, _>>();
+            let function_params = extension
+                .function
+                .params
+                .iter()
+                .filter(|param| static_ || param.name != "self")
+                .filter_map(|param| param.type_ref.as_ref())
+                .map(|type_ref| substitute_type(type_ref, &substitutions))
+                .collect::<Vec<_>>();
+
+            if function_params.len() != args.len() {
+                continue;
+            }
+
+            let function_type_args = if let Some(explicit_args) = explicit_args {
+                if explicit_args.len() != extension.function.type_params.len() {
+                    return Err(format!(
+                        "generic extension method `{}.{method_name}` expects {} type arguments, got {}",
+                        type_name(&receiver),
+                        extension.function.type_params.len(),
+                        explicit_args.len()
+                    ));
+                }
+                explicit_args.to_vec()
+            } else if extension.function.type_params.is_empty() {
+                Vec::new()
+            } else {
+                let mut constraints = function_params
+                    .iter()
+                    .zip(args)
+                    .filter_map(|(expected, arg)| {
+                        self.infer_expr_type(arg)
+                            .map(|actual| (expected.clone(), actual))
+                    })
+                    .collect::<Vec<_>>();
+                if let (Some(return_type), Some(expected_return)) =
+                    (&extension.function.return_type, expected_return)
+                {
+                    constraints.push((substitute_type(return_type, &substitutions), expected_return.clone()));
+                }
+                self.solve_type_arguments(
+                    method_name,
+                    &extension.function.type_params,
+                    constraints,
+                )
+                .map_err(|reason| {
+                    format!(
+                        "cannot infer type arguments for generic extension method `{}.{method_name}`: {reason}; write `.{method_name}<Type>(...)` or add a concrete expected type",
+                        type_name(&receiver)
+                    )
+                })?
+            };
+
+            substitutions.extend(
+                extension
+                    .function
+                    .type_params
+                    .iter()
+                    .cloned()
+                    .zip(function_type_args.iter().cloned()),
+            );
+
+            let params = function_params
+                .iter()
+                .map(|param| substitute_type(param, &substitutions))
+                .collect::<Vec<_>>();
+            let return_type = extension
+                .function
+                .return_type
+                .as_ref()
+                .map(|return_type| substitute_type(return_type, &substitutions));
+            let mut concrete_receiver = receiver.clone();
+            self.rewrite_type(&mut concrete_receiver, &HashMap::new());
+
+            candidates.push(ExtensionResolution {
+                template_index,
+                receiver: concrete_receiver,
+                receiver_type_params,
+                receiver_type_args,
+                function_type_args,
+                params,
+                return_type,
+            });
+        }
+
+        candidates.sort_by_key(|candidate| candidate.receiver_type_params.len());
+        if candidates.len() > 1 {
+            let first_len = candidates[0].receiver_type_params.len();
+            if candidates
+                .get(1)
+                .is_some_and(|candidate| candidate.receiver_type_params.len() == first_len)
+            {
+                return Err(format!(
+                    "extension method `{method_name}` is ambiguous for type `{}`",
+                    type_name(&receiver)
+                ));
+            }
+        }
+
+        Ok(candidates.into_iter().next())
+    }
+
+    fn apply_extension_argument_contexts(
+        &mut self,
+        params: &[TypeRef],
+        args: &mut [Expr],
+        substitutions: &HashMap<String, TypeRef>,
+    ) {
+        for (param, arg) in params.iter().zip(args) {
+            let mut expected = param.clone();
             self.rewrite_type(&mut expected, substitutions);
             self.apply_expr_context(arg, &expected);
         }

@@ -680,6 +680,125 @@ fn main() {}
 }
 
 #[test]
+fn generic_extensions_validate_for_blanket_and_concrete_instantiations() {
+    let result = check_source(
+        r#"struct Box<T> {
+    value: T
+}
+
+fn Box<T>.get(): T => self.value
+fn Box<i32>.label(): string => "integer"
+
+fn main() {
+    let text = Box { value: "Gust" }
+    let number = Box { value: 42 }
+
+    io.println(text.get())
+    io.println(number.get().toString())
+    io.println(number.label())
+}"#,
+    );
+
+    assert!(
+        !result.has_errors(),
+        "expected generic extensions to validate, got {:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
+fn generic_static_extension_functions_validate_when_selected() {
+    let result = check_source(
+        r#"struct Box<T> {
+    value: T
+}
+
+struct Pair<T, U> {
+    first: T
+    second: U
+}
+
+static fn Box<T>.pair<U>(value: T, other: U): Pair<T, U> => Pair {
+    first: value,
+    second: other,
+}
+
+fn main() {
+    let pair = Box<i32>.pair<string>(7, "seven")
+
+    io.println(pair.second)
+}"#,
+    );
+
+    assert!(
+        !result.has_errors(),
+        "expected generic static extension function to validate, got {:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
+fn generic_extension_receiver_bounds_are_checked_at_selected_calls() {
+    let valid = check_source(
+        r#"trait Named {
+    fn name(): string
+}
+
+struct Person {
+    value: string
+}
+
+impl Named for Person {
+    fn name(): string => self.value
+}
+
+struct Box<T> {
+    value: T
+}
+
+fn Box<T: Named>.name(): string => self.value.name()
+
+fn main() {
+    let person = Box { value: Person { value: "Gust" } }
+
+    io.println(person.name())
+}"#,
+    );
+
+    assert!(
+        !valid.has_errors(),
+        "expected bounded generic extension to validate, got {:?}",
+        valid.diagnostics
+    );
+
+    let invalid = check_source(
+        r#"trait Named {
+    fn name(): string
+}
+
+struct Box<T> {
+    value: T
+}
+
+fn Box<T: Named>.name(): string => self.value.name()
+
+fn main() {
+    let number = Box { value: 42 }
+
+    io.println(number.name())
+}"#,
+    );
+
+    assert!(
+        invalid.diagnostics.iter().any(|diagnostic| diagnostic
+            .message
+            .contains("type `i32` does not satisfy bound `i32: Named`")),
+        "expected bounded generic extension call to report a bound error, got {:?}",
+        invalid.diagnostics
+    );
+}
+
+#[test]
 fn unknown_type_names_are_errors() {
     let result = check_source(
         r#"
@@ -728,4 +847,3 @@ fn main() {
         result.diagnostics
     );
 }
-

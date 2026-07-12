@@ -82,7 +82,9 @@ impl Monomorphizer {
             }
             Item::Extension(item) => {
                 self.rewrite_type(&mut item.type_ref, substitutions);
+                self.self_types.push(item.type_ref.clone());
                 self.rewrite_function(&mut item.function, substitutions);
+                self.self_types.pop();
             }
             Item::Function(function) => {
                 self.rewrite_function(function, substitutions);

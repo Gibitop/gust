@@ -302,6 +302,12 @@ An extension function is declared at the top level with `fn Type.functionName(..
 It has an implicit immutable `self` parameter of the extended type and is statically dispatched.
 An extension function may similarly declare `mut self` when it mutates receiver state.
 
+Extension targets may be parameterized, such as `fn Box<T>.get(): T`, and the extension body may
+use those receiver type parameters. Bounds on receiver parameters are written in the target type,
+such as `fn Box<T: Named>.name(): string`. A concrete target such as `fn Box<i32>.label(): string`
+extends only that instantiation. Static extensions use the same target syntax and may also declare
+function type parameters, such as `static fn Box<T>.pair<U>(value: T, other: U)`.
+
 Extension functions do not become members of the extended type. They are available only in the
 module where they are declared and in modules that explicitly import them. Importing or otherwise
 making a type available does not make its extension functions available. A module may extend a
@@ -424,6 +430,14 @@ has its own trait object type and dynamic-dispatch vtable.
 Generic impl templates such as `impl<T> Named<T> for Box<T>` are monomorphized when their receiver
 type and trait can be resolved to concrete types. The generated concrete impl is validated like an
 ordinary impl and participates in static trait-method dispatch and dynamic trait-object dispatch.
+
+Generic extension templates are monomorphized only when selected by a concrete call. A receiver
+template such as `fn Box<T>.get(): T` can extend every `Box<...>` instantiation whose declared
+bounds hold, while a concrete extension such as `fn Box<i32>.label(): string` is emitted only for
+`Box<i32>`. Generic extension function parameters are inferred from call arguments and expected
+return type, or supplied explicitly at the call site. Real members still take precedence, and
+extension lookup still requires the extension function itself to be in scope through declaration or
+named import.
 
 Trait impls follow Rust-style overlap rules. Two impl declarations are rejected when their trait
 and receiver types can be unified, including blanket impls that overlap only for a future concrete

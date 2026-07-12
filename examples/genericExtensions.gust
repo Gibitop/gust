@@ -1,0 +1,43 @@
+trait Named {
+    fn name(): string
+}
+
+struct Person {
+    value: string
+}
+
+impl Named for Person {
+    fn name(): string => self.value
+}
+
+struct Box<T> {
+    value: T
+}
+
+struct Pair<T, U> {
+    first: T
+    second: U
+}
+
+fn Box<T>.get(): T => self.value
+
+fn Box<T: Named>.name(): string => self.value.name()
+
+fn Box<i32>.label(): string => "integer"
+
+static fn Box<T>.pair<U>(value: T, other: U): Pair<T, U> => Pair {
+    first: value,
+    second: other,
+}
+
+fn main() {
+    let person = Box { value: Person { value: "Gust" } }
+    let number = Box { value: 42 }
+    let pair = Box<i32>.pair<string>(7, "seven")
+
+    io.println(person.get().name())
+    io.println(person.name())
+    io.println(number.get().toString())
+    io.println(number.label())
+    io.println(pair.second)
+}

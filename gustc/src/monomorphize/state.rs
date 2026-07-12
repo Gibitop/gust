@@ -46,6 +46,16 @@ struct GenericTraitMethodResolution {
     impl_type_args: Vec<TypeRef>,
 }
 
+struct ExtensionResolution {
+    template_index: usize,
+    receiver: TypeRef,
+    receiver_type_params: Vec<String>,
+    receiver_type_args: Vec<TypeRef>,
+    function_type_args: Vec<TypeRef>,
+    params: Vec<TypeRef>,
+    return_type: Option<TypeRef>,
+}
+
 enum PendingSpecialization {
     Struct(String, Vec<TypeRef>),
     Enum(String, Vec<TypeRef>),
@@ -56,5 +66,10 @@ enum PendingSpecialization {
         name: String,
         static_: bool,
         args: Vec<TypeRef>,
+    },
+    Extension {
+        template_index: usize,
+        receiver: TypeRef,
+        function_args: Vec<TypeRef>,
     },
 }

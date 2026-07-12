@@ -129,6 +129,8 @@ pub struct FieldDecl {
 #[derive(Debug, Clone)]
 pub struct ExtensionDecl {
     pub type_ref: TypeRef,
+    pub type_params: Vec<String>,
+    pub type_param_bounds: Vec<TypeParamBound>,
     pub function: FunctionDecl,
     pub static_: bool,
     pub span: Span,

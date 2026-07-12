@@ -94,6 +94,7 @@ impl Monomorphizer {
             ExprKind::Call { callee, .. } => match &callee.kind {
                 ExprKind::GenericMember { object, name, args } => self
                     .infer_type_expression_ref(object)
+                    .filter(|receiver| self.method_template(receiver, name, true).is_some())
                     .map(|receiver| {
                         (
                             object.clone(),
@@ -105,14 +106,18 @@ impl Monomorphizer {
                     })
                     .or_else(|| {
                         self.infer_expr_type(object).map(|receiver| {
-                            (
-                                object.clone(),
-                                receiver,
-                                name.clone(),
-                                false,
-                                Some(args.clone()),
-                            )
+                            self.method_template(&receiver, name, false)
+                                .map(|_| {
+                                    (
+                                        object.clone(),
+                                        receiver,
+                                        name.clone(),
+                                        false,
+                                        Some(args.clone()),
+                                    )
+                                })
                         })
+                        .flatten()
                     }),
                 ExprKind::Member { object, name } => self
                     .infer_type_expression_ref(object)
@@ -228,6 +233,143 @@ impl Monomorphizer {
                 }
             }
             return;
+        }
+
+        let extension_call = match &expr.kind {
+            ExprKind::Call { callee, .. } => match &callee.kind {
+                ExprKind::GenericMember { object, name, args } => self
+                    .infer_type_expression_ref(object)
+                    .filter(|receiver| self.method_template(receiver, name, true).is_none())
+                    .map(|receiver| {
+                        (
+                            object.clone(),
+                            receiver,
+                            name.clone(),
+                            true,
+                            Some(args.clone()),
+                        )
+                    })
+                    .or_else(|| {
+                        self.infer_expr_type(object)
+                            .filter(|receiver| {
+                                self.method_template(receiver, name, false).is_none()
+                            })
+                            .map(|receiver| {
+                                (
+                                    object.clone(),
+                                    receiver,
+                                    name.clone(),
+                                    false,
+                                    Some(args.clone()),
+                                )
+                            })
+                    }),
+                ExprKind::Member { object, name } => self
+                    .infer_type_expression_ref(object)
+                    .filter(|receiver| self.method_template(receiver, name, true).is_none())
+                    .map(|receiver| (object.clone(), receiver, name.clone(), true, None))
+                    .or_else(|| {
+                        self.infer_expr_type(object)
+                            .filter(|receiver| {
+                                self.method_template(receiver, name, false).is_none()
+                            })
+                            .map(|receiver| (object.clone(), receiver, name.clone(), false, None))
+                    }),
+                _ => None,
+            },
+            _ => None,
+        };
+        if let Some((_, receiver, method_name, static_, explicit_args)) = extension_call {
+            let expected_return = self.expected_expr_types.get(&expr.span).cloned();
+            let ExprKind::Call { callee, args } = &mut expr.kind else {
+                unreachable!("extension call requires a call expression")
+            };
+            let mut args_rewritten = false;
+            let mut extension_error = false;
+            let mut explicit_args = explicit_args;
+            if let Some(type_args) = &mut explicit_args {
+                for type_arg in type_args {
+                    self.rewrite_type(type_arg, substitutions);
+                }
+            }
+            let resolution = match self.resolve_extension(
+                &receiver,
+                &method_name,
+                static_,
+                explicit_args.as_deref(),
+                args,
+                expected_return.as_ref(),
+            ) {
+                Ok(resolution) => resolution,
+                Err(_) if explicit_args.is_none() => {
+                    for arg in args.iter_mut() {
+                        self.rewrite_expr(arg, substitutions);
+                    }
+                    args_rewritten = true;
+                    match self.resolve_extension(
+                        &receiver,
+                        &method_name,
+                        static_,
+                        None,
+                        args,
+                        expected_return.as_ref(),
+                    ) {
+                        Ok(resolution) => resolution,
+                        Err(message) => {
+                            extension_error = true;
+                            self.diagnostics.push(Diagnostic::error(expr.span, message));
+                            None
+                        }
+                    }
+                }
+                Err(message) => {
+                    extension_error = true;
+                    self.diagnostics.push(Diagnostic::error(expr.span, message));
+                    None
+                }
+            };
+
+            if let Some(resolution) = resolution {
+                self.expected_expr_types.remove(&expr.span);
+                self.apply_extension_argument_contexts(&resolution.params, args, substitutions);
+                if !args_rewritten {
+                    for arg in args.iter_mut() {
+                        self.rewrite_expr(arg, substitutions);
+                    }
+                }
+                self.specialize_extension(&resolution, expr.span);
+                if let Some(return_type) = resolution.return_type {
+                    self.inferred_expr_types.insert(expr.span, return_type);
+                }
+                let mut object = match &mut callee.kind {
+                    ExprKind::Member { object, .. } | ExprKind::GenericMember { object, .. } => {
+                        (**object).clone()
+                    }
+                    _ => unreachable!("extension call requires a member callee"),
+                };
+                self.rewrite_expr(&mut object, substitutions);
+                let name = if resolution.function_type_args.is_empty() {
+                    method_name
+                } else {
+                    specialized_name(&method_name, &resolution.function_type_args)
+                };
+                callee.kind = ExprKind::Member {
+                    object: Box::new(object),
+                    name,
+                };
+                return;
+            } else if extension_error {
+                self.expected_expr_types.remove(&expr.span);
+                if !args_rewritten {
+                    for arg in args.iter_mut() {
+                        self.rewrite_expr(arg, substitutions);
+                    }
+                }
+                return;
+            } else if !args_rewritten {
+                // No visible extension matched this member, so leave the call for the
+                // remaining generic trait/static resolution paths.
+            }
         }
 
         let generic_trait_call = match &expr.kind {

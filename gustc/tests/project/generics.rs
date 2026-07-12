@@ -234,3 +234,46 @@ fn second() {}"#,
     }));
 }
 
+#[test]
+fn imported_generic_extensions_are_monomorphized_after_module_linking() {
+    let project = TempProject::new();
+    project.write(
+        "main.gust",
+        r#"from ./extensions import { Box, get, pair }
+
+fn main() {
+    let text = Box { value: "Gust" }
+    let pairValue = Box<i32>.pair<string>(7, "seven")
+
+    io.println(text.get())
+    io.println(pairValue.second)
+}"#,
+    );
+    project.write(
+        "extensions.gust",
+        r#"struct Box<T> {
+    value: T
+}
+
+struct Pair<T, U> {
+    first: T
+    second: U
+}
+
+fn Box<T>.get(): T => self.value
+
+static fn Box<T>.pair<U>(value: T, other: U): Pair<T, U> => Pair {
+    first: value,
+    second: other,
+}"#,
+    );
+
+    let result = check_project(&project.path("main.gust")).expect("project should load");
+    assert!(
+        result.diagnostics.is_empty(),
+        "expected imported generic extensions to validate, got {:?}",
+        result.diagnostics
+    );
+
+    lower_program(&result.program).expect("imported generic extensions should lower");
+}

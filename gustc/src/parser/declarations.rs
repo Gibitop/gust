@@ -346,25 +346,32 @@ impl Parser {
     fn parse_top_level_function_tail(&mut self, start: Span, static_: bool) -> Item {
         let name_span = self.current().span;
         let first_name = self.expect_identifier("expected function or extension type name");
+        let after_name = self.position;
+        let diagnostic_count = self.diagnostics.len();
+        let (type_ref, extension_type_params, extension_type_param_bounds) =
+            self.parse_extension_target_type(first_name.clone(), name_span);
 
         if self.match_kind(&TokenKind::Dot) {
             let function_name = self.expect_callable_name("expected extension function name");
-            let function =
-                self.parse_function_tail(start, Some(function_name), Vec::new(), Vec::new());
-            let type_ref = TypeRef {
-                name: first_name,
-                args: Vec::new(),
-                function: None,
-                span: name_span,
-            };
+            let (function_type_params, function_type_param_bounds) = self.parse_type_params();
+            let function = self.parse_function_tail(
+                start,
+                Some(function_name),
+                function_type_params,
+                function_type_param_bounds,
+            );
 
             Item::Extension(ExtensionDecl {
                 span: start.join(function.span),
                 type_ref,
+                type_params: extension_type_params,
+                type_param_bounds: extension_type_param_bounds,
                 function,
                 static_,
             })
         } else {
+            self.position = after_name;
+            self.diagnostics.truncate(diagnostic_count);
             if static_ {
                 self.error_here("static functions must be declared on a type");
             }
@@ -376,6 +383,60 @@ impl Parser {
                 type_param_bounds,
             ))
         }
+    }
+
+    fn parse_extension_target_type(
+        &mut self,
+        name: String,
+        name_span: Span,
+    ) -> (TypeRef, Vec<String>, Vec<TypeParamBound>) {
+        let mut args = Vec::new();
+        let mut type_params = Vec::new();
+        let mut type_param_bounds = Vec::new();
+        let mut end = name_span;
+
+        if self.match_kind(&TokenKind::Less) {
+            while !self.at_eof() && !self.check_type_greater() {
+                let Some(arg) = self.parse_type() else {
+                    break;
+                };
+                if arg.args.is_empty() && arg.function.is_none() && self.match_kind(&TokenKind::Colon) {
+                    if !type_params.contains(&arg.name) {
+                        type_params.push(arg.name.clone());
+                    }
+                    loop {
+                        let trait_ref = self
+                            .parse_type()
+                            .unwrap_or_else(|| self.missing_type(self.current().span));
+                        type_param_bounds.push(TypeParamBound {
+                            param: arg.name.clone(),
+                            span: arg.span.join(trait_ref.span),
+                            trait_ref,
+                        });
+                        if !self.match_kind(&TokenKind::Plus) {
+                            break;
+                        }
+                    }
+                }
+                args.push(arg);
+                if !self.match_kind(&TokenKind::Comma) {
+                    break;
+                }
+            }
+
+            end = self.expect_type_greater().span;
+        }
+
+        (
+            TypeRef {
+                name,
+                args,
+                function: None,
+                span: name_span.join(end),
+            },
+            type_params,
+            type_param_bounds,
+        )
     }
 
     fn parse_function_tail(
