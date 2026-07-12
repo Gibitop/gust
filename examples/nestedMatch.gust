@@ -1,0 +1,27 @@
+fn main() {
+    let success = Option.Some(Result.Ok("nested text"))
+    let failure = Option.Some(Result.Err("nested error"))
+    let empty = Option.None
+
+    io.println(label(success))
+    io.println(label(failure))
+    io.println(label(empty))
+}
+
+enum Option {
+    Some(Result)
+    None
+}
+
+enum Result {
+    Ok(string)
+    Err(string)
+}
+
+fn label(value: Option): string {
+    return match value {
+        Option.Some(Result.Ok(text)) => text,
+        Option.Some(Result.Err(error)) => error,
+        Option.None => "none",
+    }
+}

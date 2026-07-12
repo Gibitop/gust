@@ -327,30 +327,45 @@ impl<'names, 'diagnostics> ModuleRewriter<'names, 'diagnostics> {
     }
 
     fn rewrite_match_branch(&mut self, branch: &mut MatchBranch) {
-        let binding = match &mut branch.pattern {
-            Pattern::Variant {
-                enum_name, binding, ..
-            } => {
-                if let Some(internal_name) = self.resolve_qualified_name(enum_name, branch.span) {
-                    *enum_name = internal_name;
-                } else if let Some(internal_name) = self.visible_names.get(enum_name) {
-                    *enum_name = internal_name.clone();
-                }
-                binding.clone()
-            }
-            Pattern::String { .. }
-            | Pattern::Number { .. }
-            | Pattern::Range { .. }
-            | Pattern::Wildcard { .. } => None,
-        };
+        let mut bindings = HashSet::new();
+        self.rewrite_pattern(&mut branch.pattern, branch.span, &mut bindings);
 
-        self.scopes
-            .push(binding.into_iter().collect::<HashSet<_>>());
+        self.scopes.push(bindings);
         match &mut branch.body {
             MatchBranchBody::Expr(expr) => self.rewrite_expr(expr),
             MatchBranchBody::Block(block) => self.rewrite_block(block),
         }
         self.scopes.pop();
+    }
+
+    fn rewrite_pattern(
+        &mut self,
+        pattern: &mut Pattern,
+        branch_span: Span,
+        bindings: &mut HashSet<String>,
+    ) {
+        match pattern {
+            Pattern::Variant {
+                enum_name, payload, ..
+            } => {
+                if let Some(internal_name) = self.resolve_qualified_name(enum_name, branch_span) {
+                    *enum_name = internal_name;
+                } else if let Some(internal_name) = self.visible_names.get(enum_name) {
+                    *enum_name = internal_name.clone();
+                }
+                if let Some(payload) = payload {
+                    self.rewrite_pattern(payload, branch_span, bindings);
+                }
+            }
+            Pattern::Binding { name, .. } if name != "_" => {
+                bindings.insert(name.clone());
+            }
+            Pattern::Binding { .. }
+            | Pattern::String { .. }
+            | Pattern::Number { .. }
+            | Pattern::Range { .. }
+            | Pattern::Wildcard { .. } => {}
+        }
     }
 
     fn rewrite_type(&self, type_ref: &mut TypeRef) {

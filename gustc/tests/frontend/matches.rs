@@ -398,6 +398,186 @@ fn main() {}"#,
 }
 
 #[test]
+fn nested_enum_payload_patterns_validate_and_bind_inner_payloads() {
+    let result = check_source(
+        r#"enum Option {
+    Some(Result)
+    None
+}
+
+enum Result {
+    Ok(string)
+    Err(string)
+}
+
+fn label(value: Option): string {
+    return match value {
+        Option.Some(Result.Ok(text)) => text,
+        Option.Some(Result.Err(error)) => error,
+        Option.None => "none",
+    }
+}
+
+fn main() {}"#,
+    );
+
+    assert!(
+        !result.has_errors(),
+        "expected nested enum payload patterns to validate, got {:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
+fn wrong_nested_enum_payload_variant_reports_expected_enum() {
+    let result = check_source(
+        r#"enum Option {
+    Some(Result)
+    None
+}
+
+enum Result {
+    Ok(string)
+    Err(string)
+}
+
+enum Other {
+    Ok(string)
+}
+
+fn label(value: Option): string {
+    return match value {
+        Option.Some(Other.Ok(text)) => text,
+        Option.Some(Result.Err(error)) => error,
+        Option.None => "none",
+    }
+}
+
+fn main() {}"#,
+    );
+
+    assert!(
+        result.diagnostics.iter().any(|diagnostic| {
+            diagnostic.severity == Severity::Error
+                && diagnostic
+                    .message
+                    .contains("pattern `Other.Ok` does not belong to enum `Result`")
+        }),
+        "expected wrong nested variant diagnostic, got {:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
+fn nested_underscore_payload_patterns_do_not_create_locals() {
+    let result = check_source(
+        r#"enum Option {
+    Some(Result)
+    None
+}
+
+enum Result {
+    Ok(string)
+    Err(string)
+}
+
+fn label(value: Option): string {
+    return match value {
+        Option.Some(Result.Ok(_)) => _,
+        Option.Some(Result.Err(error)) => error,
+        Option.None => "none",
+    }
+}
+
+fn main() {}"#,
+    );
+
+    assert!(
+        result.diagnostics.iter().any(|diagnostic| {
+            diagnostic.severity == Severity::Error && diagnostic.message.contains("unknown name `_`")
+        }),
+        "expected nested underscore not to create a binding, got {:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
+fn nested_mutable_payload_bindings_require_mutable_match_values() {
+    let result = check_source(
+        r#"struct Box {
+    value: string
+
+    fn set(mut self, value: string) {
+        self.value = value
+    }
+}
+
+enum Option {
+    Some(Result)
+    None
+}
+
+enum Result {
+    Ok(Box)
+    Err(string)
+}
+
+fn update(mut value: Option, text: string) {
+    match value {
+        Option.Some(Result.Ok(mut box)) => box.set(text),
+        Option.Some(Result.Err(_)) => {},
+        Option.None => {},
+    }
+}
+
+fn main() {}"#,
+    );
+
+    assert!(
+        !result.has_errors(),
+        "expected nested mutable payload binding to validate for mutable values, got {:?}",
+        result.diagnostics
+    );
+
+    let result = check_source(
+        r#"struct Box {
+    value: string
+}
+
+enum Option {
+    Some(Result)
+    None
+}
+
+enum Result {
+    Ok(Box)
+    Err(string)
+}
+
+fn update(value: Option) {
+    match value {
+        Option.Some(Result.Ok(mut box)) => io.println(box.value),
+        Option.Some(Result.Err(_)) => {},
+        Option.None => {},
+    }
+}
+
+fn main() {}"#,
+    );
+
+    assert!(
+        result.diagnostics.iter().any(|diagnostic| {
+            diagnostic.severity == Severity::Error
+                && diagnostic
+                    .message
+                    .contains("cannot bind mutable payload `box` from an immutable match value")
+        }),
+        "expected nested mutable payload binding to require a mutable value, got {:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
 fn enum_variants_are_namespaced_by_their_enum() {
     let result = check_source(
         r#"enum Left {
@@ -562,4 +742,3 @@ fn main() {
         result.diagnostics
     );
 }
-

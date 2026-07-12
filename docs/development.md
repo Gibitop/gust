@@ -209,10 +209,19 @@ Generic enum methods are monomorphized with the enclosing enum specialization, s
 
 ## Match payload mutability
 
-Enum payload patterns may bind the payload with `mut`, such as `Option.Some(mut value)`.
-Mutable payload bindings are only valid when the matched value has mutable capability. This keeps
-immutable enum views from creating mutable access to nested managed values while allowing mutable
-enum methods to mutate struct payloads through `match self`.
+Enum payload patterns may contain nested patterns, such as
+`Option.Some(Result.Ok(value))`. Payload binding is a real pattern form rather than a special case
+of enum variants, so `Option.Some(value)` binds the payload, `Option.Some(_)` discards it without
+creating a local, and nested bindings are scoped to the match branch body.
+
+Enum payload bindings may use `mut`, such as `Option.Some(mut value)` or
+`Option.Some(Result.Ok(mut value))`. Mutable payload bindings are only valid when the matched value
+has mutable capability. This keeps immutable enum views from creating mutable access to nested
+managed values while allowing mutable enum methods to mutate struct payloads through `match self`.
+
+Nested enum payload patterns are type-checked recursively. A nested variant must belong to the
+payload enum it is matching. Exhaustiveness for nested payload patterns may remain conservative,
+but executable matching must test nested tags and bind nested payloads correctly.
 
 ## Extension functions
 

@@ -40,6 +40,45 @@ fn main() {
 }
 
 #[test]
+fn nested_enum_payload_patterns_emit_nested_tag_checks() {
+    let result = check_source(
+        r#"enum Option {
+    Some(Result)
+    None
+}
+
+enum Result {
+    Ok(string)
+    Err(string)
+}
+
+fn label(value: Option): string {
+    return match value {
+        Option.Some(Result.Ok(text)) => text,
+        Option.Some(Result.Err(error)) => error,
+        Option.None => "none",
+    }
+}
+
+fn main() {
+    io.println(label(Option.Some(Result.Ok("ready"))))
+}"#,
+    );
+
+    assert!(
+        !result.has_errors(),
+        "expected no frontend errors, got {:?}",
+        result.diagnostics
+    );
+
+    let lowered = lower_program(&result.program).expect("nested enum matches should lower");
+    let source = emit_c(&lowered);
+
+    assert!(source.contains(".gust_payload.gust_Some.gust_tag"));
+    assert!(source.contains("&&"));
+}
+
+#[test]
 fn struct_enum_fields_emit_after_their_enum_definition() {
     let result = check_source(
         r#"struct Spaceship {
@@ -222,4 +261,3 @@ fn main() {
     assert!(source.contains("_result = (gust_rt_string){"));
     assert!(source.contains("gust_rt_io_println(gust_rt_string_concat("));
 }
-

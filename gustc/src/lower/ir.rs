@@ -284,6 +284,7 @@ pub enum LoweredPattern {
     Variant {
         enum_name: String,
         variant: String,
+        payload: Option<Box<LoweredPattern>>,
     },
     String(String),
     Number(String),

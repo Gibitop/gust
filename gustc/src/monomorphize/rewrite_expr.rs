@@ -662,28 +662,8 @@ impl Monomorphizer {
                 }
                 for branch in branches {
                     let mut scope = HashMap::new();
-                    if let Pattern::Variant {
-                        enum_name,
-                        variant,
-                        binding,
-                        ..
-                    } = &mut branch.pattern
-                    {
-                        if let Some(value_type) = &value_type
-                            && let Some((generic_name, _)) =
-                                self.specializations.get(&value_type.name)
-                            && enum_name == generic_name
-                            && self.enum_templates.contains_key(generic_name)
-                        {
-                            *enum_name = value_type.name.clone();
-                        }
-                        if let Some(binding) = binding
-                            && binding != "_"
-                            && let Some(Some(payload)) =
-                                self.enum_variant_payload(enum_name, variant)
-                        {
-                            scope.insert(binding.clone(), payload);
-                        }
+                    if let Some(value_type) = &value_type {
+                        self.rewrite_match_pattern(&mut branch.pattern, value_type, &mut scope);
                     }
                     self.scopes.push(scope);
                     match &mut branch.body {
@@ -701,6 +681,54 @@ impl Monomorphizer {
             | ExprKind::Char(_)
             | ExprKind::Bool(_)
             | ExprKind::Missing => {}
+        }
+    }
+
+    fn rewrite_match_pattern(
+        &mut self,
+        pattern: &mut Pattern,
+        value_type: &TypeRef,
+        scope: &mut HashMap<String, TypeRef>,
+    ) {
+        match pattern {
+            Pattern::Variant {
+                enum_name,
+                variant,
+                payload,
+                ..
+            } => {
+                if let Some((generic_name, _)) = self.specializations.get(&value_type.name)
+                    && enum_name == generic_name
+                    && self.enum_templates.contains_key(generic_name)
+                {
+                    *enum_name = value_type.name.clone();
+                }
+                let Some(Some(mut payload_type)) = self.enum_variant_payload(enum_name, variant)
+                else {
+                    return;
+                };
+                self.specialize_match_payload_type(&mut payload_type);
+                if let Some(payload) = payload {
+                    self.rewrite_match_pattern(payload, &payload_type, scope);
+                }
+            }
+            Pattern::Binding { name, .. } if name != "_" => {
+                scope.insert(name.clone(), value_type.clone());
+            }
+            Pattern::Binding { .. }
+            | Pattern::String { .. }
+            | Pattern::Number { .. }
+            | Pattern::Range { .. }
+            | Pattern::Wildcard { .. } => {}
+        }
+    }
+
+    fn specialize_match_payload_type(&mut self, type_ref: &mut TypeRef) {
+        if self.enum_templates.contains_key(&type_ref.name) && !type_ref.args.is_empty() {
+            let name = type_ref.name.clone();
+            self.specialize_enum(&name, &type_ref.args, type_ref.span);
+            type_ref.name = specialized_name(&name, &type_ref.args);
+            type_ref.args.clear();
         }
     }
 
