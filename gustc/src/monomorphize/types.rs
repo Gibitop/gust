@@ -15,6 +15,38 @@ fn find_method_member(
 }
 
 impl Monomorphizer {
+    fn extension_receiver_type_params(&self, extension: &crate::ast::ExtensionDecl) -> Vec<String> {
+        let mut params = Vec::new();
+        for name in extension
+            .type_params
+            .iter()
+            .map(String::as_str)
+            .chain(type_arg_names(&extension.type_ref))
+        {
+            if !self.is_known_type_name(name) && !params.iter().any(|param| param == name) {
+                params.push(name.to_string());
+            }
+        }
+        params
+    }
+
+    fn is_generic_extension_template(&self, extension: &crate::ast::ExtensionDecl) -> bool {
+        !extension.function.type_params.is_empty()
+            || !self
+                .extension_receiver_type_params(extension)
+                .is_empty()
+    }
+
+    fn is_known_type_name(&self, name: &str) -> bool {
+        crate::ast::BasicType::from_name(name).is_some()
+            || name == "void"
+            || self.struct_templates.contains_key(name)
+            || self.enum_templates.contains_key(name)
+            || self.trait_templates.contains_key(name)
+            || self.concrete_structs.contains(name)
+            || self.concrete_enums.contains_key(name)
+            || self.concrete_traits.contains(name)
+    }
 }
 fn concrete_type_name(type_ref: &TypeRef) -> Option<String> {
     type_ref.args.is_empty().then(|| type_ref.name.clone())
@@ -82,6 +114,18 @@ fn type_names(type_ref: &TypeRef) -> Vec<&str> {
         names.extend(type_names(arg));
     }
     names
+}
+
+fn type_arg_names(type_ref: &TypeRef) -> Vec<&str> {
+    if let Some(function) = &type_ref.function {
+        let mut names = Vec::new();
+        for param in &function.params {
+            names.extend(type_names(&param.type_ref));
+        }
+        names.extend(type_names(&function.return_type));
+        return names;
+    }
+    type_ref.args.iter().flat_map(type_names).collect()
 }
 
 fn consistent_type(types: &[TypeRef]) -> Option<TypeRef> {

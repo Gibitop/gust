@@ -12,6 +12,7 @@ impl Monomorphizer {
                 || matches!(item, Item::Trait(item) if !item.type_params.is_empty())
                 || matches!(item, Item::Function(item) if !item.type_params.is_empty())
                 || matches!(item, Item::Impl(item) if !item.type_params.is_empty())
+                || matches!(item, Item::Extension(item) if self.is_generic_extension_template(item))
             {
                 continue;
             }
@@ -221,6 +222,18 @@ impl Monomorphizer {
                         continue;
                     }
                     self.emit_method_specialization(items, &receiver, &name, static_, &args);
+                }
+                PendingSpecialization::Extension {
+                    template_index,
+                    receiver,
+                    function_args,
+                } => {
+                    self.emit_extension_specialization(
+                        items,
+                        template_index,
+                        &receiver,
+                        &function_args,
+                    );
                 }
             }
         }

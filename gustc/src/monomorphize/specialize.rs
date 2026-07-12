@@ -258,4 +258,107 @@ impl Monomorphizer {
             args.to_vec(),
         ));
     }
+
+    fn specialize_extension(&mut self, resolution: &ExtensionResolution, span: crate::span::Span) {
+        let extension = self.extensions[resolution.template_index].clone();
+        let name = extension.function.name.as_deref().unwrap_or("<anonymous>");
+        self.record_type_param_bound_checks(
+            format!(
+                "extension method `{}.{}`",
+                type_name(&resolution.receiver),
+                name
+            ),
+            &resolution.receiver_type_params,
+            &extension.type_param_bounds,
+            &resolution.receiver_type_args,
+            span,
+        );
+        self.record_type_param_bound_checks(
+            format!(
+                "extension method `{}.{}`",
+                type_name(&resolution.receiver),
+                name
+            ),
+            &extension.function.type_params,
+            &extension.function.type_param_bounds,
+            &resolution.function_type_args,
+            span,
+        );
+        self.pending.push_back(PendingSpecialization::Extension {
+            template_index: resolution.template_index,
+            receiver: resolution.receiver.clone(),
+            function_args: resolution.function_type_args.clone(),
+        });
+    }
+
+    fn emit_extension_specialization(
+        &mut self,
+        items: &mut Vec<Item>,
+        template_index: usize,
+        receiver: &TypeRef,
+        function_args: &[TypeRef],
+    ) {
+        let Some(template) = self.extensions.get(template_index).cloned() else {
+            return;
+        };
+        let Some(function_name) = template.function.name.clone() else {
+            return;
+        };
+        let emitted_name = if function_args.is_empty() {
+            function_name.clone()
+        } else {
+            specialized_name(&function_name, function_args)
+        };
+        let emitted_key = format!(
+            "extension {}.{}",
+            type_name(receiver),
+            emitted_name
+        );
+        if !self.emitted.insert(emitted_key) {
+            return;
+        }
+
+        let receiver_type_params = self.extension_receiver_type_params(&template);
+        let receiver_type_args = self
+            .solve_type_arguments(
+                "extension",
+                &receiver_type_params,
+                vec![(template.type_ref.clone(), self.expanded_type(receiver))],
+            )
+            .unwrap_or_default();
+        let mut substitutions = receiver_type_params
+            .iter()
+            .cloned()
+            .zip(receiver_type_args)
+            .collect::<HashMap<_, _>>();
+        substitutions.extend(
+            template
+                .function
+                .type_params
+                .iter()
+                .cloned()
+                .zip(function_args.iter().cloned()),
+        );
+
+        let mut specialized = template;
+        specialized.type_ref = receiver.clone();
+        specialized.type_params.clear();
+        specialized.type_param_bounds.clear();
+        specialized.function.name = Some(emitted_name.clone());
+        specialized.function.type_params.clear();
+        specialized.function.type_param_bounds.clear();
+        self.self_types.push(receiver.clone());
+        self.rewrite_function(&mut specialized.function, &substitutions);
+        self.self_types.pop();
+        if specialized.function.return_type.is_none()
+            && let Some(return_type) = self.infer_rewritten_function_return(
+                &specialized.function,
+                &receiver.name,
+                !specialized.static_,
+            )
+        {
+            specialized.function.return_type = Some(return_type);
+        }
+        items.push(Item::Extension(specialized));
+    }
 }
