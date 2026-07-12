@@ -376,6 +376,7 @@ fn lower_for_statement(
                         pattern: LoweredPattern::Variant {
                             enum_name: option_name.clone(),
                             variant: "Some".to_string(),
+                            payload: None,
                         },
                         statements: body,
                     },
@@ -383,6 +384,7 @@ fn lower_for_statement(
                         pattern: LoweredPattern::Variant {
                             enum_name: option_name.clone(),
                             variant: "None".to_string(),
+                            payload: None,
                         },
                         statements: vec![LoweredStatement::Break],
                     },

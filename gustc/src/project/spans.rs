@@ -230,13 +230,7 @@ fn shift_expr(expr: &mut Expr, offset: usize) {
             shift_expr(value, offset);
             for branch in branches {
                 shift_span(&mut branch.span, offset);
-                match &mut branch.pattern {
-                    Pattern::Variant { span, .. }
-                    | Pattern::String { span, .. }
-                    | Pattern::Number { span, .. }
-                    | Pattern::Range { span, .. }
-                    | Pattern::Wildcard { span } => shift_span(span, offset),
-                }
+                shift_pattern(&mut branch.pattern, offset);
                 match &mut branch.body {
                     MatchBranchBody::Expr(expr) => shift_expr(expr, offset),
                     MatchBranchBody::Block(block) => shift_block(block, offset),
@@ -250,6 +244,22 @@ fn shift_expr(expr: &mut Expr, offset: usize) {
         | ExprKind::Char(_)
         | ExprKind::Bool(_)
         | ExprKind::Missing => {}
+    }
+}
+
+fn shift_pattern(pattern: &mut Pattern, offset: usize) {
+    match pattern {
+        Pattern::Variant { payload, span, .. } => {
+            shift_span(span, offset);
+            if let Some(payload) = payload {
+                shift_pattern(payload, offset);
+            }
+        }
+        Pattern::Binding { span, .. }
+        | Pattern::String { span, .. }
+        | Pattern::Number { span, .. }
+        | Pattern::Range { span, .. }
+        | Pattern::Wildcard { span } => shift_span(span, offset),
     }
 }
 

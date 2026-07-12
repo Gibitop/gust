@@ -115,13 +115,36 @@ fn lower_match_pattern(
     diagnostics: &mut Vec<Diagnostic>,
     match_value_name: &str,
 ) -> Option<LoweredPattern> {
+    let matched_value = LoweredExpr {
+        type_: value_type.clone(),
+        kind: LoweredExprKind::MatchValue(match_value_name.to_string()),
+    };
+    lower_match_pattern_with_expr(
+        pattern,
+        value_type,
+        value_mutable,
+        locals,
+        enums,
+        diagnostics,
+        &matched_value,
+    )
+}
+
+fn lower_match_pattern_with_expr(
+    pattern: &Pattern,
+    value_type: &LoweredType,
+    value_mutable: bool,
+    locals: &mut HashMap<String, LoweringLocal>,
+    enums: &HashMap<String, LoweredEnum>,
+    diagnostics: &mut Vec<Diagnostic>,
+    matched_value: &LoweredExpr,
+) -> Option<LoweredPattern> {
     match (pattern, value_type) {
         (
             Pattern::Variant {
                 enum_name,
                 variant,
-                binding,
-                binding_mutable,
+                payload,
                 span,
             },
             LoweredType::Enum(value_enum_name),
@@ -146,42 +169,80 @@ fn lower_match_pattern(
                 return None;
             };
 
-            if let (Some(binding), Some(payload_type)) = (binding, &variant_definition.payload)
-                && binding != "_"
-            {
-                if *binding_mutable && !value_mutable {
+            let lowered_payload = match (payload, &variant_definition.payload) {
+                (Some(payload), Some(payload_type)) => {
+                    let payload_value = LoweredExpr {
+                        type_: payload_type.clone(),
+                        kind: LoweredExprKind::EnumPayload {
+                            object: Box::new(matched_value.clone()),
+                            variant: variant.clone(),
+                        },
+                    };
+                    Some(Box::new(lower_match_pattern_with_expr(
+                        payload,
+                        payload_type,
+                        value_mutable,
+                        locals,
+                        enums,
+                        diagnostics,
+                        &payload_value,
+                    )?))
+                }
+                (Some(_), None) => {
+                    diagnostics.push(Diagnostic::error(
+                        *span,
+                        format!("unit variant `{enum_name}.{variant}` does not bind a payload"),
+                    ));
+                    return None;
+                }
+                (None, Some(payload_type)) => {
                     diagnostics.push(Diagnostic::error(
                         *span,
                         format!(
-                            "cannot bind mutable payload `{binding}` from an immutable match value in executable build"
+                            "`{enum_name}.{variant}` contains a `{}` value; use `{enum_name}.{variant}(value)` to bind it or `{enum_name}.{variant}(_)` to ignore it",
+                            payload_type.name()
+                        ),
+                    ));
+                    return None;
+                }
+                (None, None) => None,
+            };
+
+            Some(LoweredPattern::Variant {
+                enum_name: enum_name.clone(),
+                variant: variant.clone(),
+                payload: lowered_payload,
+            })
+        }
+        (
+            Pattern::Binding {
+                name,
+                mutable,
+                span,
+            },
+            _,
+        ) => {
+            if name != "_" {
+                if *mutable && !value_mutable {
+                    diagnostics.push(Diagnostic::error(
+                        *span,
+                        format!(
+                            "cannot bind mutable payload `{name}` from an immutable match value in executable build"
                         ),
                     ));
                     return None;
                 }
                 locals.insert(
-                    binding.clone(),
+                    name.clone(),
                     LoweringLocal {
-                        type_: payload_type.clone(),
-                        mutable: *binding_mutable,
-                        replacement: Some(LoweredExpr {
-                            type_: payload_type.clone(),
-                            kind: LoweredExprKind::EnumPayload {
-                                object: Box::new(LoweredExpr {
-                                    type_: value_type.clone(),
-                                    kind: LoweredExprKind::MatchValue(match_value_name.to_string()),
-                                }),
-                                variant: variant.clone(),
-                            },
-                        }),
+                        type_: value_type.clone(),
+                        mutable: *mutable,
+                        replacement: Some(matched_value.clone()),
                         captured: false,
                     },
                 );
             }
-
-            Some(LoweredPattern::Variant {
-                enum_name: enum_name.clone(),
-                variant: variant.clone(),
-            })
+            Some(LoweredPattern::Wildcard)
         }
         (Pattern::String { value, .. }, LoweredType::Basic(BasicType::String)) => {
             Some(LoweredPattern::String(value.clone()))

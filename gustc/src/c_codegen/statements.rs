@@ -156,10 +156,23 @@ fn push_c_statement(
 
 fn push_c_match_condition(source: &mut String, temp_name: &str, pattern: &LoweredPattern) {
     match pattern {
-        LoweredPattern::Variant { enum_name, variant } => {
+        LoweredPattern::Variant {
+            enum_name,
+            variant,
+            payload,
+        } => {
+            source.push('(');
             source.push_str(temp_name);
             source.push_str(".gust_tag == ");
             push_c_enum_variant_tag(source, enum_name, variant);
+            if let Some(payload) = payload {
+                source.push_str(" && ");
+                let mut payload_name = temp_name.to_string();
+                payload_name.push_str(".gust_payload.");
+                push_c_local_name(&mut payload_name, variant);
+                push_c_match_condition(source, &payload_name, payload);
+            }
+            source.push(')');
         }
         LoweredPattern::String(value) => {
             source.push_str("gust_rt_string_equal(");
@@ -192,7 +205,7 @@ fn push_c_match_condition(source: &mut String, temp_name: &str, pattern: &Lowere
             push_c_number_literal(source, end, &LoweredType::Basic(BasicType::I32));
             source.push(')');
         }
-        LoweredPattern::Wildcard => source.push_str("true"),
+        LoweredPattern::Wildcard => source.push('1'),
     }
 }
 
@@ -201,4 +214,3 @@ fn push_c_indent(source: &mut String, indent: usize) {
         source.push_str("    ");
     }
 }
-

@@ -1,6 +1,19 @@
 impl Parser {
     fn parse_pattern(&mut self) -> Pattern {
+        self.parse_pattern_with_bindings(false)
+    }
+
+    fn parse_pattern_with_bindings(&mut self, allow_binding: bool) -> Pattern {
         let start = self.current().span;
+        if allow_binding && self.match_keyword(Keyword::Mut) {
+            let name = self.expect_identifier("expected pattern binding");
+            return Pattern::Binding {
+                name,
+                mutable: true,
+                span: start.join(self.previous_span()),
+            };
+        }
+
         if let TokenKind::StringLiteral(value) = self.current().kind.clone() {
             self.advance();
             return Pattern::String { value, span: start };
@@ -45,23 +58,28 @@ impl Parser {
         let variant = path.pop().unwrap_or_default();
         let enum_name = path.join(".");
         if enum_name.is_empty() {
+            if allow_binding {
+                return Pattern::Binding {
+                    name: variant,
+                    mutable: false,
+                    span: start,
+                };
+            }
             self.error_here("expected `.` and enum variant in match pattern");
         }
-        let (binding, binding_mutable) = if self.match_kind(&TokenKind::LeftParen) {
-            let binding_mutable = self.match_keyword(Keyword::Mut);
-            let binding = self.expect_identifier("expected pattern binding");
+        let payload = if self.match_kind(&TokenKind::LeftParen) {
+            let payload = self.parse_pattern_with_bindings(true);
             self.expect_kind(&TokenKind::RightParen, "`)`");
-            (Some(binding), binding_mutable)
+            Some(Box::new(payload))
         } else {
-            (None, false)
+            None
         };
         let span = start.join(self.previous_span());
 
         Pattern::Variant {
             enum_name,
             variant,
-            binding,
-            binding_mutable,
+            payload,
             span,
         }
     }

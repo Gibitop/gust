@@ -221,6 +221,7 @@ impl Analyzer {
                 let value_type = self.validate_expr(value);
                 let value_mutable = self.expr_has_mutable_capability(value);
                 let mut seen = HashSet::new();
+                let mut enum_coverage = EnumPatternCoverage::default();
                 let mut has_wildcard = false;
                 let mut branch_type = None;
 
@@ -233,18 +234,27 @@ impl Analyzer {
                     }
                     self.push_scope();
                     match (&value_type, &branch.pattern) {
-                        (Type::Enum(enum_name), Pattern::Variant { .. }) => {
+                        (Type::Enum(_), Pattern::Variant { .. }) => {
                             if let Some(variant_name) = self.validate_pattern(
                                 &branch.pattern,
-                                Some(enum_name.as_str()),
+                                &value_type,
                                 value_mutable,
-                            ) && !seen.insert(variant_name.clone())
-                            {
-                                self.diagnostics.push(Diagnostic::error(
-                                    branch.pattern.span(),
-                                    format!("duplicate match branch for variant `{variant_name}`"),
-                                ));
+                                None,
+                            ) {
+                                let fully_covers_variant = self
+                                    .pattern_fully_covers_variant_payload(&branch.pattern, &value_type);
+                                if fully_covers_variant && !seen.insert(variant_name.clone()) {
+                                    self.diagnostics.push(Diagnostic::error(
+                                        branch.pattern.span(),
+                                        format!("duplicate match branch for variant `{variant_name}`"),
+                                    ));
+                                }
                             }
+                            self.add_pattern_coverage(
+                                &mut enum_coverage,
+                                &branch.pattern,
+                                &value_type,
+                            );
                         }
                         (Type::Basic(BasicType::String), Pattern::String { value, span }) => {
                             if !seen.insert(value.clone()) {
@@ -288,6 +298,13 @@ impl Analyzer {
                                 ));
                             }
                             has_wildcard = true;
+                            if matches!(value_type, Type::Enum(_)) {
+                                self.add_pattern_coverage(
+                                    &mut enum_coverage,
+                                    &branch.pattern,
+                                    &value_type,
+                                );
+                            }
                         }
                         (Type::Enum(enum_name), Pattern::String { span, .. }) => {
                             self.diagnostics.push(Diagnostic::error(
@@ -338,7 +355,12 @@ impl Analyzer {
                             ));
                         }
                         (Type::Unknown, _) => {
-                            self.validate_pattern(&branch.pattern, None, value_mutable);
+                            self.validate_pattern(
+                                &branch.pattern,
+                                &Type::Unknown,
+                                value_mutable,
+                                None,
+                            );
                         }
                         (_, _) => {}
                     }
@@ -359,12 +381,23 @@ impl Analyzer {
                     && !has_wildcard
                     && let Some(definition) = self.enums.get(enum_name)
                 {
-                    let mut missing = definition
-                        .variants
-                        .keys()
-                        .filter(|name| !seen.contains(*name))
-                        .cloned()
-                        .collect::<Vec<_>>();
+                    let mut missing = if self.enum_coverage_is_exhaustive(
+                        &enum_coverage,
+                        enum_name,
+                    ) {
+                        Vec::new()
+                    } else if let Some(missing) =
+                        self.first_missing_enum_variant(&enum_coverage, enum_name)
+                    {
+                        vec![missing]
+                    } else {
+                        definition
+                            .variants
+                            .keys()
+                            .filter(|name| !seen.contains(*name))
+                            .cloned()
+                            .collect::<Vec<_>>()
+                    };
                     missing.sort();
 
                     if !missing.is_empty() {

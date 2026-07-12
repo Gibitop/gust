@@ -378,8 +378,12 @@ pub enum Pattern {
     Variant {
         enum_name: String,
         variant: String,
-        binding: Option<String>,
-        binding_mutable: bool,
+        payload: Option<Box<Pattern>>,
+        span: Span,
+    },
+    Binding {
+        name: String,
+        mutable: bool,
         span: Span,
     },
     String {
@@ -405,6 +409,7 @@ impl Pattern {
     pub fn span(&self) -> Span {
         match self {
             Pattern::Variant { span, .. }
+            | Pattern::Binding { span, .. }
             | Pattern::String { span, .. }
             | Pattern::Number { span, .. }
             | Pattern::Range { span, .. }
