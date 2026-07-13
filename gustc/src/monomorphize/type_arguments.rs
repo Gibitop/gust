@@ -204,18 +204,24 @@ impl Monomorphizer {
         expected_return: Option<&TypeRef>,
     ) -> Result<Option<GenericTraitMethodResolution>, String> {
         let mut candidates = Vec::new();
+        let (requested_trait, source_method_name) = requested_trait_method(method_name);
 
         for impl_ in &self.impl_declarations {
             let Some(trait_) = self.trait_declarations.get(&impl_.trait_ref.name) else {
                 continue;
             };
+            if requested_trait.is_some_and(|requested| {
+                !trait_name_matches_request(&trait_.name, requested)
+            }) {
+                continue;
+            }
             if trait_.type_params.is_empty() && trait_.associated_types.is_empty() {
                 continue;
             }
             let Some(method) = trait_
                 .methods
                 .iter()
-                .find(|method| method.name == method_name && method.static_ == static_)
+                .find(|method| method.name == source_method_name && method.static_ == static_)
             else {
                 continue;
             };
@@ -335,7 +341,7 @@ impl Monomorphizer {
 
         if candidates.len() > 1 {
             return Err(format!(
-                "generic trait method `{method_name}` is ambiguous for type `{}`",
+                "generic trait method `{source_method_name}` is ambiguous for type `{}`",
                 type_name(receiver)
             ));
         }
