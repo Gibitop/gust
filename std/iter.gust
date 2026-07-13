@@ -3,9 +3,71 @@ from ./option import { Option }
 trait Iterator {
     type Item
     fn next(mut self): Option<Self.Item>
+
+    fn map<U>(mapper: fn(Self.Item): U): Iterator<type Item: U> => MapIterator<Self.Item, U> {
+        iterator: self,
+        mapper: mapper,
+    }
+
+    fn filter(predicate: fn(Self.Item): bool): Iterator<type Item: Self.Item> => FilterIterator<Self.Item> {
+        iterator: self,
+        predicate: predicate,
+    }
+
+    fn collect<C: FromIterator<type Item: Self.Item>>(): C => C.fromIterator(self)
 }
 
 trait Iterable {
     type Item
     fn iterator(): Iterator<type Item: Self.Item>
+}
+
+trait FromIterator {
+    type Item
+    static fn fromIterator(mut iterator: Iterator<type Item: Self.Item>): Self
+}
+
+struct MapIterator<T, U> {
+    iterator: Iterator<type Item: T>
+    mapper: fn(T): U
+}
+
+struct FilterIterator<T> {
+    iterator: Iterator<type Item: T>
+    predicate: fn(T): bool
+}
+
+impl<T, U> Iterator for MapIterator<T, U> {
+    type Item: U
+
+    fn next(mut self): Option<U> {
+        let mapper = self.mapper
+        let value = self.iterator.next()
+        if value.isSome() {
+            return Option<U>.Some(mapper(value.unwrap()))
+        }
+
+        return Option<U>.None
+    }
+}
+
+impl<T> Iterator for FilterIterator<T> {
+    type Item: T
+
+    fn next(mut self): Option<T> {
+        let predicate = self.predicate
+        while true {
+            let value = self.iterator.next()
+            if value.isNone() {
+                return Option<T>.None
+            }
+
+            let item = value.unwrap()
+            if predicate(item) {
+                return Option<T>.Some(item)
+            }
+        }
+
+        return Option<T>.None
+    }
 }

@@ -67,12 +67,12 @@ impl Analyzer {
 
                 Type::Unknown
             }
-            ExprKind::CollectionLiteral { items, .. } => {
+            ExprKind::CollectionLiteral { items, collection } => {
                 for item in items {
                     self.validate_expr(item);
                 }
 
-                Type::Unknown
+                self.validate_type(collection)
             }
             ExprKind::Call { callee, args } => {
                 if let ExprKind::Member { object, name } = &callee.kind

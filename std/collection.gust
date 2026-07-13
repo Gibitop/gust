@@ -1,12 +1,5 @@
-from ./iter import { Iterator }
-
 trait FromElements {
     type Item
     static fn withElementCapacity(capacity: usize): Self
     fn add(mut self, value: Self.Item): void
-}
-
-trait FromIterator {
-    type Item
-    static fn fromIterator(mut iterator: Iterator<type Item: Self.Item>): Self
 }

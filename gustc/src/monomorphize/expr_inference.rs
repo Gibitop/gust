@@ -221,6 +221,14 @@ impl Monomorphizer {
                 if name == "clone" {
                     return self.infer_expr_type(object);
                 }
+                if name == "toString" && args.is_empty()
+                    && self
+                        .infer_expr_type(object)
+                        .and_then(|type_ref| crate::ast::BasicType::from_name(&type_ref.name))
+                        .is_some_and(|type_| type_.is_numeric())
+                {
+                    return Some(inferred("string"));
+                }
                 if let ExprKind::Identifier(type_name) = &object.kind {
                     if self.enum_variant_payload(type_name, name).is_some() {
                         return Some(inferred(type_name));
@@ -366,7 +374,10 @@ impl Monomorphizer {
         match &expr.kind {
             ExprKind::Identifier(name)
                 if self.concrete_structs.contains(name)
-                    || self.struct_templates.contains_key(name) =>
+                    || self.struct_templates.contains_key(name)
+                    || self.specializations.get(name).is_some_and(|(generic_name, _)| {
+                        self.struct_templates.contains_key(generic_name)
+                    }) =>
             {
                 Some(TypeRef {
                     name: name.clone(),

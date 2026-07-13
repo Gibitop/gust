@@ -245,6 +245,7 @@ impl Parser {
             (self.expect_keyword(Keyword::Fn, "`fn`").span, false)
         };
         let name = self.expect_callable_name("expected trait method name");
+        let (type_params, type_param_bounds) = self.parse_type_params();
         self.expect_kind(&TokenKind::LeftParen, "`(`");
         let params = self.parse_params();
         self.expect_kind(&TokenKind::RightParen, "`)`");
@@ -255,12 +256,23 @@ impl Parser {
             None
         };
 
+        let body = if self.check_kind(&TokenKind::LeftBrace) {
+            Some(FunctionBody::Block(self.parse_block()))
+        } else if self.match_kind(&TokenKind::FatArrow) {
+            Some(FunctionBody::Expr(Box::new(self.parse_expression())))
+        } else {
+            None
+        };
+
         TraitMethodDecl {
             name,
             static_,
+            type_params,
+            type_param_bounds,
             params,
             return_type,
-            span: start.join(self.previous_span()),
+            span: start.join(body.as_ref().map_or_else(|| self.previous_span(), FunctionBody::span)),
+            body,
         }
     }
 
@@ -442,34 +454,52 @@ impl Parser {
         name_span: Span,
     ) -> (TypeRef, Vec<String>, Vec<TypeParamBound>) {
         let mut args = Vec::new();
+        let mut bindings = Vec::new();
         let mut type_params = Vec::new();
         let mut type_param_bounds = Vec::new();
         let mut end = name_span;
 
         if self.match_kind(&TokenKind::Less) {
             while !self.at_eof() && !self.check_type_greater() {
-                let Some(arg) = self.parse_type() else {
-                    break;
-                };
-                if arg.args.is_empty() && arg.function.is_none() && self.match_kind(&TokenKind::Colon) {
-                    if !type_params.contains(&arg.name) {
-                        type_params.push(arg.name.clone());
-                    }
-                    loop {
-                        let trait_ref = self
-                            .parse_type()
-                            .unwrap_or_else(|| self.missing_type(self.current().span));
-                        type_param_bounds.push(TypeParamBound {
-                            param: arg.name.clone(),
-                            span: arg.span.join(trait_ref.span),
-                            trait_ref,
-                        });
-                        if !self.match_kind(&TokenKind::Plus) {
-                            break;
+                if self.current_keyword() == Some(Keyword::Type) {
+                    let binding_start = self.expect_keyword(Keyword::Type, "`type`").span;
+                    let binding_name = self.expect_identifier("expected associated type name");
+                    self.expect_kind(&TokenKind::Colon, "`:`");
+                    let type_ref = self
+                        .parse_type()
+                        .unwrap_or_else(|| self.missing_type(self.current().span));
+                    bindings.push(AssociatedTypeBinding {
+                        name: binding_name,
+                        span: binding_start.join(type_ref.span),
+                        type_ref,
+                    });
+                } else {
+                    let Some(arg) = self.parse_type() else {
+                        break;
+                    };
+                    if arg.args.is_empty()
+                        && arg.function.is_none()
+                        && self.match_kind(&TokenKind::Colon)
+                    {
+                        if !type_params.contains(&arg.name) {
+                            type_params.push(arg.name.clone());
+                        }
+                        loop {
+                            let trait_ref = self
+                                .parse_type()
+                                .unwrap_or_else(|| self.missing_type(self.current().span));
+                            type_param_bounds.push(TypeParamBound {
+                                param: arg.name.clone(),
+                                span: arg.span.join(trait_ref.span),
+                                trait_ref,
+                            });
+                            if !self.match_kind(&TokenKind::Plus) {
+                                break;
+                            }
                         }
                     }
+                    args.push(arg);
                 }
-                args.push(arg);
                 if !self.match_kind(&TokenKind::Comma) {
                     break;
                 }
@@ -482,7 +512,7 @@ impl Parser {
             TypeRef {
                 name,
                 args,
-                bindings: Vec::new(),
+                bindings,
                 function: None,
                 span: name_span.join(end),
             },

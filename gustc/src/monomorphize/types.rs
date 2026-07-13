@@ -22,6 +22,13 @@ impl Monomorphizer {
             .iter()
             .map(String::as_str)
             .chain(type_arg_names(&extension.type_ref))
+            .chain(
+                extension
+                    .type_ref
+                    .bindings
+                    .iter()
+                    .flat_map(|binding| type_names(&binding.type_ref)),
+            )
         {
             if !self.is_known_type_name(name) && !params.iter().any(|param| param == name) {
                 params.push(name.to_string());

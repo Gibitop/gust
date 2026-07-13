@@ -213,6 +213,8 @@ impl Analyzer {
             ExprKind::Identifier(name) => self.lookup(name).is_some_and(|binding| binding.mutable),
             ExprKind::Member { object, .. } => self.expr_has_mutable_capability(object),
             ExprKind::GenericMember { object, .. } => self.expr_has_mutable_capability(object),
+            ExprKind::CollectionLiteral { collection, .. } => self
+                .requires_mutable_capability(&self.type_ref_without_diagnostics(Some(collection))),
             ExprKind::StructInit { name, fields, .. } => {
                 let Some(definition) = self.structs.get(name) else {
                     return false;
@@ -293,7 +295,6 @@ impl Analyzer {
             | ExprKind::Cast { .. }
             | ExprKind::Unary { .. } => true,
             ExprKind::Array(_)
-            | ExprKind::CollectionLiteral { .. }
             | ExprKind::GenericType { .. }
             | ExprKind::Lambda(_)
             | ExprKind::Match { .. }
