@@ -54,6 +54,14 @@ runtime primitive; its compiler-implemented declaration lives in `std/internal/r
 Its allocation and typed storage operations are lowered by the executable backend so future GC
 integration stays behind that boundary.
 
+## Option and Result
+
+`Option<T>` represents expected absence, including collection lookup misses, empty collection
+removal, and iterator exhaustion. `Result<T, E>` represents operations that can either succeed or
+fail with a recoverable error. Standard-library methods panic only when their contract has been
+violated or when the caller explicitly requests extraction with `unwrap`, `unwrapErr`, `expect`,
+or `expectErr`.
+
 ## Syntax
 
 Syntax is very similar to Rust. Notable differences:
@@ -98,6 +106,9 @@ a program uses `panic`, so existing generated C stays unchanged for non-panickin
 statement updates the current frame location to the `panic(...)` source line before printing.
 Function call emission updates the caller frame to the call expression location before entering the
 callee, so caller stack frames point at call sites rather than function definitions.
+
+`panic(...)` is a terminating statement for return-path validation. An exhaustive match whose every
+branch returns a value or panics also satisfies a function's return requirement.
 
 ## Generated C naming
 

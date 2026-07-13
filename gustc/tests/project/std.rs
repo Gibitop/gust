@@ -41,6 +41,116 @@ fn main() {
 }
 
 #[test]
+fn result_methods_link_and_run() {
+    let project = TempProject::new();
+    project.write("std/option.gust", include_str!("../../../std/option.gust"));
+    project.write("std/result.gust", include_str!("../../../std/result.gust"));
+    project.write(
+        "main.gust",
+        r#"from ./std/option import { Option }
+from ./std/result import { Result }
+
+fn main() {
+    let success: Result<i32, string> = Result.Ok(42)
+    let failure: Result<i32, string> = Result.Err("failed")
+
+    if success.isOk() {
+        io.println("true")
+    }
+    if failure.isErr() {
+        io.println("true")
+    }
+    io.println(success.unwrap().toString())
+    io.println(failure.unwrapOr(7).toString())
+    io.println(failure.err().unwrapOr("missing"))
+    io.println(success.ok().unwrap().toString())
+    io.println(failure.unwrapErr())
+    io.println(success.expect("unexpected error").toString())
+    io.println(failure.expectErr("unexpected success"))
+}"#,
+    );
+
+    let result = check_project(&project.path("main.gust")).expect("project should load");
+    assert!(
+        result.diagnostics.is_empty(),
+        "expected Result project to validate, got {:?}",
+        result.diagnostics
+    );
+
+    let lowered = lower_program(&result.program).expect("Result project should lower");
+    let c_path = project.path("result.c");
+    fs::write(&c_path, emit_c(&lowered)).expect("generated C should be written");
+    let executable = project.path("result");
+    let output = Command::new("cc")
+        .arg(&c_path)
+        .arg("-o")
+        .arg(&executable)
+        .output()
+        .expect("C compiler should build Result executable");
+    assert!(
+        output.status.success(),
+        "generated Result C should build: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let output = Command::new(executable)
+        .output()
+        .expect("Result executable should run");
+    assert!(output.status.success());
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "true\ntrue\n42\n7\nfailed\n42\nfailed\n42\nfailed\n"
+    );
+}
+
+#[test]
+fn result_expect_panics_with_the_provided_message() {
+    let project = TempProject::new();
+    project.write("std/option.gust", include_str!("../../../std/option.gust"));
+    project.write("std/result.gust", include_str!("../../../std/result.gust"));
+    project.write(
+        "main.gust",
+        r#"from ./std/result import { Result }
+
+fn main() {
+    let failure: Result<i32, string> = Result.Err("failed")
+    failure.expect("result was required")
+}"#,
+    );
+
+    let result = check_project(&project.path("main.gust")).expect("project should load");
+    assert!(
+        result.diagnostics.is_empty(),
+        "expected Result panic project to validate, got {:?}",
+        result.diagnostics
+    );
+
+    let lowered = lower_program(&result.program).expect("Result panic project should lower");
+    let c_path = project.path("result-panic.c");
+    fs::write(&c_path, emit_c(&lowered)).expect("generated C should be written");
+    let executable = project.path("result-panic");
+    let output = Command::new("cc")
+        .arg(&c_path)
+        .arg("-o")
+        .arg(&executable)
+        .output()
+        .expect("C compiler should build Result panic executable");
+    assert!(
+        output.status.success(),
+        "generated Result panic C should build: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let output = Command::new(executable)
+        .output()
+        .expect("Result panic executable should run");
+    assert_eq!(output.status.code(), Some(101));
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("panic: result was required"),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
 fn string_intrinsics_are_available_without_imports() {
     let project = TempProject::new();
     project.write(
@@ -154,6 +264,7 @@ fn main() {
 fn collection_literals_lower_through_from_elements() {
     let project = TempProject::new();
     project.write("std/option.gust", include_str!("../../../std/option.gust"));
+    project.write("std/result.gust", include_str!("../../../std/result.gust"));
     project.write("std/iter.gust", include_str!("../../../std/iter.gust"));
     project.write(
         "std/collection.gust",
@@ -189,10 +300,13 @@ impl<T> FromElements<T> for TestCollection<T> {
 fn main() {
     let mut values = [1, 2, 3]
     values.push(4)
-    values.set(1, 20)
+    let replaced = values.set(1, 20)
+    let rejected = values.set(10, 100)
     let popped = values.pop()
     let custom: TestCollection<i32> = [5, 6]
     io.println(values.len().toString())
+    io.println(replaced.unwrapOr(-1).toString())
+    io.println(rejected.err().unwrapOr("missing"))
     let iterator = values.iterator()
     let copied = ArrayList.fromIterator(iterator)
     io.println(copied.len().toString())
@@ -242,7 +356,10 @@ fn main() {
         .output()
         .expect("collection executable should run");
     assert!(output.status.success());
-    assert_eq!(String::from_utf8_lossy(&output.stdout), "3\n3\n1\n20\n3\n");
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "3\n2\nindex out of bounds\n3\n1\n20\n3\n"
+    );
 }
 
 #[test]
@@ -343,4 +460,3 @@ fn main() {
 
     lower_program(&result.program).expect("linked enum methods should lower");
 }
-

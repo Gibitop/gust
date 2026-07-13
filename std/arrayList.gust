@@ -1,6 +1,7 @@
 from ./collection import { FromElements, FromIterator }
 from ./iter import { Iterable, Iterator }
 from ./option import { Option }
+from ./result import { Result }
 from ./internal/rawBuffer import { RawBuffer }
 
 struct ArrayList<T> {
@@ -45,17 +46,31 @@ struct ArrayList<T> {
             return Option<T>.None
         }
 
-        return self.storage.read(index)
+        match self.storage.read(index) {
+            Option.Some(value) => {
+                return Option.Some(value)
+            },
+            Option.None => {
+                panic("ArrayList storage invariant violated")
+            },
+        }
     }
 
-    fn set(mut self, index: usize, value: T): Option<T> {
+    fn set(mut self, index: usize, value: T): Result<T, string> {
         if index >= self.count {
-            return Option<T>.None
+            return Result.Err("index out of bounds")
         }
 
         let previous = self.storage.read(index)
         self.storage.write(index, value)
-        return previous
+        match previous {
+            Option.Some(previous) => {
+                return Result.Ok(previous)
+            },
+            Option.None => {
+                panic("ArrayList storage invariant violated")
+            },
+        }
     }
 
     fn push(mut self, value: T) {
@@ -72,7 +87,14 @@ struct ArrayList<T> {
         self.count -= 1
         let value = self.storage.read(self.count)
         self.storage.clear(self.count)
-        return value
+        match value {
+            Option.Some(value) => {
+                return Option.Some(value)
+            },
+            Option.None => {
+                panic("ArrayList storage invariant violated")
+            },
+        }
     }
 
     fn iterator(): Iterator<T> => ArrayListIterator<T> {
@@ -100,7 +122,14 @@ impl<T> Iterator<T> for ArrayListIterator<T> {
 
         let value = self.list.storage.read(self.index)
         self.index += 1
-        return value
+        match value {
+            Option.Some(value) => {
+                return Option.Some(value)
+            },
+            Option.None => {
+                panic("ArrayList storage invariant violated")
+            },
+        }
     }
 }
 

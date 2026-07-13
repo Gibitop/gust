@@ -398,6 +398,7 @@ fn statement_always_returns_value(statement: &Stmt) -> bool {
                     ElseBranch::If(statement) => statement_always_returns_value(statement),
                 }
         }
+        StmtKind::Expr(expr) => expression_never_returns(expr),
         StmtKind::Let { .. }
         | StmtKind::Assign { .. }
         | StmtKind::Return { value: None }
@@ -407,7 +408,22 @@ fn statement_always_returns_value(statement: &Stmt) -> bool {
         | StmtKind::If {
             else_branch: None, ..
         }
-        | StmtKind::For { .. }
-        | StmtKind::Expr(_) => false,
+        | StmtKind::For { .. } => false,
+    }
+}
+
+fn expression_never_returns(expr: &Expr) -> bool {
+    match &expr.kind {
+        ExprKind::Call { callee, .. } => {
+            matches!(&callee.kind, ExprKind::Identifier(name) if name == "panic")
+        }
+        ExprKind::Match { branches, .. } => {
+            !branches.is_empty()
+                && branches.iter().all(|branch| match &branch.body {
+                    MatchBranchBody::Expr(expr) => expression_never_returns(expr),
+                    MatchBranchBody::Block(block) => block_always_returns_value(block),
+                })
+        }
+        _ => false,
     }
 }
