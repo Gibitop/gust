@@ -125,6 +125,12 @@ Struct and enum equality will be introduced with trait-based equality rather tha
 
 `&&` and `||` evaluate left to right and short-circuit the right operand.
 
+When used as an expression statement, `condition && action()` and `condition || action()` are
+conditional execution forms. The left operand must be boolean, while the right operand may be any
+valid expression statement, including a function that returns `void`. The `&&` form executes the
+right operand when the condition is true; the `||` form executes it when the condition is false.
+Logical operators used as values still require boolean operands on both sides.
+
 ## While loops
 
 `while` conditions must be boolean. A `while` body has block scope, so bindings declared inside

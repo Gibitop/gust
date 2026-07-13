@@ -243,3 +243,47 @@ fn main() {
     assert!(source.contains("(false && gust_fn_"));
     assert!(source.contains("(true || gust_fn_"));
 }
+
+#[test]
+fn logical_operators_lower_conditional_execution_statements() {
+    let result = check_source(
+        r#"fn truthy() => true
+fn falsy() => false
+
+fn main() {
+    truthy() && io.println("and")
+    falsy() || io.println("or")
+}"#,
+    );
+
+    assert!(
+        !result.has_errors(),
+        "expected no frontend errors, got {:?}",
+        result.diagnostics
+    );
+
+    let lowered = lower_program(&result.program).expect("conditional execution should lower");
+    let LoweredStatement::If {
+        condition,
+        then_branch,
+        else_branch,
+    } = &lowered.statements[0]
+    else {
+        panic!("expected conditional execution to lower to an if statement");
+    };
+    assert!(matches!(condition.kind, LoweredExprKind::Call { .. }));
+    assert!(matches!(then_branch.as_slice(), [LoweredStatement::Println(_)]));
+    assert!(else_branch.is_none());
+
+    let LoweredStatement::If {
+        condition,
+        then_branch,
+        else_branch,
+    } = &lowered.statements[1]
+    else {
+        panic!("expected conditional execution to lower to an if statement");
+    };
+    assert!(matches!(condition.kind, LoweredExprKind::Not(_)));
+    assert!(matches!(then_branch.as_slice(), [LoweredStatement::Println(_)]));
+    assert!(else_branch.is_none());
+}

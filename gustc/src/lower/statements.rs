@@ -244,6 +244,49 @@ fn lower_expression_statement(
         .map(LoweredStatement::Expr);
     }
 
+    if let ExprKind::Binary {
+        left,
+        op: op @ (BinaryOp::LogicalAnd | BinaryOp::LogicalOr),
+        right,
+    } = &expr.kind
+    {
+        let mut condition = lower_expr(
+            left,
+            locals,
+            signatures,
+            structs,
+            enums,
+            traits,
+            diagnostics,
+            Some(LoweredType::Basic(BasicType::Bool)),
+            "expected supported conditional execution operand in executable builds",
+        )?;
+
+        if *op == BinaryOp::LogicalOr {
+            condition = LoweredExpr {
+                type_: LoweredType::Basic(BasicType::Bool),
+                kind: LoweredExprKind::Not(Box::new(condition)),
+            };
+        }
+
+        let right = lower_expression_statement(
+            right,
+            locals,
+            signatures,
+            structs,
+            enums,
+            traits,
+            diagnostics,
+            return_type,
+        )?;
+
+        return Some(LoweredStatement::If {
+            condition,
+            then_branch: vec![right],
+            else_branch: None,
+        });
+    }
+
     let ExprKind::Call { callee, args } = &expr.kind else {
         diagnostics.push(Diagnostic::error(
             expr.span,

@@ -1,0 +1,9 @@
+fn truthy() => true
+fn falsy() => false
+
+fn main() {
+    truthy() && io.println("truthy() && print")
+    truthy() || io.println("truthy() || print")
+    falsy() && io.println("falsy() && print")
+    falsy() || io.println("falsy() || print")
+}
