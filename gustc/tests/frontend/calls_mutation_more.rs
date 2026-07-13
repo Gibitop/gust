@@ -472,6 +472,26 @@ fn main() {
 }
 
 #[test]
+fn logical_operators_allow_conditional_execution_statements() {
+    let result = check_source(
+        r#"
+fn record() {}
+
+fn main() {
+    true && record()
+    false || record()
+}
+"#,
+    );
+
+    assert!(
+        !result.has_errors(),
+        "expected conditional execution statements to validate, got {:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
 fn logical_operators_require_bool_operands() {
     let result = check_source(
         r#"

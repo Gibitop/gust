@@ -468,9 +468,26 @@ impl Analyzer {
                 self.loop_depth -= 1;
             }
             StmtKind::Expr(expr) => {
-                self.validate_expr(expr);
+                self.validate_expression_statement(expr);
             }
         }
+    }
+
+    fn validate_expression_statement(&mut self, expr: &Expr) {
+        let ExprKind::Binary {
+            left,
+            op: BinaryOp::LogicalAnd | BinaryOp::LogicalOr,
+            right,
+        } = &expr.kind
+        else {
+            self.validate_expr(expr);
+            return;
+        };
+
+        let expected_type = Type::Basic(BasicType::Bool);
+        let left_type = self.validate_expr_with_context(left, Some(expected_type.clone()));
+        self.report_type_mismatch(left.span, expected_type, left_type);
+        self.validate_expression_statement(right);
     }
 
     fn validate_function_value_call(
