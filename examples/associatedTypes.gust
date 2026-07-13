@@ -1,0 +1,50 @@
+trait Producer {
+    type Item
+
+    fn next(): Self.Item
+}
+
+struct Counter {
+    value: i32
+}
+
+impl Producer for Counter {
+    type Item: i32
+
+    fn next() {
+        return self.value
+    }
+}
+
+fn consume<P: Producer<type Item: i32>>(producer: P) {
+    return producer.next()
+}
+
+trait Index<Key> {
+    type Output
+
+    fn index(key: Key): Self.Output
+}
+
+struct Box<T> {
+    value: T
+}
+
+impl<T> Index<usize> for Box<T> {
+    type Output: T
+
+    fn index(key: usize): T {
+        return self.value
+    }
+}
+
+fn read<C: Index<usize>>(collection: C) {
+    return collection.index(0)
+}
+
+fn main() {
+    let producer: Producer<type Item: i32> = Counter { value: 7 }
+    io.println(producer.next().toString())
+    io.println(consume(Counter { value: 9 }).toString())
+    io.println(read(Box { value: 11 }).toString())
+}

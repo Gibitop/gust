@@ -40,6 +40,7 @@ impl Parser {
             return Some(TypeRef {
                 name: "fn".to_string(),
                 args: Vec::new(),
+                bindings: Vec::new(),
                 function: Some(FunctionTypeRef {
                     params,
                     return_type: Box::new(return_type),
@@ -60,10 +61,24 @@ impl Parser {
         }
 
         let mut args = Vec::new();
+        let mut bindings = Vec::new();
         let mut end = self.previous_span();
         if self.match_kind(&TokenKind::Less) {
             while !self.at_eof() && !self.check_type_greater() {
-                if let Some(type_ref) = self.parse_type() {
+                if self.current_keyword() == Some(Keyword::Type) {
+                    let binding_start = self.current().span;
+                    self.expect_keyword(Keyword::Type, "`type`");
+                    let name = self.expect_identifier("expected associated type name");
+                    self.expect_kind(&TokenKind::Colon, "`:`");
+                    let type_ref = self
+                        .parse_type()
+                        .unwrap_or_else(|| self.missing_type(self.current().span));
+                    bindings.push(AssociatedTypeBinding {
+                        name,
+                        span: binding_start.join(type_ref.span),
+                        type_ref,
+                    });
+                } else if let Some(type_ref) = self.parse_type() {
                     args.push(type_ref);
                 }
 
@@ -78,6 +93,7 @@ impl Parser {
         Some(TypeRef {
             name,
             args,
+            bindings,
             function: None,
             span: start.join(end),
         })
@@ -102,6 +118,11 @@ impl Parser {
             }
             TokenKind::ShiftRight | TokenKind::ShiftRightEqual => {
                 self.tokens[self.position] = Token {
+                    kind: TokenKind::Greater,
+                    span: Span::new(token.span.start, token.span.start + 1),
+                    lexeme: ">".to_string(),
+                };
+                self.tokens.insert(self.position + 1, Token {
                     kind: if matches!(token.kind, TokenKind::ShiftRightEqual) {
                         TokenKind::GreaterEqual
                     } else {
@@ -109,12 +130,8 @@ impl Parser {
                     },
                     span: Span::new(token.span.start + 1, token.span.end),
                     lexeme: token.lexeme[1..].to_string(),
-                };
-                Token {
-                    kind: TokenKind::Greater,
-                    span: Span::new(token.span.start, token.span.start + 1),
-                    lexeme: ">".to_string(),
-                }
+                });
+                self.advance()
             }
             _ => {
                 self.error_here("expected `>`");

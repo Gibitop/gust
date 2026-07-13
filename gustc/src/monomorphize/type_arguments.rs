@@ -206,9 +206,12 @@ impl Monomorphizer {
         let mut candidates = Vec::new();
 
         for impl_ in &self.impl_declarations {
-            let Some(trait_) = self.trait_templates.get(&impl_.trait_ref.name) else {
+            let Some(trait_) = self.trait_declarations.get(&impl_.trait_ref.name) else {
                 continue;
             };
+            if trait_.type_params.is_empty() && trait_.associated_types.is_empty() {
+                continue;
+            }
             let Some(method) = trait_
                 .methods
                 .iter()
@@ -235,12 +238,21 @@ impl Monomorphizer {
                 .zip(impl_.trait_ref.args.iter().cloned())
                 .collect::<HashMap<_, _>>();
             trait_substitutions.insert("Self".to_string(), impl_.type_ref.clone());
+            trait_substitutions.extend(impl_.associated_types.iter().map(|associated_type| {
+                (
+                    format!("Self.{}", associated_type.name),
+                    associated_type.type_ref.clone(),
+                )
+            }));
 
             let mut constraints = vec![(impl_.type_ref.clone(), receiver.clone())];
             for (param, arg) in method_params.iter().zip(args) {
                 let Some(expected) = &param.type_ref else {
                     continue;
                 };
+                if matches!(arg.kind, ExprKind::Number(_)) {
+                    continue;
+                }
                 let Some(actual) = self.infer_expr_type(arg) else {
                     continue;
                 };
@@ -281,6 +293,18 @@ impl Monomorphizer {
                     .args
                     .iter()
                     .map(|arg| substitute_type(arg, &impl_substitutions))
+                    .collect(),
+                associated_type_bindings: impl_
+                    .associated_types
+                    .iter()
+                    .map(|associated_type| crate::ast::AssociatedTypeBinding {
+                        name: associated_type.name.clone(),
+                        type_ref: substitute_type(
+                            &associated_type.type_ref,
+                            &impl_substitutions,
+                        ),
+                        span: associated_type.span,
+                    })
                     .collect(),
                 params: method_params
                     .iter()
@@ -680,6 +704,7 @@ impl Monomorphizer {
                 TypeRef {
                     name: specialized_name(&receiver.name, &receiver.args),
                     args: Vec::new(),
+                    bindings: Vec::new(),
                     function: None,
                     span: receiver.span,
                 },

@@ -297,6 +297,78 @@ fn main() {
 }
 
 #[test]
+fn associated_types_lower_through_generic_impls_and_projections() {
+    let result = check_source(
+        r#"trait Index<Key> {
+    type Output
+    fn index(key: Key): Self.Output
+}
+
+struct Box<T> {
+    value: T
+}
+
+impl<T> Index<usize> for Box<T> {
+    type Output: T
+    fn index(key: usize): T => self.value
+}
+
+fn read<C: Index<usize>>(collection: C): C.Output {
+    return collection.index(0)
+}
+
+fn main() {
+    io.println(read(Box { value: 7 }).toString())
+}"#,
+    );
+    assert!(
+        !result.has_errors(),
+        "expected associated types to validate, got {:?}",
+        result.diagnostics
+    );
+
+    let lowered = lower_program(&result.program).expect("associated types should lower");
+    let c = emit_c(&lowered);
+    assert!(c.contains("trait Index<usize, type Output: i32> for Box<i32>.index"));
+    assert!(c.contains("static int32_t"));
+}
+
+#[test]
+fn bound_associated_trait_objects_emit_resolved_vtables() {
+    let result = check_source(
+        r#"trait Producer {
+    type Item
+    fn next(): Self.Item
+}
+
+struct Counter {
+    value: i32
+}
+
+impl Producer for Counter {
+    type Item: i32
+    fn next(): i32 => self.value
+}
+
+fn main() {
+    let producer: Producer<type Item: i32> = Counter { value: 7 }
+    io.println(producer.next().toString())
+}"#,
+    );
+    assert!(
+        !result.has_errors(),
+        "expected associated trait object to validate, got {:?}",
+        result.diagnostics
+    );
+
+    let lowered = lower_program(&result.program).expect("associated trait object should lower");
+    let c = emit_c(&lowered);
+    assert!(c.contains("Producer_type_Item__i32"));
+    assert!(c.contains("gust_method_next"));
+    assert!(c.contains("gust_vtable"));
+}
+
+#[test]
 fn trait_typed_values_lower_to_dynamic_dispatch() {
     let result = check_source(
         r#"impl Describe for Person {

@@ -180,12 +180,20 @@ impl Parser {
         let (type_params, type_param_bounds) = self.parse_type_params();
         self.expect_kind(&TokenKind::LeftBrace, "`{`");
 
+        let mut associated_types = Vec::new();
         let mut methods = Vec::new();
         while !self.at_eof() && !self.check_kind(&TokenKind::RightBrace) {
             if matches!(self.current_keyword(), Some(Keyword::Fn | Keyword::Static)) {
                 methods.push(self.parse_trait_method());
+            } else if self.current_keyword() == Some(Keyword::Type) {
+                let type_start = self.expect_keyword(Keyword::Type, "`type`").span;
+                let name = self.expect_identifier("expected associated type name");
+                associated_types.push(AssociatedTypeDecl {
+                    name,
+                    span: type_start.join(self.previous_span()),
+                });
             } else {
-                self.error_here("expected trait method");
+                self.error_here("expected trait method or associated type");
                 self.advance();
             }
         }
@@ -197,6 +205,7 @@ impl Parser {
             name,
             type_params,
             type_param_bounds,
+            associated_types,
             methods,
             span: start.join(end),
         }
@@ -242,6 +251,7 @@ impl Parser {
             .unwrap_or_else(|| self.missing_type(self.current().span));
         self.expect_kind(&TokenKind::LeftBrace, "`{`");
 
+        let mut associated_types = Vec::new();
         let mut methods = Vec::new();
         while !self.at_eof() && !self.check_kind(&TokenKind::RightBrace) {
             if matches!(self.current_keyword(), Some(Keyword::Fn | Keyword::Static)) {
@@ -262,8 +272,20 @@ impl Parser {
                     static_,
                     span,
                 });
+            } else if self.current_keyword() == Some(Keyword::Type) {
+                let type_start = self.expect_keyword(Keyword::Type, "`type`").span;
+                let name = self.expect_identifier("expected associated type name");
+                self.expect_kind(&TokenKind::Colon, "`:`");
+                let type_ref = self
+                    .parse_type()
+                    .unwrap_or_else(|| self.missing_type(self.current().span));
+                associated_types.push(AssociatedTypeDef {
+                    name,
+                    span: type_start.join(type_ref.span),
+                    type_ref,
+                });
             } else {
-                self.error_here("expected impl method");
+                self.error_here("expected impl method or associated type definition");
                 self.advance();
             }
         }
@@ -276,6 +298,7 @@ impl Parser {
             type_param_bounds,
             trait_ref,
             type_ref,
+            associated_types,
             methods,
             span: start.join(end),
         }
@@ -431,6 +454,7 @@ impl Parser {
             TypeRef {
                 name,
                 args,
+                bindings: Vec::new(),
                 function: None,
                 span: name_span.join(end),
             },

@@ -59,6 +59,7 @@ impl Monomorphizer {
         let self_type = TypeRef {
             name: self_type.to_string(),
             args: Vec::new(),
+            bindings: Vec::new(),
             function: None,
             span: function.span,
         };

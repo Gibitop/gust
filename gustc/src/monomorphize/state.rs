@@ -1,6 +1,7 @@
 struct Monomorphizer {
     struct_templates: HashMap<String, StructDecl>,
     enum_templates: HashMap<String, EnumDecl>,
+    trait_declarations: HashMap<String, TraitDecl>,
     trait_templates: HashMap<String, TraitDecl>,
     impl_declarations: Vec<ImplDecl>,
     impl_templates: Vec<ImplDecl>,
@@ -39,6 +40,7 @@ struct BoundCheck {
 struct GenericTraitMethodResolution {
     trait_name: String,
     trait_args: Vec<TypeRef>,
+    associated_type_bindings: Vec<crate::ast::AssociatedTypeBinding>,
     params: Vec<TypeRef>,
     return_type: TypeRef,
     impl_type_params: Vec<String>,
@@ -59,7 +61,7 @@ struct ExtensionResolution {
 enum PendingSpecialization {
     Struct(String, Vec<TypeRef>),
     Enum(String, Vec<TypeRef>),
-    Trait(String, Vec<TypeRef>),
+    Trait(String, Vec<TypeRef>, Vec<crate::ast::AssociatedTypeBinding>),
     Function(String, Vec<TypeRef>),
     Method {
         receiver: String,

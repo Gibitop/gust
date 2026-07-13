@@ -9,6 +9,7 @@ impl Monomorphizer {
                 self.self_types.push(TypeRef {
                     name: item.name.clone(),
                     args: Vec::new(),
+                    bindings: Vec::new(),
                     function: None,
                     span: item.span,
                 });
@@ -36,6 +37,7 @@ impl Monomorphizer {
                 self.self_types.push(TypeRef {
                     name: item.name.clone(),
                     args: Vec::new(),
+                    bindings: Vec::new(),
                     function: None,
                     span: item.span,
                 });
@@ -72,11 +74,38 @@ impl Monomorphizer {
                 for bound in &mut item.type_param_bounds {
                     self.rewrite_type(&mut bound.trait_ref, substitutions);
                 }
-                self.rewrite_type(&mut item.trait_ref, substitutions);
                 self.rewrite_type(&mut item.type_ref, substitutions);
+                for associated_type in &mut item.associated_types {
+                    self.rewrite_type(&mut associated_type.type_ref, substitutions);
+                }
+                let required_associated_types = self
+                    .trait_declarations
+                    .get(&item.trait_ref.name)
+                    .map(trait_required_associated_type_names)
+                    .unwrap_or_default();
+                item.trait_ref.bindings = item
+                    .associated_types
+                    .iter()
+                    .filter(|associated_type| {
+                        required_associated_types.contains(&associated_type.name)
+                    })
+                    .map(|associated_type| crate::ast::AssociatedTypeBinding {
+                        name: associated_type.name.clone(),
+                        type_ref: associated_type.type_ref.clone(),
+                        span: associated_type.span,
+                    })
+                    .collect();
+                self.rewrite_type(&mut item.trait_ref, substitutions);
                 self.self_types.push(item.type_ref.clone());
+                let mut impl_substitutions = substitutions.clone();
+                impl_substitutions.extend(item.associated_types.iter().map(|associated_type| {
+                    (
+                        format!("Self.{}", associated_type.name),
+                        associated_type.type_ref.clone(),
+                    )
+                }));
                 for member in &mut item.methods {
-                    self.rewrite_function(&mut member.function, substitutions);
+                    self.rewrite_function(&mut member.function, &impl_substitutions);
                 }
                 self.self_types.pop();
             }
@@ -270,7 +299,10 @@ impl Monomorphizer {
             return;
         }
 
+        self.validate_associated_bindings(type_ref);
+
         if type_ref.args.is_empty()
+            && type_ref.bindings.is_empty()
             && let Some(substitution) = substitutions.get(&type_ref.name)
         {
             let span = type_ref.span;
@@ -279,8 +311,77 @@ impl Monomorphizer {
             return;
         }
 
+        if type_ref.args.is_empty()
+            && type_ref.bindings.is_empty()
+            && let Some((receiver_name, associated_type)) = type_ref.name.rsplit_once('.')
+        {
+            let receiver = substitutions
+                .get(receiver_name)
+                .cloned()
+                .or_else(|| {
+                    (receiver_name == "Self")
+                        .then(|| self.self_types.last().cloned())
+                        .flatten()
+                })
+                .or_else(|| {
+                    self.is_known_type_name(receiver_name).then(|| TypeRef {
+                        name: receiver_name.to_string(),
+                        args: Vec::new(),
+                        bindings: Vec::new(),
+                        function: None,
+                        span: type_ref.span,
+                    })
+                });
+            if let Some(receiver) = receiver {
+                match self.resolve_associated_projection(&receiver, associated_type) {
+                    Ok(mut resolved) => {
+                        resolved.span = type_ref.span;
+                        self.rewrite_type(&mut resolved, substitutions);
+                        *type_ref = resolved;
+                        return;
+                    }
+                    Err(0) => {
+                        let declared = self.trait_declarations.values().any(|trait_| {
+                            trait_
+                                .associated_types
+                                .iter()
+                                .any(|decl| decl.name == associated_type)
+                        });
+                        self.diagnostics.push(Diagnostic::error(
+                            type_ref.span,
+                            if declared {
+                                format!(
+                                    "cannot resolve associated type projection `{}.{}`: type `{}` is not known to implement a trait declaring `{}`",
+                                    receiver_name,
+                                    associated_type,
+                                    type_name(&receiver),
+                                    associated_type
+                                )
+                            } else {
+                                format!(
+                                    "unknown associated type projection `{}.{}`",
+                                    receiver_name, associated_type
+                                )
+                            },
+                        ));
+                    }
+                    Err(count) => self.diagnostics.push(Diagnostic::error(
+                        type_ref.span,
+                        format!(
+                            "ambiguous associated type projection `{}.{}`: {count} applicable implementations",
+                            receiver_name, associated_type
+                        ),
+                    )),
+                }
+                return;
+            }
+        }
+
         for arg in &mut type_ref.args {
             self.rewrite_type(arg, substitutions);
+        }
+        for binding in &mut type_ref.bindings {
+            self.rewrite_type(&mut binding.type_ref, substitutions);
         }
 
         if self.struct_templates.contains_key(&type_ref.name) {
@@ -295,9 +396,18 @@ impl Monomorphizer {
             type_ref.args.clear();
         } else if self.trait_templates.contains_key(&type_ref.name) {
             let name = type_ref.name.clone();
-            self.specialize_trait(&name, &type_ref.args, type_ref.span);
-            type_ref.name = specialized_name(&name, &type_ref.args);
+            self.specialize_trait(&name, &type_ref.args, &type_ref.bindings, type_ref.span);
+            type_ref.name = specialized_trait_name(&name, &type_ref.args, &type_ref.bindings);
             type_ref.args.clear();
+            type_ref.bindings.clear();
+        } else if self.trait_declarations.contains_key(&type_ref.name)
+            && !type_ref.bindings.is_empty()
+        {
+            let name = type_ref.name.clone();
+            self.specialize_trait(&name, &type_ref.args, &type_ref.bindings, type_ref.span);
+            type_ref.name = specialized_trait_name(&name, &type_ref.args, &type_ref.bindings);
+            type_ref.args.clear();
+            type_ref.bindings.clear();
         } else if self.concrete_structs.contains(&type_ref.name) && !type_ref.args.is_empty() {
             self.diagnostics.push(Diagnostic::error(
                 type_ref.span,

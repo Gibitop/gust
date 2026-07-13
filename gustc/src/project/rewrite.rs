@@ -101,6 +101,9 @@ impl<'names, 'diagnostics> ModuleRewriter<'names, 'diagnostics> {
                 }
                 self.rewrite_type(&mut item.trait_ref);
                 self.rewrite_type(&mut item.type_ref);
+                for associated_type in &mut item.associated_types {
+                    self.rewrite_type(&mut associated_type.type_ref);
+                }
                 for member in &mut item.methods {
                     self.rewrite_function(&mut member.function);
                 }
@@ -407,6 +410,10 @@ impl<'names, 'diagnostics> ModuleRewriter<'names, 'diagnostics> {
             }
             self.rewrite_type(&mut function.return_type);
             return;
+        }
+
+        for binding in &mut type_ref.bindings {
+            self.rewrite_type(&mut binding.type_ref);
         }
 
         if self.is_local(&type_ref.name) {

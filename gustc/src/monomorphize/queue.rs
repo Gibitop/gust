@@ -1,5 +1,6 @@
 impl Monomorphizer {
     fn run(mut self, program: &Program) -> Result<Program, Vec<Diagnostic>> {
+        self.validate_associated_types(program);
         self.infer_generic_function_returns();
         self.infer_generic_method_returns();
         self.validate_templates();
@@ -10,6 +11,7 @@ impl Monomorphizer {
             if matches!(item, Item::Struct(item) if !item.type_params.is_empty())
                 || matches!(item, Item::Enum(item) if !item.type_params.is_empty())
                 || matches!(item, Item::Trait(item) if !item.type_params.is_empty())
+                || matches!(item, Item::Trait(item) if trait_requires_associated_bindings(item))
                 || matches!(item, Item::Function(item) if !item.type_params.is_empty())
                 || matches!(item, Item::Impl(item) if !item.type_params.is_empty())
                 || matches!(item, Item::Extension(item) if self.is_generic_extension_template(item))
@@ -64,6 +66,7 @@ impl Monomorphizer {
                     self.self_types.push(TypeRef {
                         name: specialized.name.clone(),
                         args: Vec::new(),
+                        bindings: Vec::new(),
                         function: None,
                         span: specialized.span,
                     });
@@ -108,6 +111,7 @@ impl Monomorphizer {
                     self.self_types.push(TypeRef {
                         name: specialized.name.clone(),
                         args: Vec::new(),
+                        bindings: Vec::new(),
                         function: None,
                         span: specialized.span,
                     });
@@ -136,20 +140,26 @@ impl Monomorphizer {
                         .insert(specialized.name.clone(), specialized.clone());
                     items.push(Item::Enum(specialized));
                 }
-                PendingSpecialization::Trait(name, args) => {
-                    let specialized_name = specialized_name(&name, &args);
+                PendingSpecialization::Trait(name, args, bindings) => {
+                    let specialized_name = specialized_trait_name(&name, &args, &bindings);
                     if !self.emitted.insert(specialized_name.clone()) {
                         continue;
                     }
-                    let Some(template) = self.trait_templates.get(&name).cloned() else {
+                    let Some(template) = self.trait_declarations.get(&name).cloned() else {
                         continue;
                     };
-                    let substitutions = template
+                    let mut substitutions = template
                         .type_params
                         .iter()
                         .cloned()
                         .zip(args)
                         .collect::<HashMap<_, _>>();
+                    substitutions.extend(bindings.iter().map(|binding| {
+                        (
+                            format!("Self.{}", binding.name),
+                            binding.type_ref.clone(),
+                        )
+                    }));
                     let mut specialized = template;
                     specialized.name = specialized_name;
                     specialized.type_params.clear();
@@ -289,8 +299,30 @@ impl Monomorphizer {
                     specialized.type_param_bounds.clear();
                     specialized.trait_ref = substitute_type(&template.trait_ref, &substitutions);
                     specialized.type_ref = substitute_type(&template.type_ref, &substitutions);
-                    self.rewrite_type(&mut specialized.trait_ref, &HashMap::new());
                     self.rewrite_type(&mut specialized.type_ref, &HashMap::new());
+                    for associated_type in &mut specialized.associated_types {
+                        associated_type.type_ref =
+                            substitute_type(&associated_type.type_ref, &substitutions);
+                        self.rewrite_type(&mut associated_type.type_ref, &HashMap::new());
+                    }
+                    let required_associated_types = self
+                        .trait_declarations
+                        .get(&specialized.trait_ref.name)
+                        .map(trait_required_associated_type_names)
+                        .unwrap_or_default();
+                    specialized.trait_ref.bindings = specialized
+                        .associated_types
+                        .iter()
+                        .filter(|associated_type| {
+                            required_associated_types.contains(&associated_type.name)
+                        })
+                        .map(|associated_type| crate::ast::AssociatedTypeBinding {
+                            name: associated_type.name.clone(),
+                            type_ref: associated_type.type_ref.clone(),
+                            span: associated_type.span,
+                        })
+                        .collect();
+                    self.rewrite_type(&mut specialized.trait_ref, &HashMap::new());
 
                     let key = format!(
                         "impl {} for {}",
@@ -305,8 +337,17 @@ impl Monomorphizer {
                     }
 
                     self.self_types.push(specialized.type_ref.clone());
+                    let mut impl_substitutions = substitutions.clone();
+                    impl_substitutions.extend(specialized.associated_types.iter().map(
+                        |associated_type| {
+                            (
+                                format!("Self.{}", associated_type.name),
+                                associated_type.type_ref.clone(),
+                            )
+                        },
+                    ));
                     for member in &mut specialized.methods {
-                        self.rewrite_function(&mut member.function, &substitutions);
+                        self.rewrite_function(&mut member.function, &impl_substitutions);
                     }
                     self.self_types.pop();
 

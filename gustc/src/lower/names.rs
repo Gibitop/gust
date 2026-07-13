@@ -80,6 +80,13 @@ fn requested_trait_name(name: &str) -> Option<&str> {
     name.rsplit_once("::").map(|(trait_name, _)| trait_name)
 }
 
+fn trait_has_positional_type_arguments(name: &str) -> bool {
+    name.split_once('<')
+        .and_then(|(_, arguments)| arguments.strip_suffix('>'))
+        .and_then(|arguments| arguments.split(',').next())
+        .is_some_and(|argument| !argument.trim_start().starts_with("type "))
+}
+
 fn static_method_name(type_name: &str, function_name: &str) -> String {
     format!("static {type_name}.{function_name}")
 }
@@ -181,4 +188,3 @@ fn find_lowered_struct_by_source_name(
 fn match_temp_name(span: Span) -> String {
     format!("internal_match_value_{}", span.start)
 }
-

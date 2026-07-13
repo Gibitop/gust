@@ -590,7 +590,7 @@ impl Analyzer {
                     ),
                 ));
             }
-            let skip_unqualified = trait_name.contains('<');
+            let skip_unqualified = trait_has_positional_type_arguments(&trait_name);
             if !skip_unqualified && trait_methods.insert(trait_method_name, signature).is_some() {
                 self.diagnostics.push(Diagnostic::error(
                     method.span,

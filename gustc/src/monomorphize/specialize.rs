@@ -11,6 +11,7 @@ impl Monomorphizer {
         let receiver_type = TypeRef {
             name: receiver.to_string(),
             args: Vec::new(),
+            bindings: Vec::new(),
             function: None,
             span: args
                 .first()
@@ -60,6 +61,7 @@ impl Monomorphizer {
         let receiver_type = TypeRef {
             name: receiver.to_string(),
             args: Vec::new(),
+            bindings: Vec::new(),
             function: None,
             span: args
                 .first()
@@ -179,8 +181,20 @@ impl Monomorphizer {
         );
     }
 
-    fn specialize_trait(&mut self, name: &str, args: &[TypeRef], span: crate::span::Span) {
-        let expected = self.trait_templates[name].type_params.len();
+    fn specialize_trait(
+        &mut self,
+        name: &str,
+        args: &[TypeRef],
+        bindings: &[crate::ast::AssociatedTypeBinding],
+        span: crate::span::Span,
+    ) {
+        let Some(template) = self.trait_declarations.get(name).cloned() else {
+            return;
+        };
+        if args.is_empty() && bindings.is_empty() {
+            return;
+        }
+        let expected = template.type_params.len();
         if args.len() != expected {
             self.diagnostics.push(Diagnostic::error(
                 span,
@@ -192,7 +206,6 @@ impl Monomorphizer {
             return;
         }
 
-        let template = self.trait_templates[name].clone();
         self.record_type_param_bound_checks(
             format!("generic trait `{name}`"),
             &template.type_params,
@@ -201,14 +214,21 @@ impl Monomorphizer {
             span,
         );
 
+        if bindings.is_empty() && trait_requires_associated_bindings(&template) {
+            return;
+        }
+
         self.pending.push_back(PendingSpecialization::Trait(
             name.to_string(),
             args.to_vec(),
+            bindings.to_vec(),
         ));
-        self.specializations.insert(
-            specialized_name(name, args),
-            (name.to_string(), args.to_vec()),
-        );
+        if bindings.is_empty() {
+            self.specializations.insert(
+                specialized_name(name, args),
+                (name.to_string(), args.to_vec()),
+            );
+        }
     }
 
     fn specialize_function(&mut self, name: &str, args: &[TypeRef]) {
@@ -229,7 +249,7 @@ impl Monomorphizer {
                 .cloned()
                 .zip(args.iter().cloned())
                 .collect::<HashMap<_, _>>();
-            let params = template
+            let mut params: Vec<Option<TypeRef>> = template
                 .params
                 .iter()
                 .map(|param| {
@@ -239,17 +259,24 @@ impl Monomorphizer {
                         .map(|type_ref| substitute_type(type_ref, &substitutions))
                 })
                 .collect();
+            for type_ref in params.iter_mut().flatten() {
+                self.rewrite_type(type_ref, &substitutions);
+            }
             self.function_params
                 .insert(specialized_name.clone(), params);
             if let Some(return_type) = &template.return_type {
+                let mut return_type = substitute_type(return_type, &substitutions);
+                self.rewrite_type(&mut return_type, &substitutions);
                 self.function_returns.insert(
                     specialized_name,
-                    substitute_type(return_type, &substitutions),
+                    return_type,
                 );
             } else if let Some(return_type) = self.generic_function_returns.get(name) {
+                let mut return_type = substitute_type(return_type, &substitutions);
+                self.rewrite_type(&mut return_type, &substitutions);
                 self.function_returns.insert(
                     specialized_name,
-                    substitute_type(return_type, &substitutions),
+                    return_type,
                 );
             }
         }

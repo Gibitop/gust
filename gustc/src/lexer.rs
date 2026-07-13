@@ -85,6 +85,7 @@ pub enum Keyword {
     Struct,
     Trait,
     True,
+    Type,
     While,
 }
 
@@ -427,6 +428,7 @@ impl<'source> Lexer<'source> {
             "struct" => TokenKind::Keyword(Keyword::Struct),
             "trait" => TokenKind::Keyword(Keyword::Trait),
             "true" => TokenKind::Keyword(Keyword::True),
+            "type" => TokenKind::Keyword(Keyword::Type),
             "while" => TokenKind::Keyword(Keyword::While),
             _ => TokenKind::Identifier(lexeme.clone()),
         };
