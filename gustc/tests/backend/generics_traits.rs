@@ -145,6 +145,74 @@ fn main() {
 }
 
 #[test]
+fn generic_closures_specialize_function_types_and_capture_layouts() {
+    let result = check_source(
+        r#"fn makeIdentity<T>(): fn(T): T => fn(value) => value
+
+fn makeStored<T>(value: T): fn(): T {
+    let stored = value
+    return fn() => stored
+}
+
+fn identity<T>(value: T): T => value
+
+fn apply<T>(value: T, transform: fn(T): T): T => transform(value)
+
+fn passThrough<T, U>(transform: fn(T): U): fn(T): U => transform
+
+fn main() {
+    let numberIdentity: fn(i32): i32 = makeIdentity<i32>()
+    let textIdentity: fn(string): string = makeIdentity<string>()
+    let result = apply(41, identity)
+    let numberValue = makeStored(7)
+    let textValue = makeStored("closure")
+    let stringify: fn(i32): string = passThrough(fn(value) => value.toString())
+
+    io.println(numberIdentity(42).toString())
+    io.println(textIdentity("gust"))
+    io.println(result.toString())
+    io.println(numberValue().toString())
+    io.println(textValue())
+    io.println(stringify(9))
+}"#,
+    );
+    assert!(
+        !result.has_errors(),
+        "expected generic closures to validate, got {:?}",
+        result.diagnostics
+    );
+
+    let lowered = lower_program(&result.program).expect("generic closures should lower");
+    assert!(lowered.closure_functions.iter().any(|function| {
+        function.params.len() == 1
+            && function.params[0].type_ == basic(BasicType::I32)
+            && function.return_type == basic(BasicType::I32)
+    }));
+    assert!(lowered.closure_functions.iter().any(|function| {
+        function.params.len() == 1
+            && function.params[0].type_ == basic(BasicType::String)
+            && function.return_type == basic(BasicType::String)
+    }));
+    assert!(lowered.closure_functions.iter().any(|function| {
+        function.captures.len() == 1
+            && function.captures[0].name == "stored"
+            && function.captures[0].type_ == basic(BasicType::I32)
+    }));
+    assert!(lowered.closure_functions.iter().any(|function| {
+        function.captures.len() == 1
+            && function.captures[0].name == "stored"
+            && function.captures[0].type_ == basic(BasicType::String)
+    }));
+
+    let c = emit_c(&lowered);
+    assert!(c.contains("int32_t (*gust_call)(void*, int32_t)"));
+    assert!(c.contains("gust_rt_string (*gust_call)(void*, gust_rt_string)"));
+    assert!(c.contains("int32_t* gust_stored"));
+    assert!(c.contains("gust_rt_string* gust_stored"));
+    assert!(c.contains("passThrough<i32, string>"));
+}
+
+#[test]
 fn generic_method_specializations_emit_distinct_c_methods() {
     let result = check_source(
         r#"enum Option<T> {

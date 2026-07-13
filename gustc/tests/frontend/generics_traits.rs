@@ -180,6 +180,52 @@ fn main() {
 }
 
 #[test]
+fn generic_function_values_infer_from_function_contexts_or_require_explicit_arguments() {
+    let inferred = check_source(
+        r#"fn identity<T>(value: T): T => value
+
+fn apply<T>(value: T, transform: fn(T): T): T => transform(value)
+
+fn main() {
+    let result = apply(41, identity)
+    io.println(result.toString())
+}"#,
+    );
+    assert!(
+        !inferred.has_errors(),
+        "expected a contextual generic function value to validate, got {:?}",
+        inferred.diagnostics
+    );
+
+    let explicit = check_source(
+        r#"fn identity<T>(value: T): T => value
+
+fn main() {
+    let numberIdentity = identity<i32>
+    io.println(numberIdentity(42).toString())
+}"#,
+    );
+    assert!(
+        !explicit.has_errors(),
+        "expected an explicit generic function value to validate, got {:?}",
+        explicit.diagnostics
+    );
+
+    let ambiguous = check_source(
+        r#"fn identity<T>(value: T): T => value
+
+fn main() {
+    let value = identity
+}"#,
+    );
+    assert!(ambiguous.diagnostics.iter().any(|diagnostic| {
+        diagnostic.message.contains(
+            "cannot infer type arguments for generic function value `identity` without an expected function type",
+        )
+    }));
+}
+
+#[test]
 fn generic_structs_require_the_declared_type_argument_count() {
     let missing = check_source(
         r#"struct Box<T> {
@@ -830,4 +876,3 @@ fn main() {}"#,
             .contains("conflicting implementations of trait `Describe` for type `Box<T>`")
     }));
 }
-
