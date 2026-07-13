@@ -277,6 +277,57 @@ fn push_c_struct_runtime_helpers(source: &mut String, program: &LoweredProgram) 
     }
 }
 
+fn push_c_panic_runtime(source: &mut String) {
+    source.push_str("typedef struct gust_rt_stack_frame {\n");
+    source.push_str("    const char* gust_name;\n");
+    source.push_str("    const char* gust_path;\n");
+    source.push_str("    size_t gust_line;\n");
+    source.push_str("    size_t gust_column;\n");
+    source.push_str("} gust_rt_stack_frame;\n\n");
+    source.push_str("static gust_rt_stack_frame gust_rt_stack[1024];\n");
+    source.push_str("static size_t gust_rt_stack_len = 0;\n\n");
+    source.push_str(
+        "static void gust_rt_stack_push(const char* name, const char* path, size_t line, size_t column) {\n",
+    );
+    source.push_str("    if (gust_rt_stack_len < 1024) {\n");
+    source.push_str("        gust_rt_stack[gust_rt_stack_len].gust_name = name;\n");
+    source.push_str("        gust_rt_stack[gust_rt_stack_len].gust_path = path;\n");
+    source.push_str("        gust_rt_stack[gust_rt_stack_len].gust_line = line;\n");
+    source.push_str("        gust_rt_stack[gust_rt_stack_len].gust_column = column;\n");
+    source.push_str("        gust_rt_stack_len++;\n");
+    source.push_str("    }\n");
+    source.push_str("}\n\n");
+    source.push_str(
+        "static void gust_rt_stack_update(const char* path, size_t line, size_t column) {\n",
+    );
+    source.push_str("    if (gust_rt_stack_len > 0) {\n");
+    source.push_str("        gust_rt_stack[gust_rt_stack_len - 1].gust_path = path;\n");
+    source.push_str("        gust_rt_stack[gust_rt_stack_len - 1].gust_line = line;\n");
+    source.push_str("        gust_rt_stack[gust_rt_stack_len - 1].gust_column = column;\n");
+    source.push_str("    }\n");
+    source.push_str("}\n\n");
+    source.push_str("static void gust_rt_stack_pop(void) {\n");
+    source.push_str("    if (gust_rt_stack_len > 0) {\n");
+    source.push_str("        gust_rt_stack_len--;\n");
+    source.push_str("    }\n");
+    source.push_str("}\n\n");
+    source.push_str("static void gust_rt_panic(gust_rt_string message) {\n");
+    source.push_str("    fputs(\"panic: \", stderr);\n");
+    source.push_str("    fwrite(message.gust_data, 1, message.gust_byte_len, stderr);\n");
+    source.push_str("    fputc('\\n', stderr);\n");
+    source.push_str("    fputs(\"stack trace:\\n\", stderr);\n");
+    source.push_str("    for (size_t index = gust_rt_stack_len; index > 0; index--) {\n");
+    source.push_str("        fputs(\"  at \", stderr);\n");
+    source.push_str("        fputs(gust_rt_stack[index - 1].gust_name, stderr);\n");
+    source.push_str("        fputs(\" (\", stderr);\n");
+    source.push_str("        fputs(gust_rt_stack[index - 1].gust_path, stderr);\n");
+    source.push_str("        fprintf(stderr, \":%zu:%zu\", gust_rt_stack[index - 1].gust_line, gust_rt_stack[index - 1].gust_column);\n");
+    source.push_str("        fputs(\")\\n\", stderr);\n");
+    source.push_str("    }\n");
+    source.push_str("    exit(101);\n");
+    source.push_str("}\n\n");
+}
+
 fn push_c_raw_buffer_clone_element(source: &mut String, type_: &LoweredType) {
     match type_ {
         LoweredType::Struct(name) => {

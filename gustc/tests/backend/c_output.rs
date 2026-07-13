@@ -443,3 +443,122 @@ fn println_rejects_non_string_operands() {
     );
 }
 
+#[test]
+fn panic_emits_runtime_stack_trace_helpers() {
+    let source = r#"fn fail() {
+    panic("boom")
+}
+
+fn main() {
+    fail()
+}"#;
+    let result = check_source(source);
+
+    assert!(
+        !result.has_errors(),
+        "expected no frontend errors, got {:?}",
+        result.diagnostics
+    );
+
+    let lowered =
+        lower_program_with_source(&result.program, "panic.gust", source).expect("panic should lower");
+    let source = emit_c(&lowered);
+
+    assert!(source.contains("static void gust_rt_panic(gust_rt_string message)"));
+    assert!(source.contains("fputs(\"panic: \", stderr);"));
+    assert!(source.contains("fputs(\"stack trace:\\n\", stderr);"));
+    assert!(source.contains("exit(101);"));
+    assert!(source.contains("gust_rt_stack_push(\"main\", \"panic.gust\", 5, 1);"));
+    assert!(source.contains("gust_rt_stack_push(\"fail\", \"panic.gust\", 1, 1);"));
+    assert!(source.contains("gust_rt_stack_update(\"panic.gust\", 2, 5);"));
+    assert!(source.contains("gust_rt_panic((gust_rt_string){"));
+}
+
+#[test]
+fn panic_exits_non_zero_and_prints_stack_trace() {
+    let source = r#"fn fail() {
+    panic("boom")
+}
+
+fn wrapper() {
+    fail()
+}
+
+fn main() {
+    wrapper()
+}"#;
+    let result = check_source(source);
+
+    assert!(
+        !result.has_errors(),
+        "expected no frontend errors, got {:?}",
+        result.diagnostics
+    );
+
+    let lowered =
+        lower_program_with_source(&result.program, "panic.gust", source).expect("panic should lower");
+    let source = emit_c(&lowered);
+    let test_dir = std::env::temp_dir().join(format!("gust-panic-test-{}", std::process::id()));
+    fs::create_dir_all(&test_dir).expect("panic test temp dir should be created");
+    let c_path = test_dir.join("panic.c");
+    let executable = test_dir.join("panic");
+    fs::write(&c_path, source).expect("generated C should be written");
+
+    let output = Command::new("cc")
+        .arg(&c_path)
+        .arg("-o")
+        .arg(&executable)
+        .output()
+        .expect("C compiler should build panic executable");
+    assert!(
+        output.status.success(),
+        "generated panic C should build: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let output = Command::new(&executable)
+        .output()
+        .expect("panic executable should run");
+    assert_eq!(output.status.code(), Some(101));
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "");
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("panic: boom"), "{stderr}");
+    assert!(stderr.contains("stack trace:\n"), "{stderr}");
+    assert!(stderr.contains("  at fail (panic.gust:2:5)\n"), "{stderr}");
+    assert!(stderr.contains("  at wrapper (panic.gust:6:5)\n"), "{stderr}");
+    assert!(stderr.contains("  at main (panic.gust:10:5)\n"), "{stderr}");
+    assert!(
+        stderr.find("  at fail (panic.gust:2:5)\n")
+            < stderr.find("  at wrapper (panic.gust:6:5)\n")
+            && stderr.find("  at wrapper (panic.gust:6:5)\n")
+                < stderr.find("  at main (panic.gust:10:5)\n"),
+        "{stderr}"
+    );
+}
+
+#[test]
+fn panic_rejects_non_string_operands() {
+    let result = check_source(
+        r#"fn main() {
+    panic(1)
+}"#,
+    );
+
+    assert!(
+        result.has_errors(),
+        "expected frontend type error for panic, got {:?}",
+        result.diagnostics
+    );
+    assert!(
+        result
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.severity == Severity::Error
+                && diagnostic
+                    .message
+                    .contains("expected value of type `string`, got `i32`")),
+        "expected string panic diagnostic, got {:?}",
+        result.diagnostics
+    );
+}

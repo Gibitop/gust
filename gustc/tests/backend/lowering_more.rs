@@ -94,6 +94,7 @@ fn main() {
         lowered.functions[0],
         LoweredFunction {
             name: "makeLang".to_string(),
+            location: source_location(1),
             params: vec![],
             return_type: lang_type.clone(),
             statements: vec![],
@@ -125,6 +126,7 @@ fn main() {
         lowered.functions[1],
         LoweredFunction {
             name: "getName".to_string(),
+            location: source_location(1),
             params: vec![LoweredParam {
                 name: "lang".to_string(),
                 type_: lang_type.clone(),
@@ -153,19 +155,21 @@ fn main() {
                     kind: LoweredExprKind::Call {
                         name: "makeLang".to_string(),
                         args: vec![],
+                        location: source_location(1),
                     },
                 },
             },
             LoweredStatement::Println(LoweredExpr {
                 type_: basic(BasicType::String),
-                kind: LoweredExprKind::Call {
-                    name: "getName".to_string(),
-                    args: vec![LoweredExpr {
-                        type_: lang_type.clone(),
-                        kind: LoweredExprKind::Local("lang".to_string()),
-                    }],
-                },
-            }),
+                    kind: LoweredExprKind::Call {
+                        name: "getName".to_string(),
+                        args: vec![LoweredExpr {
+                            type_: lang_type.clone(),
+                            kind: LoweredExprKind::Local("lang".to_string()),
+                        }],
+                        location: source_location(1),
+                    },
+                }),
             LoweredStatement::Println(LoweredExpr {
                 type_: basic(BasicType::String),
                 kind: LoweredExprKind::FieldAccess {
@@ -174,6 +178,7 @@ fn main() {
                         kind: LoweredExprKind::Call {
                             name: "makeLang".to_string(),
                             args: vec![],
+                            location: source_location(1),
                         },
                     }),
                     field: "name".to_string(),
@@ -182,4 +187,3 @@ fn main() {
         ]
     );
 }
-

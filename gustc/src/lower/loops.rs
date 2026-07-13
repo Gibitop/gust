@@ -216,6 +216,7 @@ fn lower_for_statement(
                     object: Box::new(iterable),
                     method: "iterator".to_string(),
                     args: Vec::new(),
+                    location: lower_source_location(statement.span),
                 },
             }
         } else {
@@ -244,6 +245,7 @@ fn lower_for_statement(
                 kind: LoweredExprKind::Call {
                     name: function_name,
                     args: vec![iterable],
+                    location: lower_source_location(statement.span),
                 },
             }
         };
@@ -346,6 +348,7 @@ fn lower_for_statement(
             }),
             method: "next".to_string(),
             args: Vec::new(),
+            location: lower_source_location(statement.span),
         },
     };
 

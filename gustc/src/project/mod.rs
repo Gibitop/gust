@@ -9,6 +9,7 @@ use crate::ast::{
 };
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::lexer::Lexer;
+use crate::lower::LoweringSourceFile;
 use crate::parser::Parser;
 use crate::semantic::validate;
 use crate::span::{SourceMap, Span};
@@ -29,9 +30,21 @@ impl ProjectCompileResult {
 
 pub struct ProjectSources {
     files: Vec<SourceFile>,
+    root: PathBuf,
 }
 
 impl ProjectSources {
+    pub fn to_lowering_source_files(&self) -> Vec<LoweringSourceFile> {
+        self.files
+            .iter()
+            .map(|file| LoweringSourceFile {
+                path: relative_source_path(&self.root, &file.path),
+                source: file.source.clone(),
+                offset: file.offset,
+            })
+            .collect()
+    }
+
     pub fn render(&self, diagnostic: &Diagnostic) -> String {
         let file = self
             .files
@@ -94,6 +107,10 @@ pub fn check_project(path: &Path) -> Result<ProjectCompileResult, String> {
             entry_path.display()
         )
     })?;
+    let root = entry_path
+        .parent()
+        .unwrap_or_else(|| Path::new("."))
+        .to_path_buf();
     let mut loader = ProjectLoader::new();
     loader.load_module(entry_path, "<entry>".to_string(), true, None);
     if let Some(error) = loader.load_error {
@@ -122,8 +139,34 @@ pub fn check_project(path: &Path) -> Result<ProjectCompileResult, String> {
         diagnostics,
         sources: ProjectSources {
             files: loader.sources,
+            root,
         },
     })
+}
+
+fn relative_source_path(root: &Path, path: &Path) -> String {
+    if let Ok(relative) = path.strip_prefix(root) {
+        return relative.to_string_lossy().into_owned();
+    }
+
+    let mut prefix = PathBuf::new();
+    for ancestor in root.ancestors() {
+        if let Ok(relative) = path.strip_prefix(ancestor) {
+            let suffix = relative.to_string_lossy();
+            if suffix.is_empty() {
+                return prefix.to_string_lossy().into_owned();
+            }
+            if prefix.as_os_str().is_empty() {
+                return suffix.into_owned();
+            }
+            return prefix.join(relative).to_string_lossy().into_owned();
+        }
+        prefix.push("..");
+    }
+
+    path.file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_else(|| path.to_string_lossy().into_owned())
 }
 
 include!("loader.rs");

@@ -595,7 +595,7 @@ fn main() {
     assert!(extension.params.is_empty());
 
     let LoweredStatement::Println(LoweredExpr {
-        kind: LoweredExprKind::Call { name, args },
+        kind: LoweredExprKind::Call { name, args, .. },
         ..
     }) = &lowered.statements[1]
     else {
@@ -608,4 +608,3 @@ fn main() {
     assert!(source.contains("// Gust function: static Greeter.new"));
     assert!(source.contains("// Gust function: static extension Greeter.default"));
 }
-

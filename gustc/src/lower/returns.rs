@@ -211,6 +211,7 @@ fn lowered_statement_always_returns_value(statement: &LoweredStatement) -> bool 
         | LoweredStatement::LocalCell { .. }
         | LoweredStatement::Assignment { .. }
         | LoweredStatement::Println(_)
+        | LoweredStatement::Panic { .. }
         | LoweredStatement::Expr(_)
         | LoweredStatement::Return(None)
         | LoweredStatement::While { .. }

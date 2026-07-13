@@ -294,6 +294,46 @@ fn lower_expression_statement(
         return Some(LoweredStatement::Println(value));
     }
 
+    let is_panic = matches!(&callee.kind, ExprKind::Identifier(name) if name == "panic");
+
+    if is_panic {
+        if args.len() != 1 {
+            diagnostics.push(Diagnostic::error(
+                expr.span,
+                "`panic` expects exactly one `string` value in executable builds",
+            ));
+            return None;
+        }
+
+        let value = lower_expr(
+            &args[0],
+            locals,
+            signatures,
+            structs,
+            enums,
+            traits,
+            diagnostics,
+            None,
+            "`panic` only accepts `string` values in executable builds",
+        )?;
+
+        if value.type_ != LoweredType::Basic(BasicType::String) {
+            diagnostics.push(Diagnostic::error(
+                args[0].span,
+                format!(
+                    "`panic` only accepts `string` values in executable builds, got `{}`",
+                    value.type_.name()
+                ),
+            ));
+            return None;
+        }
+
+        return Some(LoweredStatement::Panic {
+            message: value,
+            location: lower_source_location(expr.span),
+        });
+    }
+
     lower_expr(
         expr,
         locals,

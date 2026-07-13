@@ -537,6 +537,7 @@ fn lower_function(
 
     Some(LoweredFunction {
         name: name.to_string(),
+        location: lower_source_location(function.span),
         params,
         return_type: signature.return_type.clone(),
         statements,
@@ -740,6 +741,7 @@ fn lower_function_value_expr(
                 kind: LoweredExprKind::Call {
                     name: name.to_string(),
                     args,
+                    location: lower_source_location(span),
                 },
             },
         });

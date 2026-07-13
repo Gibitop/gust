@@ -1,0 +1,16 @@
+fn fail() {
+    io.println("Executing fail()")
+    panic("something went wrong")
+    return 42
+}
+
+fn run() {
+    io.println("Executing run()")
+    io.println(fail().toString())
+}
+
+fn main() {
+    io.println("Executing main()")
+    run()
+    io.println("main() completed")
+}

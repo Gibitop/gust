@@ -86,6 +86,19 @@ The current C backend may temporarily leak heap-allocated string concat results.
 
 Generated C should route operations that will later be runtime-managed through Gust-shaped helpers instead of calling C primitives directly.
 
+## Panics
+
+`panic(message)` is a compiler intrinsic that accepts a single `string` value. Executable builds
+lower it to a Gust runtime helper that prints `panic: <message>` to stderr, prints a Gust call
+stack from the current frame outward with source `path:line:column` locations relative to the
+compilation root, and exits the process with status code 101. For now, the compilation root is the directory
+containing the entry source file; later it should become the Gust project root. Generated user
+functions and `main` maintain that stack with `gust_rt_stack_push` and `gust_rt_stack_pop` only when
+a program uses `panic`, so existing generated C stays unchanged for non-panicking programs. A panic
+statement updates the current frame location to the `panic(...)` source line before printing.
+Function call emission updates the caller frame to the call expression location before entering the
+callee, so caller stack frames point at call sites rather than function definitions.
+
 ## Generated C naming
 
 Generated C reserves `gust_rt_*` for runtime helpers. User-defined symbols must not use this prefix.

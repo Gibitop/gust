@@ -65,6 +65,7 @@ fn statement_uses_type(statement: &LoweredStatement, type_: BasicType) -> bool {
         LoweredStatement::Local { value, .. }
         | LoweredStatement::LocalCell { value, .. }
         | LoweredStatement::Println(value)
+        | LoweredStatement::Panic { message: value, .. }
         | LoweredStatement::Expr(value) => expr_uses_type(value, type_),
         LoweredStatement::Assignment { target, value } => {
             expr_uses_type(target, type_) || expr_uses_type(value, type_)
@@ -146,7 +147,7 @@ fn expr_uses_type(expr: &LoweredExpr, type_: BasicType) -> bool {
             LoweredExprKind::CollectionLiteral { items, .. } => {
                 items.iter().any(|item| expr_uses_type(item, type_))
             }
-            LoweredExprKind::IndirectCall { callee, args }
+            LoweredExprKind::IndirectCall { callee, args, .. }
             | LoweredExprKind::DynamicCall {
                 object: callee,
                 args,
@@ -230,6 +231,7 @@ fn collect_statement_float_to_int_casts(
         LoweredStatement::Local { value, .. }
         | LoweredStatement::LocalCell { value, .. }
         | LoweredStatement::Println(value)
+        | LoweredStatement::Panic { message: value, .. }
         | LoweredStatement::Expr(value) => collect_expr_float_to_int_casts(value, casts),
         LoweredStatement::Assignment { target, value } => {
             collect_expr_float_to_int_casts(target, casts);
@@ -331,7 +333,7 @@ fn collect_expr_float_to_int_casts(
                 collect_expr_float_to_int_casts(item, casts);
             }
         }
-        LoweredExprKind::IndirectCall { callee, args } => {
+        LoweredExprKind::IndirectCall { callee, args, .. } => {
             collect_expr_float_to_int_casts(callee, casts);
             for arg in args {
                 collect_expr_float_to_int_casts(arg, casts);
@@ -429,6 +431,7 @@ fn statement_uses_number_to_string(statement: &LoweredStatement, type_: BasicTyp
         LoweredStatement::Local { value, .. }
         | LoweredStatement::LocalCell { value, .. }
         | LoweredStatement::Println(value)
+        | LoweredStatement::Panic { message: value, .. }
         | LoweredStatement::Expr(value) => expr_uses_number_to_string(value, type_),
         LoweredStatement::Assignment { target, value } => {
             expr_uses_number_to_string(target, type_) || expr_uses_number_to_string(value, type_)
@@ -513,7 +516,7 @@ fn expr_uses_number_to_string(expr: &LoweredExpr, type_: BasicType) -> bool {
         LoweredExprKind::CollectionLiteral { items, .. } => items
             .iter()
             .any(|item| expr_uses_number_to_string(item, type_)),
-        LoweredExprKind::IndirectCall { callee, args }
+        LoweredExprKind::IndirectCall { callee, args, .. }
         | LoweredExprKind::DynamicCall {
             object: callee,
             args,
@@ -571,6 +574,7 @@ fn statement_uses_string_equality(statement: &LoweredStatement) -> bool {
         LoweredStatement::Local { value, .. }
         | LoweredStatement::LocalCell { value, .. }
         | LoweredStatement::Println(value)
+        | LoweredStatement::Panic { message: value, .. }
         | LoweredStatement::Expr(value) => expr_uses_string_equality(value),
         LoweredStatement::Assignment { target, value } => {
             expr_uses_string_equality(target) || expr_uses_string_equality(value)
@@ -637,7 +641,7 @@ fn expr_uses_string_equality(expr: &LoweredExpr) -> bool {
         LoweredExprKind::CollectionLiteral { items, .. } => {
             items.iter().any(expr_uses_string_equality)
         }
-        LoweredExprKind::IndirectCall { callee, args }
+        LoweredExprKind::IndirectCall { callee, args, .. }
         | LoweredExprKind::DynamicCall {
             object: callee,
             args,
@@ -669,6 +673,7 @@ fn statement_uses_string_concat(statement: &LoweredStatement) -> bool {
         LoweredStatement::Local { value, .. }
         | LoweredStatement::LocalCell { value, .. }
         | LoweredStatement::Println(value)
+        | LoweredStatement::Panic { message: value, .. }
         | LoweredStatement::Expr(value) => expr_uses_string_concat(value),
         LoweredStatement::Assignment { target, value } => {
             expr_uses_string_concat(target) || expr_uses_string_concat(value)
@@ -738,7 +743,7 @@ fn expr_uses_string_concat(expr: &LoweredExpr) -> bool {
         LoweredExprKind::CollectionLiteral { items, .. } => {
             items.iter().any(expr_uses_string_concat)
         }
-        LoweredExprKind::IndirectCall { callee, args }
+        LoweredExprKind::IndirectCall { callee, args, .. }
         | LoweredExprKind::DynamicCall {
             object: callee,
             args,
@@ -791,6 +796,7 @@ fn statement_uses_enum_trait_object(statement: &LoweredStatement) -> bool {
         LoweredStatement::Local { value, .. }
         | LoweredStatement::LocalCell { value, .. }
         | LoweredStatement::Println(value)
+        | LoweredStatement::Panic { message: value, .. }
         | LoweredStatement::Expr(value) => expr_uses_enum_trait_object(value),
         LoweredStatement::Assignment { target, value } => {
             expr_uses_enum_trait_object(target) || expr_uses_enum_trait_object(value)
@@ -867,7 +873,7 @@ fn expr_uses_enum_trait_object(expr: &LoweredExpr) -> bool {
         LoweredExprKind::CollectionLiteral { items, .. } => {
             items.iter().any(expr_uses_enum_trait_object)
         }
-        LoweredExprKind::IndirectCall { callee, args }
+        LoweredExprKind::IndirectCall { callee, args, .. }
         | LoweredExprKind::DynamicCall {
             object: callee,
             args,
@@ -887,6 +893,7 @@ fn expr_uses_enum_trait_object(expr: &LoweredExpr) -> bool {
 fn statement_uses_println(statement: &LoweredStatement) -> bool {
     match statement {
         LoweredStatement::Println(_) => true,
+        LoweredStatement::Panic { message, .. } => expr_uses_println(message),
         LoweredStatement::If {
             condition,
             then_branch,
@@ -919,6 +926,110 @@ fn statement_uses_println(statement: &LoweredStatement) -> bool {
         }
         LoweredStatement::Return(value) => value.as_ref().is_some_and(expr_uses_println),
         LoweredStatement::Break | LoweredStatement::Continue => false,
+    }
+}
+
+fn program_uses_panic(program: &LoweredProgram) -> bool {
+    program.statements.iter().any(statement_uses_panic)
+        || program
+            .functions
+            .iter()
+            .any(|function| function.statements.iter().any(statement_uses_panic))
+        || program
+            .closure_functions
+            .iter()
+            .any(|function| function.statements.iter().any(statement_uses_panic))
+}
+
+fn statement_uses_panic(statement: &LoweredStatement) -> bool {
+    match statement {
+        LoweredStatement::Panic { .. } => true,
+        LoweredStatement::Local { value, .. }
+        | LoweredStatement::LocalCell { value, .. }
+        | LoweredStatement::Println(value)
+        | LoweredStatement::Expr(value) => expr_uses_panic(value),
+        LoweredStatement::Assignment { target, value } => {
+            expr_uses_panic(target) || expr_uses_panic(value)
+        }
+        LoweredStatement::Return(value) => value.as_ref().is_some_and(expr_uses_panic),
+        LoweredStatement::If {
+            condition,
+            then_branch,
+            else_branch,
+        } => {
+            expr_uses_panic(condition)
+                || then_branch.iter().any(statement_uses_panic)
+                || else_branch.as_ref().is_some_and(|statements| {
+                    statements.iter().any(statement_uses_panic)
+                })
+        }
+        LoweredStatement::While { condition, body } => {
+            expr_uses_panic(condition) || body.iter().any(statement_uses_panic)
+        }
+        LoweredStatement::Break | LoweredStatement::Continue => false,
+        LoweredStatement::Match {
+            value, decision, ..
+        } => {
+            expr_uses_panic(value)
+                || decision_walk(
+                    decision,
+                    &mut expr_uses_panic,
+                    &mut statement_uses_panic,
+                )
+        }
+    }
+}
+
+fn expr_uses_panic(expr: &LoweredExpr) -> bool {
+    match &expr.kind {
+        LoweredExprKind::StringConcat(left, right) => {
+            expr_uses_panic(left) || expr_uses_panic(right)
+        }
+        LoweredExprKind::PostfixIncrement(operand)
+        | LoweredExprKind::Not(operand)
+        | LoweredExprKind::Negate(operand)
+        | LoweredExprKind::Cast { value: operand, .. } => expr_uses_panic(operand),
+        LoweredExprKind::Logical { left, right, .. }
+        | LoweredExprKind::Arithmetic { left, right, .. }
+        | LoweredExprKind::Comparison { left, right, .. } => {
+            expr_uses_panic(left) || expr_uses_panic(right)
+        }
+        LoweredExprKind::StructLiteral { fields, .. } => {
+            fields.iter().any(|field| expr_uses_panic(&field.value))
+        }
+        LoweredExprKind::EnumLiteral { payload, .. } => {
+            payload.as_ref().is_some_and(|payload| expr_uses_panic(payload))
+        }
+        LoweredExprKind::Match {
+            value, decision, ..
+        } => {
+            expr_uses_panic(value)
+                || decision_walk(
+                    decision,
+                    &mut expr_uses_panic,
+                    &mut statement_uses_panic,
+                )
+        }
+        LoweredExprKind::FieldAccess { object, .. }
+        | LoweredExprKind::TraitObject { value: object, .. }
+        | LoweredExprKind::Clone(object)
+        | LoweredExprKind::NumberToString(object) => expr_uses_panic(object),
+        LoweredExprKind::Call { args, .. } => args.iter().any(expr_uses_panic),
+        LoweredExprKind::CollectionLiteral { items, .. } => items.iter().any(expr_uses_panic),
+        LoweredExprKind::IndirectCall { callee, args, .. }
+        | LoweredExprKind::DynamicCall {
+            object: callee,
+            args,
+            ..
+        } => expr_uses_panic(callee) || args.iter().any(expr_uses_panic),
+        LoweredExprKind::Void
+        | LoweredExprKind::StringLiteral(_)
+        | LoweredExprKind::BoolLiteral(_)
+        | LoweredExprKind::NumberLiteral(_)
+        | LoweredExprKind::Local(_)
+        | LoweredExprKind::LocalCell(_)
+        | LoweredExprKind::CapturedLocal { .. }
+        | LoweredExprKind::Closure { .. } => false,
     }
 }
 
@@ -958,7 +1069,7 @@ fn expr_uses_println(expr: &LoweredExpr) -> bool {
         }
         LoweredExprKind::Call { args, .. } => args.iter().any(expr_uses_println),
         LoweredExprKind::CollectionLiteral { items, .. } => items.iter().any(expr_uses_println),
-        LoweredExprKind::IndirectCall { callee, args }
+        LoweredExprKind::IndirectCall { callee, args, .. }
         | LoweredExprKind::DynamicCall {
             object: callee,
             args,
@@ -1022,6 +1133,7 @@ fn statement_calls_name(statement: &LoweredStatement, name: &str) -> bool {
         LoweredStatement::Local { value, .. }
         | LoweredStatement::LocalCell { value, .. }
         | LoweredStatement::Println(value)
+        | LoweredStatement::Panic { message: value, .. }
         | LoweredStatement::Expr(value) => expr_calls_name(value, name),
         LoweredStatement::Assignment { target, value } => {
             expr_calls_name(target, name) || expr_calls_name(value, name)
@@ -1101,17 +1213,19 @@ fn expr_calls_name(expr: &LoweredExpr, name: &str) -> bool {
         LoweredExprKind::Call {
             name: called_name,
             args,
+            ..
         } => called_name == name || args.iter().any(|arg| expr_calls_name(arg, name)),
         LoweredExprKind::CollectionLiteral {
             constructor,
             add,
             items,
+            ..
         } => {
             constructor == name
                 || add == name
                 || items.iter().any(|item| expr_calls_name(item, name))
         }
-        LoweredExprKind::IndirectCall { callee, args } => {
+        LoweredExprKind::IndirectCall { callee, args, .. } => {
             expr_calls_name(callee, name) || args.iter().any(|arg| expr_calls_name(arg, name))
         }
         LoweredExprKind::DynamicCall { object, args, .. } => {

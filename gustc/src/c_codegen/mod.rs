@@ -4,7 +4,7 @@ use crate::ast::{BasicType, BinaryOp};
 use crate::lower::{
     LoweredClosureFunction, LoweredEnum, LoweredExpr, LoweredExprKind, LoweredFunction,
     LoweredMatchBindSource, LoweredMatchDecision, LoweredMatchTest, LoweredProgram,
-    LoweredStatement, LoweredStruct, LoweredType,
+    LoweredSourceLocation, LoweredStatement, LoweredStruct, LoweredType,
 };
 
 pub fn emit_c(program: &LoweredProgram) -> String {
@@ -33,6 +33,7 @@ pub fn emit_c(program: &LoweredProgram) -> String {
         .any(|struct_| is_string_builder_name(&struct_.name));
     let uses_number_to_string = !number_to_string_types.is_empty();
     let uses_enum_trait_object = program_uses_enum_trait_object(program);
+    let uses_panic = program_uses_panic(program);
     let uses_println = program.statements.iter().any(statement_uses_println)
         || program
             .functions
@@ -57,7 +58,7 @@ pub fn emit_c(program: &LoweredProgram) -> String {
         source.push_str("#include <stdint.h>\n");
     }
 
-    if uses_println || uses_number_to_string {
+    if uses_println || uses_number_to_string || uses_panic {
         source.push_str("#include <stdio.h>\n");
     }
 
@@ -72,7 +73,7 @@ pub fn emit_c(program: &LoweredProgram) -> String {
         || !program.structs.is_empty()
         || !program.closure_functions.is_empty();
 
-    if uses_alloc {
+    if uses_alloc || uses_panic {
         source.push_str("#include <stdlib.h>\n#include <string.h>\n");
     } else if uses_string_equality {
         source.push_str("#include <string.h>\n");
@@ -145,6 +146,10 @@ pub fn emit_c(program: &LoweredProgram) -> String {
         source.push_str("}\n\n");
     }
 
+    if uses_panic {
+        push_c_panic_runtime(&mut source);
+    }
+
     push_c_string_builder_helpers(&mut source, &program.structs);
 
     push_c_struct_runtime_helpers(&mut source, program);
@@ -163,19 +168,27 @@ pub fn emit_c(program: &LoweredProgram) -> String {
             source.push_str(";\n\n");
         }
 
-        push_c_function(&mut source, function, &program.structs);
+        push_c_function(&mut source, function, &program.structs, uses_panic);
         source.push('\n');
     }
 
     for function in &program.closure_functions {
-        push_c_closure_function(&mut source, function, &program.structs);
+        push_c_closure_function(&mut source, function, &program.structs, uses_panic);
         source.push('\n');
     }
 
     source.push_str("int main(void) {\n");
 
+    if uses_panic {
+        push_c_stack_push(&mut source, "main", &program.main_location, 1);
+    }
+
     for statement in &program.statements {
-        push_c_statement(&mut source, statement, 1, &program.structs);
+        push_c_statement(&mut source, statement, 1, &program.structs, uses_panic);
+    }
+
+    if uses_panic {
+        source.push_str("    gust_rt_stack_pop();\n");
     }
 
     source.push_str("    return 0;\n}\n");
