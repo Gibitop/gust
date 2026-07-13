@@ -8,7 +8,18 @@ use gustc::c_codegen::{CCodegenOptions, emit_c_with_options};
 use gustc::lower::lower_program_with_source_files;
 use gustc::project::check_project;
 
-const USAGE: &str = "usage: gustc <file.gust> [-o <output>] [--emit-c <output.c>] [--gc-stress]";
+const USAGE: &str = "usage: gustc <file.gust|directory> [options]";
+const HELP: &str = "\
+usage: gustc <file.gust|directory> [options]
+
+Arguments:
+  <file.gust|directory>  Gust source file, or a directory containing main.gust
+
+Options:
+  -o <output>            Write the executable to <output>
+  --emit-c <output.c>    Write generated C source to <output.c>
+  --gc-stress            Emit a binary that collects at every safepoint
+  --help                 Print this help message";
 
 fn main() -> ExitCode {
     let mut args = env::args().skip(1);
@@ -16,6 +27,11 @@ fn main() -> ExitCode {
         eprintln!("{USAGE}");
         return ExitCode::FAILURE;
     };
+
+    if path == "--help" {
+        println!("{HELP}");
+        return ExitCode::SUCCESS;
+    }
 
     let requested_path = PathBuf::from(&path);
     let source_path = if requested_path.is_dir() {
@@ -57,6 +73,10 @@ fn main() -> ExitCode {
                     return ExitCode::FAILURE;
                 }
                 gc_stress = true;
+            }
+            "--help" => {
+                println!("{HELP}");
+                return ExitCode::SUCCESS;
             }
             _ => {
                 eprintln!("unexpected argument `{arg}`");
