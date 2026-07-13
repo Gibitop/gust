@@ -1,0 +1,85 @@
+from ./option import { Option }
+
+enum Result<T, E> {
+    Ok(T)
+    Err(E)
+
+    fn isOk(): bool {
+        return match self {
+            Result.Ok(_) => true,
+            Result.Err(_) => false,
+        }
+    }
+
+    fn isErr(): bool {
+        return match self {
+            Result.Ok(_) => false,
+            Result.Err(_) => true,
+        }
+    }
+
+    fn ok(): Option<T> {
+        return match self {
+            Result.Ok(value) => Option.Some(value),
+            Result.Err(_) => Option<T>.None,
+        }
+    }
+
+    fn err(): Option<E> {
+        return match self {
+            Result.Ok(_) => Option<E>.None,
+            Result.Err(error) => Option.Some(error),
+        }
+    }
+
+    fn unwrap(): T {
+        match self {
+            Result.Ok(value) => {
+                return value
+            },
+            Result.Err(_) => {
+                panic("called Result.unwrap() on an Err value")
+            },
+        }
+    }
+
+    fn unwrapErr(): E {
+        match self {
+            Result.Ok(_) => {
+                panic("called Result.unwrapErr() on an Ok value")
+            },
+            Result.Err(error) => {
+                return error
+            },
+        }
+    }
+
+    fn expect(message: string): T {
+        match self {
+            Result.Ok(value) => {
+                return value
+            },
+            Result.Err(_) => {
+                panic(message)
+            },
+        }
+    }
+
+    fn expectErr(message: string): E {
+        match self {
+            Result.Ok(_) => {
+                panic(message)
+            },
+            Result.Err(error) => {
+                return error
+            },
+        }
+    }
+
+    fn unwrapOr(fallback: T): T {
+        return match self {
+            Result.Ok(value) => value,
+            Result.Err(_) => fallback,
+        }
+    }
+}

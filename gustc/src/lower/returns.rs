@@ -194,7 +194,7 @@ fn merge_inferred_return_type(
 
 fn lowered_statement_always_returns_value(statement: &LoweredStatement) -> bool {
     match statement {
-        LoweredStatement::Return(Some(_)) => true,
+        LoweredStatement::Panic { .. } | LoweredStatement::Return(Some(_)) => true,
         LoweredStatement::If {
             then_branch,
             else_branch: Some(else_branch),
@@ -207,19 +207,62 @@ fn lowered_statement_always_returns_value(statement: &LoweredStatement) -> bool 
                     .iter()
                     .any(lowered_statement_always_returns_value)
         }
+        LoweredStatement::Match { decision, .. } => {
+            let (has_body, all_bodies_return) = lowered_match_bodies_always_return(decision);
+            has_body && all_bodies_return
+        }
         LoweredStatement::Local { .. }
         | LoweredStatement::LocalCell { .. }
         | LoweredStatement::Assignment { .. }
         | LoweredStatement::Println(_)
-        | LoweredStatement::Panic { .. }
         | LoweredStatement::Expr(_)
         | LoweredStatement::Return(None)
         | LoweredStatement::While { .. }
         | LoweredStatement::Break
         | LoweredStatement::Continue
-        | LoweredStatement::Match { .. }
         | LoweredStatement::If {
             else_branch: None, ..
         } => false,
     }
+}
+
+fn lowered_match_bodies_always_return(decision: &LoweredMatchDecision) -> (bool, bool) {
+    match decision {
+        LoweredMatchDecision::Arms { arms } => combine_match_body_returns(arms.iter()),
+        LoweredMatchDecision::Test { then, else_, .. } => {
+            combine_match_body_returns([then.as_ref(), else_.as_ref()].into_iter())
+        }
+        LoweredMatchDecision::Bind { then, .. } => lowered_match_bodies_always_return(then),
+        LoweredMatchDecision::Or {
+            alternatives,
+            then,
+            else_,
+            ..
+        } => combine_match_body_returns(
+            alternatives
+                .iter()
+                .chain([then.as_ref(), else_.as_ref()]),
+        ),
+        LoweredMatchDecision::Body { statements, .. } => (
+            true,
+            statements
+                .iter()
+                .any(lowered_statement_always_returns_value),
+        ),
+        LoweredMatchDecision::Matched
+        | LoweredMatchDecision::Fail
+        | LoweredMatchDecision::End => (false, true),
+    }
+}
+
+fn combine_match_body_returns<'a>(
+    decisions: impl Iterator<Item = &'a LoweredMatchDecision>,
+) -> (bool, bool) {
+    decisions.fold((false, true), |(has_body, all_return), decision| {
+        let (decision_has_body, decision_all_return) = lowered_match_bodies_always_return(decision);
+        (
+            has_body || decision_has_body,
+            all_return && decision_all_return,
+        )
+    })
 }

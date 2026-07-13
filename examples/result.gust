@@ -1,0 +1,19 @@
+from ../std/option import { Option }
+from ../std/result import { Result }
+
+fn divide(dividend: i32, divisor: i32): Result<i32, string> {
+    if divisor == 0 {
+        return Result.Err("cannot divide by zero")
+    }
+
+    return Result.Ok(dividend / divisor)
+}
+
+fn main() {
+    let quotient = divide(12, 3)
+    let failure = divide(12, 0)
+
+    io.println(quotient.unwrap().toString())
+    io.println(failure.unwrapOr(0).toString())
+    io.println(failure.err().unwrapOr("no error"))
+}
