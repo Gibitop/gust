@@ -565,8 +565,10 @@ closure and mutations in the enclosing scope observe the same binding. The execu
 allocates captured cells and closure environments through `gust_rt_alloc` so the implementation can
 move to managed allocation when the runtime garbage collector is introduced.
 
-The first executable-backend implementation supports monomorphic function types. Lambda parameters
-are inferred from a function type context, or otherwise require annotations. Lambda return types are
-inferred from expression bodies and from consistent block returns when no return type is annotated.
-Captured `let` locals are supported; captured parameters and generic closure values are left for a
-later implementation step.
+The executable backend supports concrete function types. Lambda parameters are inferred from a
+function type context, or otherwise require annotations. Lambda return types are inferred from
+expression bodies and from consistent block returns when no return type is annotated. Generic
+functions specialize closure function types, captured `let` cells, closure environments, and
+indirect-call signatures with their concrete type arguments. A generic function used as a value is
+specialized from an expected concrete function type, or requires explicit type arguments. Captured
+parameters are left for a later implementation step.

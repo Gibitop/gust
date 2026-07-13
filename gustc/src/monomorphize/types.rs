@@ -237,6 +237,23 @@ fn specialized_trait_name(
 }
 
 fn type_name(type_ref: &TypeRef) -> String {
+    if let Some(function) = &type_ref.function {
+        let params = function
+            .params
+            .iter()
+            .map(|param| {
+                let type_name = type_name(&param.type_ref);
+                if param.mutable {
+                    format!("mut {type_name}")
+                } else {
+                    type_name
+                }
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        return format!("fn({params}): {}", type_name(&function.return_type));
+    }
+
     if type_ref.args.is_empty() && type_ref.bindings.is_empty() {
         type_ref.name.clone()
     } else {

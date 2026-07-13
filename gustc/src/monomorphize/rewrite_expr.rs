@@ -6,6 +6,86 @@ impl Monomorphizer {
             return;
         }
 
+        let generic_function_value = match &expr.kind {
+            ExprKind::Identifier(name) if self.function_templates.contains_key(name) => {
+                Some((name.clone(), None))
+            }
+            ExprKind::GenericType { name, args } if self.function_templates.contains_key(name) => {
+                Some((name.clone(), Some(args.clone())))
+            }
+            _ => None,
+        };
+        if let Some((function_name, explicit_args)) = generic_function_value {
+            let mut expected = self.expected_expr_types.remove(&expr.span);
+            if let Some(expected) = &mut expected {
+                self.rewrite_type(expected, substitutions);
+            }
+            let type_args = if let Some(mut type_args) = explicit_args {
+                for type_arg in &mut type_args {
+                    self.rewrite_type(type_arg, substitutions);
+                }
+                self.validate_function_type_arguments(&function_name, &type_args, expr.span)
+                    .then_some(type_args)
+            } else {
+                let Some(expected) = expected.as_ref() else {
+                    self.diagnostics.push(Diagnostic::error(
+                        expr.span,
+                        format!(
+                            "cannot infer type arguments for generic function value `{function_name}` without an expected function type; write `{function_name}<Type>`"
+                        ),
+                    ));
+                    return;
+                };
+                match self.infer_function_value_type_arguments(&function_name, expected) {
+                    Ok(type_args) => Some(type_args),
+                    Err(reason) => {
+                        self.diagnostics.push(Diagnostic::error(
+                            expr.span,
+                            format!(
+                                "cannot infer type arguments for generic function value `{function_name}` from expected type `{}`: {reason}; write `{function_name}<Type>`",
+                                type_name(expected)
+                            ),
+                        ));
+                        None
+                    }
+                }
+            };
+
+            if let Some(type_args) = type_args {
+                match self.specialized_function_value_type(
+                    &function_name,
+                    &type_args,
+                    substitutions,
+                    expr.span,
+                ) {
+                    Ok(function_type) => {
+                        if let Some(expected) = expected
+                            && type_name(&function_type) != type_name(&expected)
+                        {
+                            self.diagnostics.push(Diagnostic::error(
+                                expr.span,
+                                format!(
+                                    "generic function value `{function_name}` has type `{}`, expected `{}`",
+                                    type_name(&function_type),
+                                    type_name(&expected)
+                                ),
+                            ));
+                        }
+                        self.specialize_function(&function_name, &type_args);
+                        self.inferred_expr_types.insert(expr.span, function_type);
+                        expr.kind = ExprKind::Identifier(specialized_name(&function_name, &type_args));
+                    }
+                    Err(reason) => self.diagnostics.push(Diagnostic::error(
+                        expr.span,
+                        format!(
+                            "cannot use generic function `{function_name}` as a function value: {reason}"
+                        ),
+                    )),
+                }
+            }
+            return;
+        }
+
         let generic_function_call = match &expr.kind {
             ExprKind::Call { callee, .. } => match &callee.kind {
                 ExprKind::Identifier(name) if self.function_templates.contains_key(name) => {

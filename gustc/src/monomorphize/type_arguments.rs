@@ -380,6 +380,104 @@ impl Monomorphizer {
             })
     }
 
+    fn infer_function_value_type_arguments(
+        &self,
+        function_name: &str,
+        expected: &TypeRef,
+    ) -> Result<Vec<TypeRef>, String> {
+        let template = &self.function_templates[function_name];
+        let Some(expected_function) = &expected.function else {
+            return Err(format!(
+                "expected a function type, got `{}`",
+                type_name(expected)
+            ));
+        };
+
+        if template.params.len() != expected_function.params.len() {
+            return Err(format!(
+                "expected {} parameters, got {}",
+                expected_function.params.len(),
+                template.params.len()
+            ));
+        }
+
+        let mut constraints = Vec::new();
+        for (param, expected_param) in template.params.iter().zip(&expected_function.params) {
+            if param.mutable != expected_param.mutable {
+                return Err("parameter mutability does not match".to_string());
+            }
+            let Some(type_ref) = &param.type_ref else {
+                return Err(format!(
+                    "parameter `{}` does not have a type annotation",
+                    param.name
+                ));
+            };
+            constraints.push((type_ref.clone(), expected_param.type_ref.clone()));
+        }
+
+        let Some(return_type) = template
+            .return_type
+            .as_ref()
+            .or_else(|| self.generic_function_returns.get(function_name))
+        else {
+            return Err("the return type could not be inferred".to_string());
+        };
+        constraints.push((return_type.clone(), (*expected_function.return_type).clone()));
+
+        self.solve_type_arguments(function_name, &template.type_params, constraints)
+    }
+
+    fn specialized_function_value_type(
+        &mut self,
+        function_name: &str,
+        type_args: &[TypeRef],
+        substitutions: &HashMap<String, TypeRef>,
+        span: crate::span::Span,
+    ) -> Result<TypeRef, String> {
+        let template = self.function_templates[function_name].clone();
+        let function_substitutions = template
+            .type_params
+            .iter()
+            .cloned()
+            .zip(type_args.iter().cloned())
+            .collect::<HashMap<_, _>>();
+        let mut params = Vec::new();
+        for param in &template.params {
+            let Some(type_ref) = &param.type_ref else {
+                return Err(format!(
+                    "parameter `{}` does not have a type annotation",
+                    param.name
+                ));
+            };
+            let mut type_ref = substitute_type(type_ref, &function_substitutions);
+            self.rewrite_type(&mut type_ref, substitutions);
+            params.push(crate::ast::FunctionTypeParam {
+                mutable: param.mutable,
+                type_ref,
+            });
+        }
+        let Some(return_type) = template
+            .return_type
+            .as_ref()
+            .or_else(|| self.generic_function_returns.get(function_name))
+        else {
+            return Err("the return type could not be inferred".to_string());
+        };
+        let mut return_type = substitute_type(return_type, &function_substitutions);
+        self.rewrite_type(&mut return_type, substitutions);
+
+        Ok(TypeRef {
+            name: "fn".to_string(),
+            args: Vec::new(),
+            bindings: Vec::new(),
+            function: Some(crate::ast::FunctionTypeRef {
+                params,
+                return_type: Box::new(return_type),
+            }),
+            span,
+        })
+    }
+
     fn apply_generic_function_argument_contexts(
         &mut self,
         function_name: &str,
@@ -832,6 +930,36 @@ impl Monomorphizer {
             }
             inferred.insert(expected.name.clone(), actual);
             return Ok(());
+        }
+
+        if let Some(expected_function) = &expected.function {
+            let Some(actual_function) = &actual.function else {
+                return Ok(());
+            };
+            if expected_function.params.len() != actual_function.params.len() {
+                return Ok(());
+            }
+            for (expected_param, actual_param) in expected_function
+                .params
+                .iter()
+                .zip(&actual_function.params)
+            {
+                if expected_param.mutable != actual_param.mutable {
+                    return Ok(());
+                }
+                self.unify_type(
+                    &expected_param.type_ref,
+                    &actual_param.type_ref,
+                    params,
+                    inferred,
+                )?;
+            }
+            return self.unify_type(
+                &expected_function.return_type,
+                &actual_function.return_type,
+                params,
+                inferred,
+            );
         }
 
         let expected = self.expanded_trait_type(expected);

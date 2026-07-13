@@ -1,0 +1,24 @@
+fn makeIdentity<T>(): fn(T): T => fn(value) => value
+
+fn identity<T>(value: T): T => value
+
+fn apply<T>(value: T, transform: fn(T): T): T => transform(value)
+
+fn makeStored<T>(value: T): fn(): T {
+    let stored = value
+    return fn() => stored
+}
+
+fn main() {
+    let numberIdentity: fn(i32): i32 = makeIdentity<i32>()
+    let textIdentity: fn(string): string = makeIdentity<string>()
+    let result = apply(41, identity)
+    let numberValue = makeStored(7)
+    let textValue = makeStored("closure")
+
+    io.println(numberIdentity(42).toString())
+    io.println(textIdentity("gust"))
+    io.println(result.toString())
+    io.println(numberValue().toString())
+    io.println(textValue())
+}
