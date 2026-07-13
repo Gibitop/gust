@@ -23,6 +23,9 @@ fn lower_trait_definition(
         if method.static_ {
             continue;
         }
+        if trait_method_uses_generic_associated_type(&item.associated_types, method) {
+            continue;
+        }
 
         let Some(method) =
             lower_trait_method_definition(method, structs, enums, traits, diagnostics)
@@ -38,6 +41,47 @@ fn lower_trait_definition(
         methods,
         impls: Vec::new(),
     })
+}
+
+fn trait_method_uses_generic_associated_type(
+    associated_types: &[crate::ast::AssociatedTypeDecl],
+    method: &TraitMethodDecl,
+) -> bool {
+    method
+        .params
+        .iter()
+        .filter_map(|param| param.type_ref.as_ref())
+        .any(|type_ref| type_ref_uses_generic_associated_type(associated_types, type_ref))
+        || method.return_type.as_ref().is_some_and(|type_ref| {
+            type_ref_uses_generic_associated_type(associated_types, type_ref)
+        })
+}
+
+fn type_ref_uses_generic_associated_type(
+    associated_types: &[crate::ast::AssociatedTypeDecl],
+    type_ref: &TypeRef,
+) -> bool {
+    type_ref
+        .name
+        .strip_prefix("Self.")
+        .is_some_and(|name| {
+            !type_ref.args.is_empty()
+                && associated_types.iter().any(|associated_type| {
+                    associated_type.name == name && !associated_type.type_params.is_empty()
+                })
+        })
+        || type_ref
+            .args
+            .iter()
+            .any(|arg| type_ref_uses_generic_associated_type(associated_types, arg))
+        || type_ref.bindings.iter().any(|binding| {
+            type_ref_uses_generic_associated_type(associated_types, &binding.type_ref)
+        })
+        || type_ref.function.as_ref().is_some_and(|function| {
+            function.params.iter().any(|param| {
+                type_ref_uses_generic_associated_type(associated_types, &param.type_ref)
+            }) || type_ref_uses_generic_associated_type(associated_types, &function.return_type)
+        })
 }
 
 fn lower_trait_method_definition(

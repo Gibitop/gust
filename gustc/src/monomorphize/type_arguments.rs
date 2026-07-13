@@ -238,12 +238,18 @@ impl Monomorphizer {
                 .zip(impl_.trait_ref.args.iter().cloned())
                 .collect::<HashMap<_, _>>();
             trait_substitutions.insert("Self".to_string(), impl_.type_ref.clone());
-            trait_substitutions.extend(impl_.associated_types.iter().map(|associated_type| {
-                (
-                    format!("Self.{}", associated_type.name),
-                    associated_type.type_ref.clone(),
-                )
-            }));
+            trait_substitutions.extend(
+                impl_
+                    .associated_types
+                    .iter()
+                    .filter(|associated_type| associated_type.type_params.is_empty())
+                    .map(|associated_type| {
+                        (
+                            format!("Self.{}", associated_type.name),
+                            associated_type.type_ref.clone(),
+                        )
+                    }),
+            );
 
             let mut constraints = vec![(impl_.type_ref.clone(), receiver.clone())];
             for (param, arg) in method_params.iter().zip(args) {
@@ -297,6 +303,7 @@ impl Monomorphizer {
                 associated_type_bindings: impl_
                     .associated_types
                     .iter()
+                    .filter(|associated_type| associated_type.type_params.is_empty())
                     .map(|associated_type| crate::ast::AssociatedTypeBinding {
                         name: associated_type.name.clone(),
                         type_ref: substitute_type(
@@ -821,14 +828,47 @@ impl Monomorphizer {
             return Ok(());
         }
 
-        let expected = self.expanded_type(expected);
+        let expected = self.expanded_trait_type(expected);
+        let actual = self.expanded_trait_type(&actual);
         if expected.name != actual.name || expected.args.len() != actual.args.len() {
             return Ok(());
         }
         for (expected, actual) in expected.args.iter().zip(&actual.args) {
             self.unify_type(expected, actual, params, inferred)?;
         }
+        for expected_binding in &expected.bindings {
+            let Some(actual_binding) = actual
+                .bindings
+                .iter()
+                .find(|binding| binding.name == expected_binding.name)
+            else {
+                return Ok(());
+            };
+            self.unify_type(
+                &expected_binding.type_ref,
+                &actual_binding.type_ref,
+                params,
+                inferred,
+            )?;
+        }
         Ok(())
+    }
+
+    fn expanded_trait_type(&self, type_ref: &TypeRef) -> TypeRef {
+        let type_ref = self.expanded_type(type_ref);
+        if type_ref.args.is_empty()
+            && type_ref.bindings.is_empty()
+            && let Some((name, args, bindings)) = self.trait_specializations.get(&type_ref.name)
+        {
+            return TypeRef {
+                name: name.clone(),
+                args: args.clone(),
+                bindings: bindings.clone(),
+                function: None,
+                span: type_ref.span,
+            };
+        }
+        type_ref
     }
 
 }

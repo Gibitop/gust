@@ -160,6 +160,22 @@ impl Monomorphizer {
                             binding.type_ref.clone(),
                         )
                     }));
+                    for associated_type in &template.associated_types {
+                        if associated_type.type_params.is_empty()
+                            && associated_type.default.is_some()
+                            && !bindings
+                                .iter()
+                                .any(|binding| binding.name == associated_type.name)
+                        {
+                            substitutions.insert(
+                                format!("Self.{}", associated_type.name),
+                                substitute_type(
+                                    associated_type.default.as_ref().unwrap(),
+                                    &substitutions,
+                                ),
+                            );
+                        }
+                    }
                     let mut specialized = template;
                     specialized.name = specialized_name;
                     specialized.type_params.clear();
@@ -172,6 +188,14 @@ impl Monomorphizer {
                         }
                         if let Some(return_type) = &mut method.return_type {
                             self.rewrite_type(return_type, &substitutions);
+                        }
+                    }
+                    for method in &specialized.methods {
+                        if let Some(return_type) = &method.return_type {
+                            self.trait_method_returns.insert(
+                                (specialized.name.clone(), method.name.clone()),
+                                return_type.clone(),
+                            );
                         }
                     }
                     items.push(Item::Trait(specialized));
@@ -299,12 +323,16 @@ impl Monomorphizer {
                     specialized.type_param_bounds.clear();
                     specialized.trait_ref = substitute_type(&template.trait_ref, &substitutions);
                     specialized.type_ref = substitute_type(&template.type_ref, &substitutions);
+                    self.apply_associated_type_defaults(&mut specialized);
                     self.rewrite_type(&mut specialized.type_ref, &HashMap::new());
                     for associated_type in &mut specialized.associated_types {
                         associated_type.type_ref =
                             substitute_type(&associated_type.type_ref, &substitutions);
-                        self.rewrite_type(&mut associated_type.type_ref, &HashMap::new());
+                        if associated_type.type_params.is_empty() {
+                            self.rewrite_type(&mut associated_type.type_ref, &HashMap::new());
+                        }
                     }
+                    self.record_associated_type_bound_checks(&specialized);
                     let required_associated_types = self
                         .trait_declarations
                         .get(&specialized.trait_ref.name)
@@ -338,14 +366,18 @@ impl Monomorphizer {
 
                     self.self_types.push(specialized.type_ref.clone());
                     let mut impl_substitutions = substitutions.clone();
-                    impl_substitutions.extend(specialized.associated_types.iter().map(
-                        |associated_type| {
-                            (
-                                format!("Self.{}", associated_type.name),
-                                associated_type.type_ref.clone(),
-                            )
-                        },
-                    ));
+                    impl_substitutions.extend(
+                        specialized
+                            .associated_types
+                            .iter()
+                            .filter(|associated_type| associated_type.type_params.is_empty())
+                            .map(|associated_type| {
+                                (
+                                    format!("Self.{}", associated_type.name),
+                                    associated_type.type_ref.clone(),
+                                )
+                            }),
+                    );
                     for member in &mut specialized.methods {
                         self.rewrite_function(&mut member.function, &impl_substitutions);
                     }

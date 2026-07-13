@@ -12,7 +12,8 @@ struct Counter {
     value: i32
 }
 
-impl Iterator<i32> for Counter {
+impl Iterator for Counter {
+    type Item: i32
     fn next(mut self): Option<i32> {
         let value = self.value
         self.value++
@@ -21,7 +22,7 @@ impl Iterator<i32> for Counter {
 }
 
 fn main() {
-    let mut iterator: Iterator<i32> = Counter { value: 1 }
+    let mut iterator: Iterator<type Item: i32> = Counter { value: 1 }
     let message = match iterator.next() {
         Option.Some(value) => value.toString(),
         Option.None => "empty",
@@ -266,6 +267,7 @@ fn collection_literals_lower_through_from_elements() {
     project.write("std/option.gust", include_str!("../../../std/option.gust"));
     project.write("std/result.gust", include_str!("../../../std/result.gust"));
     project.write("std/iter.gust", include_str!("../../../std/iter.gust"));
+    project.write("std/index.gust", include_str!("../../../std/index.gust"));
     project.write(
         "std/collection.gust",
         include_str!("../../../std/collection.gust"),
@@ -282,12 +284,14 @@ fn collection_literals_lower_through_from_elements() {
         "main.gust",
         r#"from ./std/arrayList import { ArrayList }
 from ./std/collection import { FromElements }
+from ./std/index import { Index, IndexSet }
 
 struct TestCollection<T> {
     values: ArrayList<T>
 }
 
-impl<T> FromElements<T> for TestCollection<T> {
+impl<T> FromElements for TestCollection<T> {
+    type Item: T
     static fn withElementCapacity(capacity: usize): Self => TestCollection<T> {
         values: ArrayList<T>.withCapacity(capacity),
     }
@@ -299,12 +303,16 @@ impl<T> FromElements<T> for TestCollection<T> {
 
 fn main() {
     let mut values = [1, 2, 3]
+    let indexed = values.index(0).unwrapOr(-1)
+    let indexReplaced = values.indexSet(0, 10).unwrapOr(-1)
     values.push(4)
     let replaced = values.set(1, 20)
     let rejected = values.set(10, 100)
     let popped = values.pop()
     let custom: TestCollection<i32> = [5, 6]
     io.println(values.len().toString())
+    io.println(indexed.toString())
+    io.println(indexReplaced.toString())
     io.println(replaced.unwrapOr(-1).toString())
     io.println(rejected.err().unwrapOr("missing"))
     let iterator = values.iterator()
@@ -358,7 +366,7 @@ fn main() {
     assert!(output.status.success());
     assert_eq!(
         String::from_utf8_lossy(&output.stdout),
-        "3\n2\nindex out of bounds\n3\n1\n20\n3\n"
+        "3\n1\n1\n2\nindex out of bounds\n3\n10\n20\n3\n"
     );
 }
 

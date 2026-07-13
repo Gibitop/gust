@@ -42,9 +42,36 @@ fn read<C: Index<usize>>(collection: C) {
     return collection.index(0)
 }
 
+trait DefaultProducer {
+    type Item = i32
+
+    fn next(): Self.Item
+}
+
+struct DefaultCounter {
+    value: i32
+}
+
+impl DefaultProducer for DefaultCounter {
+    fn next(): i32 => self.value
+}
+
+trait Wrapper {
+    type Wrapped<T>
+}
+
+struct Optional {
+    value: i32
+}
+
+impl Wrapper for Optional {
+    type Wrapped<T>: T
+}
+
 fn main() {
     let producer: Producer<type Item: i32> = Counter { value: 7 }
     io.println(producer.next().toString())
     io.println(consume(Counter { value: 9 }).toString())
     io.println(read(Box { value: 11 }).toString())
+    io.println(DefaultCounter { value: 13 }.next().toString())
 }

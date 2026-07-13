@@ -413,6 +413,7 @@ impl Monomorphizer {
                 Ok(Some(mut resolution)) => {
                     self.expected_expr_types.remove(&expr.span);
                     self.impl_receiver_types.push(receiver.clone());
+                    self.self_types.push(receiver.clone());
                     for type_arg in &mut resolution.trait_args {
                         self.rewrite_type(type_arg, substitutions);
                     }
@@ -449,6 +450,7 @@ impl Monomorphizer {
                         self.apply_expr_context(arg, param);
                         self.rewrite_expr(arg, substitutions);
                     }
+                    self.self_types.pop();
                     callee.kind = ExprKind::Member {
                         object: Box::new(object),
                         name: format!(

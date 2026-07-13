@@ -218,6 +218,32 @@ impl Monomorphizer {
             return;
         }
 
+        let mut substitutions = template
+            .type_params
+            .iter()
+            .cloned()
+            .zip(args.iter().cloned())
+            .collect::<HashMap<_, _>>();
+        substitutions.extend(bindings.iter().map(|binding| {
+            (
+                format!("Self.{}", binding.name),
+                binding.type_ref.clone(),
+            )
+        }));
+        let specialized_trait = specialized_trait_name(name, args, bindings);
+        self.trait_specializations.insert(
+            specialized_trait.clone(),
+            (name.to_string(), args.to_vec(), bindings.to_vec()),
+        );
+        for method in &template.methods {
+            if let Some(return_type) = &method.return_type {
+                self.trait_method_returns.insert(
+                    (specialized_trait.clone(), method.name.clone()),
+                    substitute_type(return_type, &substitutions),
+                );
+            }
+        }
+
         self.pending.push_back(PendingSpecialization::Trait(
             name.to_string(),
             args.to_vec(),

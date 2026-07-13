@@ -549,7 +549,9 @@ impl Analyzer {
                 continue;
             };
 
-            if !signatures_match(&expected, &signature) {
+            if !signature_contains_associated_projection(&expected)
+                && !signatures_match(&expected, &signature)
+            {
                 self.diagnostics.push(Diagnostic::error(
                     method.span,
                     format!(
@@ -650,6 +652,10 @@ impl Analyzer {
             && type_ref.args.is_empty()
         {
             Type::Named("Self".to_string())
+        } else if let Some(type_ref) = type_ref
+            && type_ref.name.starts_with("Self.")
+        {
+            Type::Named(type_ref.name.clone())
         } else {
             self.type_ref_without_diagnostics(type_ref)
         }

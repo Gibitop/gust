@@ -63,6 +63,32 @@ fn signatures_match(expected: &FunctionSignature, actual: &FunctionSignature) ->
         && expected.return_type == actual.return_type
 }
 
+fn signature_contains_associated_projection(signature: &FunctionSignature) -> bool {
+    signature
+        .params
+        .iter()
+        .any(|param| type_contains_associated_projection(&param.type_))
+        || type_contains_associated_projection(&signature.return_type)
+}
+
+fn type_contains_associated_projection(type_: &Type) -> bool {
+    match type_ {
+        Type::Named(name) => name.starts_with("Self."),
+        Type::Function {
+            params,
+            return_type,
+        } => {
+            params
+                .iter()
+                .any(|param| type_contains_associated_projection(&param.type_))
+                || type_contains_associated_projection(return_type)
+        }
+        Type::Basic(_) | Type::Struct(_) | Type::Enum(_) | Type::Trait(_) | Type::Void | Type::Unknown => {
+            false
+        }
+    }
+}
+
 fn signature_with_self_type(signature: &FunctionSignature, self_type: &Type) -> FunctionSignature {
     FunctionSignature {
         params: signature
@@ -97,4 +123,3 @@ fn type_with_self_type(type_: &Type, self_type: &Type) -> Type {
         _ => type_.clone(),
     }
 }
-

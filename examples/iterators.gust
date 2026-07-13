@@ -6,7 +6,8 @@ struct Counter {
     end: i32
 }
 
-impl Iterator<i32> for Counter {
+impl Iterator for Counter {
+    type Item: i32
     fn next(mut self): Option<i32> {
         if self.value < self.end {
             let value = self.value

@@ -1,0 +1,12 @@
+from ./option import { Option }
+from ./result import { Result }
+
+trait Index<Key> {
+    type Output
+    fn index(key: Key): Option<Self.Output>
+}
+
+trait IndexSet<Key> {
+    type Output
+    fn indexSet(mut self, key: Key, value: Self.Output): Result<Self.Output, string>
+}

@@ -1666,14 +1666,14 @@ fn lower_collection_literal(
     if !matches!(collection, LoweredType::Struct(_)) {
         diagnostics.push(Diagnostic::error(
             span,
-            "collection literals require a struct type that implements `FromElements<T>`",
+            "collection literals require a struct type that implements `FromElements`",
         ));
         return None;
     }
 
     let Some((element, constructor, add)) = traits.values().find_map(|trait_| {
-        let source_name = trait_.name.rsplit("::").next().unwrap_or(&trait_.name);
-        if !source_name.starts_with("FromElements<") {
+        let trait_head = trait_.name.split('<').next().unwrap_or(&trait_.name);
+        if source_callable_name(trait_head) != "FromElements" {
             return None;
         }
         let element = trait_
@@ -1682,12 +1682,16 @@ fn lower_collection_literal(
             .find(|method| method.name == "add" && method.mutable_self)
             .and_then(|method| method.params.first())
             .map(|param| param.type_.clone())?;
-        let constructor = qualified_static_trait_method_name(
-            &trait_.name,
-            &collection.name(),
-            "withElementCapacity",
-        );
-        let add = qualified_trait_method_name(&trait_.name, &collection.name(), "add");
+        let constructor = if trait_has_positional_type_arguments(&trait_.name) {
+            qualified_static_trait_method_name(
+                &trait_.name,
+                &collection.name(),
+                "withElementCapacity",
+            )
+        } else {
+            static_trait_method_name(&collection.name(), "withElementCapacity")
+        };
+        let add = trait_impl_method_name(trait_, &collection, "add")?;
         (signatures.contains_key(&constructor) && signatures.contains_key(&add)).then_some((
             element,
             constructor,
@@ -1697,7 +1701,7 @@ fn lower_collection_literal(
         diagnostics.push(Diagnostic::error(
             span,
             format!(
-                "collection type `{}` must implement `FromElements<T>` to use a collection literal",
+                "collection type `{}` must implement `FromElements` to use a collection literal",
                 collection.name()
             ),
         ));

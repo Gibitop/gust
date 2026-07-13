@@ -1,6 +1,6 @@
 impl Monomorphizer {
     fn validate_associated_types(&mut self, program: &Program) {
-        for trait_ in self.trait_declarations.values() {
+        for trait_ in self.trait_declarations.values().cloned().collect::<Vec<_>>() {
             let mut names = HashSet::new();
             for associated_type in &trait_.associated_types {
                 if !names.insert(associated_type.name.clone()) {
@@ -12,6 +12,10 @@ impl Monomorphizer {
                         ),
                     ));
                 }
+                self.validate_associated_type_params(
+                    &trait_.name,
+                    associated_type,
+                );
             }
         }
 
@@ -19,7 +23,7 @@ impl Monomorphizer {
             let Item::Impl(impl_) = item else {
                 continue;
             };
-            let Some(trait_) = self.trait_declarations.get(&impl_.trait_ref.name) else {
+            let Some(trait_) = self.trait_declarations.get(&impl_.trait_ref.name).cloned() else {
                 continue;
             };
             let declared = trait_
@@ -50,9 +54,33 @@ impl Monomorphizer {
                         ),
                     ));
                 }
+                if let Some(declaration) = trait_
+                    .associated_types
+                    .iter()
+                    .find(|declaration| declaration.name == associated_type.name)
+                {
+                    if declaration.type_params.len() != associated_type.type_params.len() {
+                        self.diagnostics.push(Diagnostic::error(
+                            associated_type.span,
+                            format!(
+                                "associated type `{}.{}` expects {} type arguments, got {}",
+                                trait_.name,
+                                associated_type.name,
+                                declaration.type_params.len(),
+                                associated_type.type_params.len()
+                            ),
+                        ));
+                    }
+                }
+                self.validate_associated_type_definition_params(
+                    &trait_.name,
+                    associated_type,
+                );
             }
             for associated_type in &trait_.associated_types {
-                if !defined.contains(associated_type.name.as_str()) {
+                if !defined.contains(associated_type.name.as_str())
+                    && associated_type.default.is_none()
+                {
                     self.diagnostics.push(Diagnostic::error(
                         impl_.span,
                         format!(
@@ -123,6 +151,44 @@ impl Monomorphizer {
         }
     }
 
+    fn validate_associated_type_params(
+        &mut self,
+        trait_name: &str,
+        associated_type: &crate::ast::AssociatedTypeDecl,
+    ) {
+        let mut names = HashSet::new();
+        for name in &associated_type.type_params {
+            if !names.insert(name) {
+                self.diagnostics.push(Diagnostic::error(
+                    associated_type.span,
+                    format!(
+                        "duplicate type parameter `{name}` in associated type `{}.{}`",
+                        trait_name, associated_type.name
+                    ),
+                ));
+            }
+        }
+    }
+
+    fn validate_associated_type_definition_params(
+        &mut self,
+        trait_name: &str,
+        associated_type: &crate::ast::AssociatedTypeDef,
+    ) {
+        let mut names = HashSet::new();
+        for name in &associated_type.type_params {
+            if !names.insert(name) {
+                self.diagnostics.push(Diagnostic::error(
+                    associated_type.span,
+                    format!(
+                        "duplicate type parameter `{name}` in associated type definition `{}.{}`",
+                        trait_name, associated_type.name
+                    ),
+                ));
+            }
+        }
+    }
+
     fn validate_function_associated_types(&mut self, function: &FunctionDecl) {
         for bound in &function.type_param_bounds {
             self.validate_associated_bindings(&bound.trait_ref);
@@ -161,7 +227,8 @@ impl Monomorphizer {
                 .associated_types
                 .iter()
                 .filter(|associated_type| {
-                    trait_.methods.iter().any(|method| {
+                    associated_type.type_params.is_empty()
+                        && trait_.methods.iter().any(|method| {
                         method
                             .params
                             .iter()
@@ -217,8 +284,7 @@ impl Monomorphizer {
         type_params: &[String],
         bounds: &[TypeParamBound],
     ) {
-        if type_ref.args.is_empty()
-            && type_ref.bindings.is_empty()
+        if type_ref.bindings.is_empty()
             && let Some((receiver, associated_type)) = type_ref.name.rsplit_once('.')
             && type_params.iter().any(|param| param == receiver)
         {
@@ -451,6 +517,7 @@ impl Monomorphizer {
         &self,
         receiver: &TypeRef,
         associated_type: &str,
+        associated_args: &[TypeRef],
     ) -> Result<TypeRef, usize> {
         let receiver = self.expanded_type(receiver);
         let mut candidates = Vec::new();
@@ -458,11 +525,14 @@ impl Monomorphizer {
             let Some(trait_) = self.trait_declarations.get(&impl_.trait_ref.name) else {
                 continue;
             };
-            if !trait_
+            let Some(declaration) = trait_
                 .associated_types
                 .iter()
-                .any(|decl| decl.name == associated_type)
-            {
+                .find(|declaration| declaration.name == associated_type)
+            else {
+                continue;
+            };
+            if declaration.type_params.len() != associated_args.len() {
                 continue;
             }
             let Ok(args) = self.solve_type_arguments(
@@ -472,7 +542,7 @@ impl Monomorphizer {
             ) else {
                 continue;
             };
-            let substitutions = impl_
+            let mut substitutions = impl_
                 .type_params
                 .iter()
                 .cloned()
@@ -483,18 +553,125 @@ impl Monomorphizer {
             if type_name(&candidate_receiver) != type_name(&receiver) {
                 continue;
             }
-            if let Some(definition) = impl_
+            let definition = impl_
                 .associated_types
                 .iter()
                 .find(|definition| definition.name == associated_type)
-            {
-                candidates.push(substitute_type(&definition.type_ref, &substitutions));
+                .map(|definition| {
+                    (
+                        definition.type_params.as_slice(),
+                        definition.type_ref.clone(),
+                    )
+                })
+                .or_else(|| {
+                    declaration.default.as_ref().map(|default| {
+                        (declaration.type_params.as_slice(), default.clone())
+                    })
+                });
+            let Some((type_params, type_ref)) = definition else {
+                continue;
+            };
+            if type_params.len() != associated_args.len() {
+                continue;
             }
+
+            let trait_substitutions = trait_
+                .type_params
+                .iter()
+                .cloned()
+                .zip(impl_.trait_ref.args.iter().cloned())
+                .map(|(name, type_ref)| (name, substitute_type(&type_ref, &substitutions)))
+                .collect::<Vec<_>>();
+            substitutions.extend(trait_substitutions);
+            substitutions.insert("Self".to_string(), receiver.clone());
+            substitutions.extend(
+                type_params
+                    .iter()
+                    .cloned()
+                    .zip(associated_args.iter().cloned()),
+            );
+            candidates.push(substitute_type(&type_ref, &substitutions));
         }
         if candidates.len() == 1 {
             Ok(candidates.remove(0))
         } else {
             Err(candidates.len())
+        }
+    }
+
+    fn apply_associated_type_defaults(&self, impl_: &mut ImplDecl) {
+        let Some(trait_) = self.trait_declarations.get(&impl_.trait_ref.name).cloned() else {
+            return;
+        };
+        let substitutions = trait_
+            .type_params
+            .iter()
+            .cloned()
+            .zip(impl_.trait_ref.args.iter().cloned())
+            .collect::<HashMap<_, _>>();
+        for declaration in &trait_.associated_types {
+            if impl_
+                .associated_types
+                .iter()
+                .any(|definition| definition.name == declaration.name)
+            {
+                continue;
+            }
+            let Some(default) = &declaration.default else {
+                continue;
+            };
+            impl_.associated_types.push(crate::ast::AssociatedTypeDef {
+                name: declaration.name.clone(),
+                type_params: declaration.type_params.clone(),
+                type_param_bounds: declaration
+                    .type_param_bounds
+                    .iter()
+                    .map(|bound| TypeParamBound {
+                        param: bound.param.clone(),
+                        trait_ref: substitute_type(&bound.trait_ref, &substitutions),
+                        span: bound.span,
+                    })
+                    .collect(),
+                type_ref: substitute_type(default, &substitutions),
+                span: declaration.span,
+            });
+        }
+    }
+
+    fn record_associated_type_bound_checks(&mut self, impl_: &ImplDecl) {
+        let Some(trait_) = self.trait_declarations.get(&impl_.trait_ref.name).cloned() else {
+            return;
+        };
+        let substitutions = trait_
+            .type_params
+            .iter()
+            .cloned()
+            .zip(impl_.trait_ref.args.iter().cloned())
+            .collect::<HashMap<_, _>>();
+        for declaration in &trait_.associated_types {
+            if !declaration.type_params.is_empty() {
+                continue;
+            }
+            let Some(definition) = impl_
+                .associated_types
+                .iter()
+                .find(|definition| definition.name == declaration.name)
+            else {
+                continue;
+            };
+            for bound in &declaration.bounds {
+                let mut trait_ref = substitute_type(bound, &substitutions);
+                self.rewrite_type(&mut trait_ref, &HashMap::new());
+                self.bound_checks.push(BoundCheck {
+                    owner: format!(
+                        "associated type `{}.{}`",
+                        trait_.name, declaration.name
+                    ),
+                    type_ref: definition.type_ref.clone(),
+                    trait_ref,
+                    span: definition.span,
+                });
+            }
         }
     }
 }
@@ -507,8 +684,9 @@ fn trait_required_associated_type_names(trait_: &TraitDecl) -> HashSet<String> {
     trait_
         .associated_types
         .iter()
-        .filter(|associated_type| {
-            trait_.methods.iter().any(|method| {
+                .filter(|associated_type| {
+                    associated_type.type_params.is_empty()
+                        && trait_.methods.iter().any(|method| {
                 method
                     .params
                     .iter()

@@ -666,3 +666,46 @@ fn into_impls_lower_to_target_specific_trait_calls() {
     assert!(c.contains("// Gust function: static trait From<string> for Label.from"));
     assert!(c.contains("gust_fn_"));
 }
+
+#[test]
+fn generic_associated_type_projections_lower_through_concrete_impls() {
+    let result = check_source(
+        r#"enum Option<T> {
+    Some(T)
+    None
+}
+
+trait Mapper {
+    type Wrapped<T>
+    fn value(): Self.Wrapped<i32>
+}
+
+struct Numbers {}
+
+impl Mapper for Numbers {
+    type Wrapped<T>: Option<T>
+    fn value(): Option<i32> => Option.Some(7)
+}
+
+fn read<M: Mapper>(mapper: M): M.Wrapped<i32> => mapper.value()
+
+fn main() {
+    let numbers = Numbers {}
+    match read(numbers) {
+        Option.Some(value) => io.println(value.toString())
+        Option.None => io.println("missing")
+    }
+}"#,
+    );
+    assert!(
+        !result.has_errors(),
+        "expected generic associated type projection to validate, got {:?}",
+        result.diagnostics
+    );
+
+    let lowered = lower_program(&result.program)
+        .expect("generic associated type projection should lower");
+    let c = emit_c(&lowered);
+    assert!(c.contains("trait Numbers.value"));
+    assert!(c.contains("Option<i32>"));
+}

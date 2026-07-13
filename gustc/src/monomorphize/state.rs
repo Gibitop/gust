@@ -14,6 +14,14 @@ struct Monomorphizer {
     pending: VecDeque<PendingSpecialization>,
     emitted: HashSet<String>,
     specializations: HashMap<String, (String, Vec<TypeRef>)>,
+    trait_specializations: HashMap<
+        String,
+        (
+            String,
+            Vec<TypeRef>,
+            Vec<crate::ast::AssociatedTypeBinding>,
+        ),
+    >,
     scopes: Vec<HashMap<String, TypeRef>>,
     return_types: Vec<TypeRef>,
     self_types: Vec<TypeRef>,
@@ -23,6 +31,7 @@ struct Monomorphizer {
     function_params: HashMap<String, Vec<Option<TypeRef>>>,
     generic_function_returns: HashMap<String, TypeRef>,
     generic_method_returns: HashMap<(String, String, bool), TypeRef>,
+    trait_method_returns: HashMap<(String, String), TypeRef>,
     expected_expr_types: HashMap<crate::span::Span, TypeRef>,
     inferred_expr_types: HashMap<crate::span::Span, TypeRef>,
     impl_receiver_types: Vec<TypeRef>,
