@@ -45,17 +45,23 @@ impl Analyzer {
                                 self.validate_type(&field.type_ref);
                             }
                             StructMember::Method(method) => {
+                                self.direct_struct_methods.push(item.name.clone());
                                 self.validate_function(
                                     method,
                                     Some(Type::Struct(item.name.clone())),
                                     true,
                                 );
+                                self.direct_struct_methods.pop();
                             }
-                            StructMember::StaticMethod(method) => self.validate_function(
-                                method,
-                                Some(Type::Struct(item.name.clone())),
-                                false,
-                            ),
+                            StructMember::StaticMethod(method) => {
+                                self.direct_struct_methods.push(item.name.clone());
+                                self.validate_function(
+                                    method,
+                                    Some(Type::Struct(item.name.clone())),
+                                    false,
+                                );
+                                self.direct_struct_methods.pop();
+                            }
                         }
                     }
                 }

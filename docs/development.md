@@ -286,6 +286,18 @@ The clone is independent and may initialize a mutable binding.
 
 Strings are immutable and may be shared between a value and its clone.
 
+Struct fields may be marked `internal`, such as `internal storage: RawBuffer<T>`. Internal fields
+remain readable anywhere the field is visible, but mutable access to them is restricted to direct
+methods and static methods declared inside the owning struct. Extension functions and trait impl
+methods do not receive this privilege, even when they have `mut self`.
+
+The restriction applies to direct assignment, compound assignment, increments, struct literals, and
+mutable capability through the field. For example, code outside `ArrayList<T>` cannot assign
+`list.count`, initialize `ArrayList<T> { count: ... }`, pass `list.storage` to a mutable parameter,
+bind `let mut storage = list.storage`, or call a `mut self` method through `list.storage`. This
+lets collection implementations expose readable state when useful while preserving representation
+invariants behind their own methods.
+
 ## Struct methods
 
 Struct methods use an implicit immutable `self` parameter whose type is the enclosing struct.

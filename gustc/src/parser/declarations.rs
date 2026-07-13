@@ -139,7 +139,10 @@ impl Parser {
                 )));
             } else if self.current_keyword() == Some(Keyword::Fn) {
                 members.push(StructMember::Method(self.parse_function(true)));
-            } else if self.check_identifier() {
+            } else if self.current_keyword() == Some(Keyword::Internal)
+                || self.check_identifier()
+            {
+                let internal = self.match_keyword(Keyword::Internal);
                 let field_start = self.current().span;
                 let name = self.expect_identifier("expected field name");
                 self.expect_kind(&TokenKind::Colon, "`:`");
@@ -148,6 +151,7 @@ impl Parser {
                     .unwrap_or_else(|| self.missing_type(field_start));
                 members.push(StructMember::Field(FieldDecl {
                     name,
+                    internal,
                     span: field_start.join(type_ref.span),
                     type_ref,
                 }));

@@ -117,18 +117,20 @@ impl Analyzer {
                         continue;
                     }
 
-                    let Some(field_type) = struct_.fields.get(&field.name) else {
+                    let Some(field_info) = struct_.fields.get(&field.name) else {
                         self.diagnostics.push(Diagnostic::error(
                             field.span,
                             format!("unknown field `{}` for struct `{name}`", field.name),
                         ));
                         continue;
                     };
+                    let field_mutable = value_mutable
+                        && (!field_info.internal || self.can_mutate_internal_field(name));
 
                     self.validate_pattern(
                         &field.pattern,
-                        field_type,
-                        value_mutable,
+                        &field_info.type_,
+                        field_mutable,
                         None,
                     );
                 }

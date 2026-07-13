@@ -211,7 +211,10 @@ impl Analyzer {
     fn expr_has_mutable_capability(&self, expr: &Expr) -> bool {
         match &expr.kind {
             ExprKind::Identifier(name) => self.lookup(name).is_some_and(|binding| binding.mutable),
-            ExprKind::Member { object, .. } => self.expr_has_mutable_capability(object),
+            ExprKind::Member { object, .. } => {
+                self.internal_mutation_barrier(expr).is_none()
+                    && self.expr_has_mutable_capability(object)
+            }
             ExprKind::GenericMember { object, .. } => self.expr_has_mutable_capability(object),
             ExprKind::CollectionLiteral { collection, .. } => self
                 .requires_mutable_capability(&self.type_ref_without_diagnostics(Some(collection))),
@@ -220,10 +223,10 @@ impl Analyzer {
                     return false;
                 };
 
-                fields.iter().all(|field| {
-                    definition.fields.get(&field.name).is_none_or(|type_| {
-                        !self.requires_mutable_capability(type_)
-                            || self.expr_has_mutable_capability(&field.value)
+                fields.iter().all(|init_field| {
+                    definition.fields.get(&init_field.name).is_none_or(|field| {
+                        !self.requires_mutable_capability(&field.type_)
+                            || self.expr_has_mutable_capability(&init_field.value)
                     })
                 })
             }
@@ -307,6 +310,130 @@ impl Analyzer {
         if self.unsupported_features.insert(message) {
             self.diagnostics.push(Diagnostic::warning(span, message));
         }
+    }
+
+    fn can_mutate_internal_field(&self, struct_name: &str) -> bool {
+        self.direct_struct_methods
+            .last()
+            .is_some_and(|owner| owner == struct_name)
+    }
+
+    fn internal_mutation_barrier(&self, expr: &Expr) -> Option<(String, String)> {
+        match &expr.kind {
+            ExprKind::Member { object, name } => {
+                if let Some((struct_name, field)) = self.member_field(object, name)
+                    && field.internal
+                    && !self.can_mutate_internal_field(&struct_name)
+                {
+                    return Some((struct_name, name.clone()));
+                }
+                self.internal_mutation_barrier(object)
+            }
+            _ => None,
+        }
+    }
+
+    fn member_field(&self, object: &Expr, name: &str) -> Option<(String, StructField)> {
+        let Type::Struct(struct_name) = self.expr_static_type(object)? else {
+            return None;
+        };
+        let field = self.structs.get(&struct_name)?.fields.get(name)?.clone();
+        Some((struct_name, field))
+    }
+
+    fn expr_static_type(&self, expr: &Expr) -> Option<Type> {
+        match &expr.kind {
+            ExprKind::Identifier(name) => self.lookup(name).map(|binding| binding.type_),
+            ExprKind::Member { object, name } => {
+                self.member_field(object, name).map(|(_, field)| field.type_)
+            }
+            ExprKind::StructInit { name, .. } if name == "Self" => self.self_types.last().cloned(),
+            ExprKind::StructInit { name, .. } => Some(Type::Struct(name.clone())),
+            ExprKind::CollectionLiteral { collection, .. } => {
+                Some(self.type_ref_without_diagnostics(Some(collection)))
+            }
+            ExprKind::Call { callee, .. } => self.call_return_type(callee),
+            _ => None,
+        }
+    }
+
+    fn call_return_type(&self, callee: &Expr) -> Option<Type> {
+        match &callee.kind {
+            ExprKind::Identifier(name) => self.functions.get(name).map(|signature| {
+                signature.return_type.clone()
+            }),
+            ExprKind::Member { object, name } => {
+                if let Some(type_) = self.resolve_type_expression(object) {
+                    return self.static_call_return_type(&type_, name);
+                }
+
+                let object_type = self.expr_static_type(object)?;
+                self.method_call_return_type(&object_type, name)
+            }
+            _ => None,
+        }
+    }
+
+    fn static_call_return_type(&self, type_: &Type, name: &str) -> Option<Type> {
+        let source_name = source_callable_name(name);
+        match type_ {
+            Type::Struct(struct_name) => self
+                .structs
+                .get(struct_name)
+                .and_then(|struct_| struct_.static_methods.get(source_name))
+                .or_else(|| self.static_extensions.get(&extension_name(&type_.name(), name)))
+                .or_else(|| {
+                    self.static_trait_methods
+                        .get(&static_trait_method_name(&type_.name(), source_name))
+                }),
+            Type::Enum(enum_name) => self
+                .enums
+                .get(enum_name)
+                .and_then(|enum_| enum_.static_methods.get(source_name))
+                .or_else(|| self.static_extensions.get(&extension_name(&type_.name(), name)))
+                .or_else(|| {
+                    self.static_trait_methods
+                        .get(&static_trait_method_name(&type_.name(), source_name))
+                }),
+            _ => self
+                .static_extensions
+                .get(&extension_name(&type_.name(), name))
+                .or_else(|| {
+                    self.static_trait_methods
+                        .get(&static_trait_method_name(&type_.name(), source_name))
+                }),
+        }
+        .map(|signature| signature.return_type.clone())
+    }
+
+    fn method_call_return_type(&self, type_: &Type, name: &str) -> Option<Type> {
+        let source_name = source_callable_name(name);
+        match type_ {
+            Type::Struct(struct_name) => self
+                .structs
+                .get(struct_name)
+                .and_then(|struct_| struct_.methods.get(source_name))
+                .or_else(|| self.extensions.get(&extension_name(&type_.name(), name)))
+                .or_else(|| {
+                    self.trait_methods
+                        .get(&trait_method_name(&type_.name(), source_name))
+                }),
+            Type::Enum(enum_name) => self
+                .enums
+                .get(enum_name)
+                .and_then(|enum_| enum_.methods.get(source_name))
+                .or_else(|| self.extensions.get(&extension_name(&type_.name(), name)))
+                .or_else(|| {
+                    self.trait_methods
+                        .get(&trait_method_name(&type_.name(), source_name))
+                }),
+            Type::Trait(trait_name) => self
+                .traits
+                .get(trait_name)
+                .and_then(|trait_| trait_.methods.get(source_name)),
+            _ => self.extensions.get(&extension_name(&type_.name(), name)),
+        }
+        .map(|signature| signature.return_type.clone())
     }
 
     fn define(&mut self, name: &str, mutable: bool, type_: Type) {

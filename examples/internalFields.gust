@@ -1,0 +1,20 @@
+struct Counter {
+    internal value: i32
+
+    static fn new(value: i32): Self => Counter {
+        value: value,
+    }
+
+    fn increment(mut self) {
+        self.value++
+    }
+
+    fn get(): i32 => self.value
+}
+
+fn main() {
+    let mut counter = Counter.new(1)
+    counter.increment()
+    io.println(counter.get().toString())
+    io.println(counter.value.toString())
+}

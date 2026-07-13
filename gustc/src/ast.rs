@@ -150,6 +150,7 @@ pub enum StructMember {
 pub struct FieldDecl {
     pub name: String,
     pub type_ref: TypeRef,
+    pub internal: bool,
     pub span: Span,
 }
 
