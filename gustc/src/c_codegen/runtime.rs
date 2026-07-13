@@ -24,7 +24,7 @@ fn push_c_string_builder_helpers(source: &mut String, structs: &[LoweredStruct])
         source.push_str(
             "        while (capacity < required) {\n            capacity *= 2;\n        }\n",
         );
-        source.push_str("        unsigned char* data = gust_rt_alloc(capacity);\n");
+        source.push_str("        unsigned char* data = gust_rt_alloc(&gust_rt_desc_bytes, capacity);\n");
         source.push_str("        if (builder->gust_length > 0) {\n            memcpy(data, builder->gust_data, builder->gust_length);\n        }\n");
         source.push_str(
             "        builder->gust_data = data;\n        builder->gust_capacity = capacity;\n",
@@ -39,7 +39,7 @@ fn push_c_string_builder_helpers(source: &mut String, structs: &[LoweredStruct])
         source.push('(');
         push_c_struct_name(source, &struct_.name);
         source.push_str("* builder) {\n");
-        source.push_str("    unsigned char* data = gust_rt_alloc(builder->gust_length == 0 ? 1 : builder->gust_length);\n");
+        source.push_str("    unsigned char* data = gust_rt_alloc(&gust_rt_desc_bytes, builder->gust_length == 0 ? 1 : builder->gust_length);\n");
         source.push_str("    if (builder->gust_length > 0) {\n        memcpy(data, builder->gust_data, builder->gust_length);\n    }\n");
         source.push_str("    return (gust_rt_string){ .gust_data = data, .gust_byte_len = builder->gust_length };\n");
         source.push_str("}\n\n");
@@ -65,6 +65,411 @@ fn raw_buffer_method(name: &str) -> Option<&str> {
         .find(|method| name.ends_with(&format!(".{method}")))
 }
 
+fn push_c_gc_runtime(source: &mut String, gc_stress: bool) {
+    source.push_str("typedef struct gust_rt_type_desc {\n");
+    source.push_str("    const char* gust_name;\n");
+    source.push_str("    void (*gust_trace)(void* value);\n");
+    source.push_str("} gust_rt_type_desc;\n\n");
+    source.push_str("typedef struct gust_rt_object_header {\n");
+    source.push_str("    const gust_rt_type_desc* gust_desc;\n");
+    source.push_str("    bool gust_marked;\n");
+    source.push_str("    size_t gust_size;\n");
+    source.push_str("    struct gust_rt_object_header* gust_next;\n");
+    source.push_str("} gust_rt_object_header;\n\n");
+    source.push_str("typedef struct gust_rt_root_slot {\n");
+    source.push_str("    void* gust_value;\n");
+    source.push_str("    void (*gust_trace)(void* value);\n");
+    source.push_str("    struct gust_rt_root_slot* gust_previous;\n");
+    source.push_str("} gust_rt_root_slot;\n\n");
+    source.push_str("static gust_rt_object_header* gust_rt_heap_objects = NULL;\n");
+    source.push_str("static gust_rt_root_slot* gust_rt_roots = NULL;\n");
+    source.push_str("static size_t gust_rt_heap_bytes = 0;\n");
+    source.push_str("static size_t gust_rt_next_collection_bytes = 1024 * 1024;\n\n");
+    source.push_str("static void gust_rt_mark(void* value);\n\n");
+    source.push_str("static void gust_rt_root_push(gust_rt_root_slot* slot) {\n");
+    source.push_str("    slot->gust_previous = gust_rt_roots;\n");
+    source.push_str("    gust_rt_roots = slot;\n");
+    source.push_str("}\n\n");
+    source.push_str("static void gust_rt_roots_pop_to(gust_rt_root_slot* slot) {\n");
+    source.push_str("    gust_rt_roots = slot;\n");
+    source.push_str("}\n\n");
+    source.push_str("static gust_rt_object_header* gust_rt_find_header(void* value) {\n");
+    source.push_str("    for (gust_rt_object_header* header = gust_rt_heap_objects; header != NULL; header = header->gust_next) {\n");
+    source.push_str("        if ((void*)(header + 1) == value) {\n");
+    source.push_str("            return header;\n");
+    source.push_str("        }\n");
+    source.push_str("    }\n");
+    source.push_str("    return NULL;\n");
+    source.push_str("}\n\n");
+    source.push_str("static void* gust_rt_alloc(const gust_rt_type_desc* desc, size_t size) {\n");
+    source.push_str("    size_t payload_size = size == 0 ? 1 : size;\n");
+    source.push_str("    gust_rt_object_header* header = malloc(sizeof(gust_rt_object_header) + payload_size);\n");
+    source.push_str("    if (header == NULL) {\n");
+    source.push_str("        abort();\n");
+    source.push_str("    }\n");
+    source.push_str("    header->gust_desc = desc;\n");
+    source.push_str("    header->gust_marked = false;\n");
+    source.push_str("    header->gust_size = payload_size;\n");
+    source.push_str("    header->gust_next = gust_rt_heap_objects;\n");
+    source.push_str("    gust_rt_heap_objects = header;\n");
+    source.push_str("    gust_rt_heap_bytes += payload_size;\n");
+    source.push_str("    return (void*)(header + 1);\n");
+    source.push_str("}\n\n");
+    source.push_str("static void gust_rt_mark(void* value) {\n");
+    source.push_str("    if (value == NULL) {\n");
+    source.push_str("        return;\n");
+    source.push_str("    }\n");
+    source.push_str("    gust_rt_object_header* header = gust_rt_find_header(value);\n");
+    source.push_str("    if (header == NULL) {\n");
+    source.push_str("        return;\n");
+    source.push_str("    }\n");
+    source.push_str("    if (header->gust_marked) {\n");
+    source.push_str("        return;\n");
+    source.push_str("    }\n");
+    source.push_str("    header->gust_marked = true;\n");
+    source.push_str("    if (header->gust_desc != NULL && header->gust_desc->gust_trace != NULL) {\n");
+    source.push_str("        header->gust_desc->gust_trace(value);\n");
+    source.push_str("    }\n");
+    source.push_str("}\n\n");
+    source.push_str("static void gust_rt_mark_roots(void) {\n");
+    source.push_str("    for (gust_rt_root_slot* slot = gust_rt_roots; slot != NULL; slot = slot->gust_previous) {\n");
+    source.push_str("        if (slot->gust_trace != NULL) {\n");
+    source.push_str("            slot->gust_trace(slot->gust_value);\n");
+    source.push_str("        }\n");
+    source.push_str("    }\n");
+    source.push_str("}\n\n");
+    source.push_str("static void gust_rt_trace_heap_object_root(void* value) {\n");
+    source.push_str("    gust_rt_mark(*(void**)value);\n");
+    source.push_str("}\n\n");
+    source.push_str("static const bool gust_rt_gc_stress = ");
+    if gc_stress {
+        source.push_str("true");
+    } else {
+        source.push_str("false");
+    }
+    source.push_str(";\n\n");
+    source.push_str("static void gust_rt_collect(void) {\n");
+    source.push_str("    gust_rt_object_header** current = &gust_rt_heap_objects;\n");
+    source.push_str("    while (*current != NULL) {\n");
+    source.push_str("        gust_rt_object_header* header = *current;\n");
+    source.push_str("        if (header->gust_marked) {\n");
+    source.push_str("            header->gust_marked = false;\n");
+    source.push_str("            current = &header->gust_next;\n");
+    source.push_str("        } else {\n");
+    source.push_str("            *current = header->gust_next;\n");
+    source.push_str("            gust_rt_heap_bytes -= header->gust_size;\n");
+    source.push_str("            free(header);\n");
+    source.push_str("        }\n");
+    source.push_str("    }\n");
+    source.push_str("    if (gust_rt_next_collection_bytes < 1024 * 1024) {\n");
+    source.push_str("        gust_rt_next_collection_bytes = 1024 * 1024;\n");
+    source.push_str("    }\n");
+    source.push_str("    while (gust_rt_next_collection_bytes < gust_rt_heap_bytes * 2) {\n");
+    source.push_str("        gust_rt_next_collection_bytes *= 2;\n");
+    source.push_str("    }\n");
+    source.push_str("}\n\n");
+    source.push_str("static void gust_rt_safepoint(void) {\n");
+    source.push_str("    if (gust_rt_gc_stress || gust_rt_heap_bytes >= gust_rt_next_collection_bytes) {\n");
+    source.push_str("        gust_rt_mark_roots();\n");
+    source.push_str("        gust_rt_collect();\n");
+    source.push_str("    }\n");
+    source.push_str("}\n\n");
+    source.push_str("static void gust_rt_write_ptr(void* owner, void** slot, void* value) {\n");
+    source.push_str("    (void)owner;\n");
+    source.push_str("    *slot = value;\n");
+    source.push_str("}\n\n");
+}
+
+fn push_c_gc_descriptors(source: &mut String, program: &LoweredProgram) {
+    source.push_str("static void gust_rt_trace_none(void* value) {\n");
+    source.push_str("    (void)value;\n");
+    source.push_str("}\n\n");
+    source.push_str("static const gust_rt_type_desc gust_rt_desc_bytes = { \"bytes\", gust_rt_trace_none };\n");
+    source.push_str("static const gust_rt_type_desc gust_rt_desc_clone_entry = { \"clone_entry\", gust_rt_trace_none };\n\n");
+
+    for enum_ in &program.enums {
+        source.push_str("static void ");
+        push_c_enum_trace_name(source, &enum_.name);
+        source.push('(');
+        push_c_enum_name(source, &enum_.name);
+        source.push_str("* value);\n");
+    }
+    if !program.enums.is_empty() {
+        source.push('\n');
+    }
+
+    for struct_ in &program.structs {
+        push_c_struct_trace_descriptor(source, struct_);
+    }
+
+    for enum_ in &program.enums {
+        push_c_enum_trace_descriptor(source, enum_);
+    }
+
+    for type_ in gc_cell_types(program)
+        .into_iter()
+        .filter(|type_| !matches!(type_, LoweredType::Void))
+    {
+        push_c_cell_trace_descriptor(source, &type_);
+    }
+
+    for function in &program.closure_functions {
+        if !function.captures.is_empty() {
+            push_c_closure_env_trace_descriptor(source, function);
+        }
+    }
+}
+
+fn push_c_struct_trace_descriptor(source: &mut String, struct_: &LoweredStruct) {
+    source.push_str("static void ");
+    push_c_struct_trace_name(source, &struct_.name);
+    source.push_str("(void* object) {\n");
+    source.push_str("    ");
+    push_c_struct_name(source, &struct_.name);
+    source.push_str("* value = object;\n");
+    for field in &struct_.fields {
+        let mut value = String::new();
+        value.push_str("value->");
+        push_c_local_name(&mut value, &field.name);
+        push_c_trace_value(source, &field.type_, &value);
+    }
+    if struct_.raw_buffer_element.is_some() || is_string_builder_name(&struct_.name) {
+        source.push_str("    gust_rt_mark(value->gust_data);\n");
+    }
+    if let Some(element) = &struct_.raw_buffer_element {
+        source.push_str("    for (size_t gust_index = 0; gust_index < value->gust_length; gust_index++) {\n");
+        let mut element_value = String::new();
+        element_value.push_str("((");
+        push_c_type(&mut element_value, element);
+        element_value.push_str("*)value->gust_data)[gust_index]");
+        push_c_trace_value(source, element, &element_value);
+        source.push_str("    }\n");
+    }
+    source.push_str("}\n\n");
+    source.push_str("static const gust_rt_type_desc ");
+    push_c_struct_desc_name(source, &struct_.name);
+    source.push_str(" = { \"");
+    push_c_string_value(source, &struct_.name);
+    source.push_str("\", ");
+    push_c_struct_trace_name(source, &struct_.name);
+    source.push_str(" };\n\n");
+}
+
+fn push_c_enum_trace_descriptor(source: &mut String, enum_: &LoweredEnum) {
+    source.push_str("static void ");
+    push_c_enum_trace_name(source, &enum_.name);
+    source.push('(');
+    push_c_enum_name(source, &enum_.name);
+    source.push_str("* value) {\n");
+    source.push_str("    switch (value->gust_tag) {\n");
+    for variant in &enum_.variants {
+        source.push_str("        case ");
+        push_c_enum_variant_tag(source, &enum_.name, &variant.name);
+        source.push_str(":\n");
+        if let Some(payload) = &variant.payload {
+            let mut value = String::new();
+            value.push_str("value->gust_payload.");
+            push_c_local_name(&mut value, &variant.name);
+            push_c_trace_value(source, payload, &value);
+        }
+        source.push_str("            break;\n");
+    }
+    source.push_str("    }\n");
+    source.push_str("}\n\n");
+    source.push_str("static void ");
+    push_c_enum_box_trace_name(source, &enum_.name);
+    source.push_str("(void* object) {\n");
+    source.push_str("    ");
+    push_c_enum_trace_name(source, &enum_.name);
+    source.push_str("(object);\n");
+    source.push_str("}\n\n");
+    source.push_str("static const gust_rt_type_desc ");
+    push_c_enum_desc_name(source, &enum_.name);
+    source.push_str(" = { \"");
+    push_c_string_value(source, &enum_.name);
+    source.push_str("\", ");
+    push_c_enum_box_trace_name(source, &enum_.name);
+    source.push_str(" };\n\n");
+}
+
+fn push_c_cell_trace_descriptor(source: &mut String, type_: &LoweredType) {
+    source.push_str("static void ");
+    push_c_cell_trace_name(source, type_);
+    source.push_str("(void* object) {\n");
+    source.push_str("    ");
+    push_c_type(source, type_);
+    source.push_str("* value = object;\n");
+    push_c_trace_value(source, type_, "(*value)");
+    source.push_str("}\n\n");
+    source.push_str("static const gust_rt_type_desc ");
+    push_c_cell_desc_name(source, type_);
+    source.push_str(" = { \"cell\", ");
+    push_c_cell_trace_name(source, type_);
+    source.push_str(" };\n\n");
+}
+
+fn push_c_closure_env_trace_descriptor(source: &mut String, function: &LoweredClosureFunction) {
+    let env_type = closure_env_type_name(&function.name);
+    source.push_str("static void gust_rt_trace_");
+    source.push_str(&env_type);
+    source.push_str("(void* object) {\n");
+    source.push_str("    ");
+    source.push_str(&env_type);
+    source.push_str("* value = object;\n");
+    for capture in &function.captures {
+        source.push_str("    gust_rt_mark(value->");
+        push_c_local_name(source, &capture.name);
+        source.push_str(");\n");
+    }
+    source.push_str("}\n\n");
+    source.push_str("static const gust_rt_type_desc ");
+    push_c_closure_env_desc_name(source, &function.name);
+    source.push_str(" = { \"");
+    push_c_string_value(source, &env_type);
+    source.push_str("\", gust_rt_trace_");
+    source.push_str(&env_type);
+    source.push_str(" };\n\n");
+}
+
+fn push_c_trace_value(source: &mut String, type_: &LoweredType, value: &str) {
+    match type_ {
+        LoweredType::Basic(BasicType::String) => {
+            source.push_str("    gust_rt_mark((void*)");
+            source.push_str(value);
+            source.push_str(".gust_data);\n");
+        }
+        LoweredType::Basic(_) | LoweredType::Void => {}
+        LoweredType::Struct(_) => {
+            source.push_str("    gust_rt_mark(");
+            source.push_str(value);
+            source.push_str(");\n");
+        }
+        LoweredType::Enum(name) => {
+            source.push_str("    ");
+            push_c_enum_trace_name(source, name);
+            source.push_str("(&");
+            source.push_str(value);
+            source.push_str(");\n");
+        }
+        LoweredType::Trait(_) => {
+            source.push_str("    gust_rt_mark(");
+            source.push_str(value);
+            source.push_str(".gust_self);\n");
+        }
+        LoweredType::Function { .. } => {
+            source.push_str("    gust_rt_mark(");
+            source.push_str(value);
+            source.push_str(".gust_env);\n");
+        }
+    }
+}
+
+fn gc_cell_types(program: &LoweredProgram) -> Vec<LoweredType> {
+    let mut types = Vec::new();
+    for function in &program.functions {
+        for param in &function.params {
+            types.push(param.type_.clone());
+        }
+        for statement in &function.statements {
+            collect_cell_types_from_statement(statement, &mut types);
+        }
+    }
+    for function in &program.closure_functions {
+        for param in &function.params {
+            types.push(param.type_.clone());
+        }
+        for statement in &function.statements {
+            collect_cell_types_from_statement(statement, &mut types);
+        }
+    }
+    for statement in &program.statements {
+        collect_cell_types_from_statement(statement, &mut types);
+    }
+    types.sort_by_key(type_name_key);
+    types.dedup();
+    types
+}
+
+fn collect_cell_types_from_statement(statement: &LoweredStatement, types: &mut Vec<LoweredType>) {
+    match statement {
+        LoweredStatement::Local { value, .. } | LoweredStatement::LocalCell { value, .. } => {
+            types.push(value.type_.clone());
+        }
+        LoweredStatement::If {
+            then_branch,
+            else_branch,
+            ..
+        } => {
+            for statement in then_branch {
+                collect_cell_types_from_statement(statement, types);
+            }
+            if let Some(else_branch) = else_branch {
+                for statement in else_branch {
+                    collect_cell_types_from_statement(statement, types);
+                }
+            }
+        }
+        LoweredStatement::While { body, .. } => {
+            for statement in body {
+                collect_cell_types_from_statement(statement, types);
+            }
+        }
+        LoweredStatement::Match {
+            value, decision, ..
+        } => {
+            types.push(value.type_.clone());
+            collect_cell_types_from_decision(decision, types);
+        }
+        LoweredStatement::Assignment { .. }
+        | LoweredStatement::Println(_)
+        | LoweredStatement::Panic { .. }
+        | LoweredStatement::Expr(_)
+        | LoweredStatement::Return(_)
+        | LoweredStatement::Break
+        | LoweredStatement::Continue => {}
+    }
+}
+
+fn collect_cell_types_from_decision(decision: &LoweredMatchDecision, types: &mut Vec<LoweredType>) {
+    match decision {
+        LoweredMatchDecision::Body { statements, .. } => {
+            for statement in statements {
+                collect_cell_types_from_statement(statement, types);
+            }
+        }
+        LoweredMatchDecision::Arms { arms } => {
+            for arm in arms {
+                collect_cell_types_from_decision(arm, types);
+            }
+        }
+        LoweredMatchDecision::Test { then, else_, .. } => {
+            collect_cell_types_from_decision(then, types);
+            collect_cell_types_from_decision(else_, types);
+        }
+        LoweredMatchDecision::Bind { type_, then, .. } => {
+            types.push(type_.clone());
+            collect_cell_types_from_decision(then, types);
+        }
+        LoweredMatchDecision::Or {
+            bindings,
+            alternatives,
+            then,
+            else_,
+            ..
+        } => {
+            for binding in bindings {
+                types.push(binding.type_.clone());
+            }
+            for alternative in alternatives {
+                collect_cell_types_from_decision(alternative, types);
+            }
+            collect_cell_types_from_decision(then, types);
+            collect_cell_types_from_decision(else_, types);
+        }
+        LoweredMatchDecision::Matched | LoweredMatchDecision::Fail | LoweredMatchDecision::End => {}
+    }
+}
+
 fn push_c_struct_runtime_helpers(source: &mut String, program: &LoweredProgram) {
     if program.structs.is_empty() {
         return;
@@ -87,7 +492,7 @@ fn push_c_struct_runtime_helpers(source: &mut String, program: &LoweredProgram) 
     source.push_str("}\n\n");
     source.push_str("static void gust_rt_clone_register(gust_rt_clone_entry** entries, const void* source, void* clone) {\n");
     source
-        .push_str("    gust_rt_clone_entry* entry = gust_rt_alloc(sizeof(gust_rt_clone_entry));\n");
+        .push_str("    gust_rt_clone_entry* entry = gust_rt_alloc(&gust_rt_desc_clone_entry, sizeof(gust_rt_clone_entry));\n");
     source.push_str("    entry->gust_source = source;\n");
     source.push_str("    entry->gust_clone = clone;\n");
     source.push_str("    entry->gust_next = *entries;\n");
@@ -183,7 +588,9 @@ fn push_c_struct_runtime_helpers(source: &mut String, program: &LoweredProgram) 
         }
         source.push_str(") {\n    ");
         push_c_struct_name(source, &struct_.name);
-        source.push_str("* result = gust_rt_alloc(sizeof(");
+        source.push_str("* result = gust_rt_alloc(&");
+        push_c_struct_desc_name(source, &struct_.name);
+        source.push_str(", sizeof(");
         push_c_struct_name(source, &struct_.name);
         source.push_str("));\n");
         for field in &struct_.fields {
@@ -212,7 +619,9 @@ fn push_c_struct_runtime_helpers(source: &mut String, program: &LoweredProgram) 
         source.push_str("    void* existing = gust_rt_clone_lookup(*entries, value);\n");
         source.push_str("    if (existing != NULL) {\n        return existing;\n    }\n    ");
         push_c_struct_name(source, &struct_.name);
-        source.push_str("* result = gust_rt_alloc(sizeof(");
+        source.push_str("* result = gust_rt_alloc(&");
+        push_c_struct_desc_name(source, &struct_.name);
+        source.push_str(", sizeof(");
         push_c_struct_name(source, &struct_.name);
         source.push_str("));\n");
         source.push_str("    gust_rt_clone_register(entries, value, result);\n");
@@ -242,7 +651,7 @@ fn push_c_struct_runtime_helpers(source: &mut String, program: &LoweredProgram) 
             source.push_str("    result->gust_capacity = value->gust_capacity;\n");
             source.push_str("    result->gust_length = value->gust_length;\n");
             source.push_str("    result->gust_data = NULL;\n");
-            source.push_str("    if (value->gust_capacity > 0) {\n        result->gust_data = gust_rt_alloc(sizeof(");
+            source.push_str("    if (value->gust_capacity > 0) {\n        result->gust_data = gust_rt_alloc(&gust_rt_desc_bytes, sizeof(");
             push_c_type(source, element);
             source.push_str(") * value->gust_capacity);\n    }\n");
             source.push_str("    for (size_t gust_index = 0; gust_index < value->gust_length; gust_index++) {\n        ((");
@@ -256,7 +665,7 @@ fn push_c_struct_runtime_helpers(source: &mut String, program: &LoweredProgram) 
             source.push_str("    result->gust_capacity = value->gust_capacity;\n");
             source.push_str("    result->gust_length = value->gust_length;\n");
             source.push_str("    result->gust_data = NULL;\n");
-            source.push_str("    if (value->gust_capacity > 0) {\n        result->gust_data = gust_rt_alloc(value->gust_capacity);\n    }\n");
+            source.push_str("    if (value->gust_capacity > 0) {\n        result->gust_data = gust_rt_alloc(&gust_rt_desc_bytes, value->gust_capacity);\n    }\n");
             source.push_str("    if (value->gust_length > 0) {\n        memcpy(result->gust_data, value->gust_data, value->gust_length);\n    }\n");
         }
 
@@ -471,7 +880,7 @@ fn push_c_number_to_string_helper(source: &mut String, type_: BasicType) {
         source.push_str("        value /= 10;\n");
         source.push_str("    } while (value != 0);\n");
         source.push_str("    size_t length = (buffer + sizeof(buffer)) - cursor;\n");
-        source.push_str("    unsigned char* data = gust_rt_alloc(length);\n");
+        source.push_str("    unsigned char* data = gust_rt_alloc(&gust_rt_desc_bytes, length);\n");
         source.push_str("    memcpy(data, cursor, length);\n");
         source.push_str(
             "    return (gust_rt_string){ .gust_data = data, .gust_byte_len = length };\n",
@@ -496,7 +905,7 @@ fn push_c_number_to_string_helper(source: &mut String, type_: BasicType) {
         source.push_str("        *--cursor = '-';\n");
         source.push_str("    }\n");
         source.push_str("    size_t length = (buffer + sizeof(buffer)) - cursor;\n");
-        source.push_str("    unsigned char* data = gust_rt_alloc(length);\n");
+        source.push_str("    unsigned char* data = gust_rt_alloc(&gust_rt_desc_bytes, length);\n");
         source.push_str("    memcpy(data, cursor, length);\n");
         source.push_str(
             "    return (gust_rt_string){ .gust_data = data, .gust_byte_len = length };\n",
@@ -532,7 +941,7 @@ fn push_c_number_to_string_helper(source: &mut String, type_: BasicType) {
     source.push_str("\", ");
     source.push_str(cast);
     source.push_str(");\n");
-    source.push_str("    unsigned char* data = gust_rt_alloc((size_t)length + 1);\n");
+    source.push_str("    unsigned char* data = gust_rt_alloc(&gust_rt_desc_bytes, (size_t)length + 1);\n");
     source.push_str("    snprintf((char*)data, (size_t)length + 1, \"");
     source.push_str(format);
     source.push_str("\", ");

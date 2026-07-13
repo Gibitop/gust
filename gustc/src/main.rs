@@ -4,11 +4,11 @@ use std::path::PathBuf;
 use std::process::{self, Command, ExitCode};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use gustc::c_codegen::emit_c;
+use gustc::c_codegen::{CCodegenOptions, emit_c_with_options};
 use gustc::lower::lower_program_with_source_files;
 use gustc::project::check_project;
 
-const USAGE: &str = "usage: gustc <file.gust> [-o <output>] [--emit-c <output.c>]";
+const USAGE: &str = "usage: gustc <file.gust> [-o <output>] [--emit-c <output.c>] [--gc-stress]";
 
 fn main() -> ExitCode {
     let mut args = env::args().skip(1);
@@ -25,6 +25,7 @@ fn main() -> ExitCode {
     };
     let mut output_path = None;
     let mut emit_c_path = None;
+    let mut gc_stress = false;
 
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -49,6 +50,13 @@ fn main() -> ExitCode {
                     eprintln!("duplicate `--emit-c` argument");
                     return ExitCode::FAILURE;
                 }
+            }
+            "--gc-stress" => {
+                if gc_stress {
+                    eprintln!("duplicate `--gc-stress` argument");
+                    return ExitCode::FAILURE;
+                }
+                gc_stress = true;
             }
             _ => {
                 eprintln!("unexpected argument `{arg}`");
@@ -96,7 +104,7 @@ fn main() -> ExitCode {
         }
     };
 
-    let c_source = emit_c(&lowered);
+    let c_source = emit_c_with_options(&lowered, CCodegenOptions { gc_stress });
     let keep_c_file = emit_c_path.is_some();
     let c_path = emit_c_path.unwrap_or_else(|| {
         let unique_id = SystemTime::now()

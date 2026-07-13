@@ -371,6 +371,94 @@ fn main() {
 }
 
 #[test]
+fn gc_stress_traces_array_list_raw_buffer_elements() {
+    let project = TempProject::new();
+    project.write("std/option.gust", include_str!("../../../std/option.gust"));
+    project.write("std/result.gust", include_str!("../../../std/result.gust"));
+    project.write("std/collection.gust", include_str!("../../../std/collection.gust"));
+    project.write("std/index.gust", include_str!("../../../std/index.gust"));
+    project.write("std/iter.gust", include_str!("../../../std/iter.gust"));
+    project.write("std/arrayList.gust", include_str!("../../../std/arrayList.gust"));
+    project.write(
+        "std/internal/rawBuffer.gust",
+        include_str!("../../../std/internal/rawBuffer.gust"),
+    );
+    project.write(
+        "main.gust",
+        r#"from ./std/arrayList import { ArrayList }
+from ./std/iter import { Iterator }
+from ./std/option import { Option }
+
+struct Box {
+    text: string
+}
+
+fn make(index: i32): Box {
+    return Box { text: "item " + index.toString() }
+}
+
+fn main() {
+    let mut values = ArrayList<Box>.withCapacity(0)
+    values.push(make(1))
+    values.push(make(2))
+    values.push(Box { text: "item " + 3.toString() })
+
+    let first = values[0]
+    values[1] = Box { text: "replace " + 2.toString() }
+    io.println(first.text)
+
+    for value in values {
+        io.println(value.text)
+    }
+
+    match values.pop() {
+        Option.Some(value) => io.println(value.text),
+        Option.None => io.println("empty"),
+    }
+}"#,
+    );
+
+    let result = check_project(&project.path("main.gust")).expect("project should load");
+    assert!(
+        result.diagnostics.is_empty(),
+        "expected GC collection project to validate, got {:?}",
+        result.diagnostics
+    );
+
+    let lowered = lower_program(&result.program).expect("GC collection project should lower");
+    let source = emit_c_with_options(&lowered, CCodegenOptions { gc_stress: true });
+    assert!(source.contains("static const bool gust_rt_gc_stress = true;"));
+    assert!(source.contains("value->gust_data"));
+
+    let c_path = project.path("gc-collection.c");
+    fs::write(&c_path, source).expect("generated C should be written");
+    let executable = project.path("gc-collection");
+    let output = Command::new("cc")
+        .arg(&c_path)
+        .arg("-o")
+        .arg(&executable)
+        .output()
+        .expect("C compiler should build GC collection executable");
+    assert!(
+        output.status.success(),
+        "generated GC collection C should build: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let output = Command::new(executable)
+        .output()
+        .expect("GC collection executable should run");
+    assert!(
+        output.status.success(),
+        "GC collection executable should succeed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "item 1\nitem 1\nreplace 2\nitem 3\nitem 3\n"
+    );
+}
+
+#[test]
 fn iterator_adapters_map_filter_and_collect() {
     let project = TempProject::new();
     project.write("std/option.gust", include_str!("../../../std/option.gust"));

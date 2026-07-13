@@ -600,7 +600,7 @@ fn main() {
     );
 
     let c = emit_c(&lowered);
-    assert!(c.contains("gust_trait_self = gust_rt_alloc(sizeof(gust_enum_"));
+    assert!(c.contains("gust_trait_self = gust_rt_alloc(&gust_rt_desc_enum_"));
     assert!(c.contains("*(("));
     assert!(c.contains("*)gust_self)"));
     assert!(c.contains(".gust_vtable = &gust_vtable_"));

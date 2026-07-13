@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use std::process::{self, Command};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use gustc::c_codegen::emit_c;
+use gustc::c_codegen::{CCodegenOptions, emit_c, emit_c_with_options};
 use gustc::diagnostic::Severity;
 use gustc::lower::{lower_program, lower_program_with_source_files};
 use gustc::project::check_project;
