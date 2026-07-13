@@ -28,7 +28,15 @@ struct LoweringContext {
     next_closure_id: usize,
 }
 
+#[derive(Debug, Clone)]
+pub struct LoweringSourceFile {
+    pub path: String,
+    pub source: String,
+    pub offset: usize,
+}
+
 thread_local! {
     static CLOSURE_LOWERING: RefCell<LoweringContext> = RefCell::new(LoweringContext::default());
     static CAPTURED_NAMES: RefCell<HashSet<String>> = RefCell::new(HashSet::new());
+    static SOURCE_FILES: RefCell<Vec<LoweringSourceFile>> = const { RefCell::new(Vec::new()) };
 }

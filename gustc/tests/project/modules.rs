@@ -59,6 +59,47 @@ fn directory_entry_uses_main_gust() {
 }
 
 #[test]
+fn panic_stack_locations_use_paths_relative_to_compilation_root() {
+    let project = TempProject::new();
+    project.write(
+        "main.gust",
+        r#"from ./lib/helper import { fail }
+
+fn main() {
+    fail()
+}"#,
+    );
+    project.write(
+        "lib/helper.gust",
+        r#"fn fail() {
+    panic("from helper")
+}"#,
+    );
+
+    let result = check_project(&project.path("main.gust")).expect("project should load");
+    assert!(
+        result.diagnostics.is_empty(),
+        "expected project to validate, got {:?}",
+        result.diagnostics
+    );
+
+    let lowered = lower_program_with_source_files(
+        &result.program,
+        result.sources.to_lowering_source_files(),
+    )
+    .expect("project should lower");
+    let source = emit_c(&lowered);
+
+    assert!(source.contains("gust_rt_stack_push(\"main\", \"main.gust\", 3, 1);"));
+    assert!(source.contains("\", \"lib/helper.gust\", 1, 1);"));
+    assert!(source.contains("gust_rt_stack_update(\"lib/helper.gust\", 2, 5);"));
+    assert!(
+        !source.contains(&project.path.to_string_lossy().into_owned()),
+        "generated panic frames should not contain absolute temp project paths: {source}"
+    );
+}
+
+#[test]
 fn unimported_names_are_not_visible() {
     let project = TempProject::new();
     project.write(
@@ -286,4 +327,3 @@ fn main() {
             .contains("module namespace `helper` does not export `missing`")
     }));
 }
-

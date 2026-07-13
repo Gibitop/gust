@@ -111,22 +111,42 @@ fn push_c_enum(source: &mut String, enum_: &LoweredEnum) {
     source.push_str(";\n");
 }
 
-fn push_c_function(source: &mut String, function: &LoweredFunction, structs: &[LoweredStruct]) {
+fn push_c_function(
+    source: &mut String,
+    function: &LoweredFunction,
+    structs: &[LoweredStruct],
+    uses_panic: bool,
+) {
     source.push_str("// Gust function: ");
     source.push_str(&function.name);
     source.push('\n');
     push_c_function_signature(source, function);
     source.push_str(" {\n");
+    if uses_panic {
+        push_c_stack_push(source, &function.name, &function.location, 1);
+    }
 
     for statement in &function.statements {
-        push_c_statement(source, statement, 1, structs);
+        push_c_statement(source, statement, 1, structs, uses_panic);
     }
 
     if function.return_type != LoweredType::Void && function.return_value.type_ != LoweredType::Void
     {
-        source.push_str("    return ");
-        push_c_value(source, &function.return_value, structs);
-        source.push_str(";\n");
+        if uses_panic {
+            source.push_str("    ");
+            push_c_type(source, &function.return_value.type_);
+            source.push_str(" gust_rt_return_value = ");
+            push_c_value_with_panic(source, &function.return_value, structs, uses_panic);
+            source.push_str(";\n");
+            source.push_str("    gust_rt_stack_pop();\n");
+            source.push_str("    return gust_rt_return_value;\n");
+        } else {
+            source.push_str("    return ");
+            push_c_value_with_panic(source, &function.return_value, structs, uses_panic);
+            source.push_str(";\n");
+        }
+    } else if uses_panic {
+        source.push_str("    gust_rt_stack_pop();\n");
     }
 
     source.push_str("}\n");
@@ -150,6 +170,35 @@ fn push_c_function_signature(source: &mut String, function: &LoweredFunction) {
     }
 
     source.push(')');
+}
+
+fn push_c_stack_push(
+    source: &mut String,
+    name: &str,
+    location: &LoweredSourceLocation,
+    indent: usize,
+) {
+    push_c_indent(source, indent);
+    source.push_str("gust_rt_stack_push(\"");
+    push_c_string_value(source, name);
+    source.push_str("\", \"");
+    push_c_string_value(source, &location.path);
+    source.push_str("\", ");
+    source.push_str(&location.line.to_string());
+    source.push_str(", ");
+    source.push_str(&location.column.to_string());
+    source.push_str(");\n");
+}
+
+fn push_c_stack_update(source: &mut String, location: &LoweredSourceLocation, indent: usize) {
+    push_c_indent(source, indent);
+    source.push_str("gust_rt_stack_update(\"");
+    push_c_string_value(source, &location.path);
+    source.push_str("\", ");
+    source.push_str(&location.line.to_string());
+    source.push_str(", ");
+    source.push_str(&location.column.to_string());
+    source.push_str(");\n");
 }
 
 fn push_c_closure_env_structs(source: &mut String, functions: &[LoweredClosureFunction]) {
@@ -178,12 +227,25 @@ fn push_c_closure_function(
     source: &mut String,
     function: &LoweredClosureFunction,
     structs: &[LoweredStruct],
+    uses_panic: bool,
 ) {
     source.push_str("// Gust closure: ");
     source.push_str(&function.name);
     source.push('\n');
     push_c_closure_function_signature(source, function);
     source.push_str(" {\n");
+    if uses_panic {
+        push_c_stack_push(
+            source,
+            &function.name,
+            &LoweredSourceLocation {
+                path: "<closure>".to_string(),
+                line: 1,
+                column: 1,
+            },
+            1,
+        );
+    }
     if !function.captures.is_empty() {
         source.push_str("    ");
         source.push_str(&closure_env_type_name(&function.name));
@@ -193,14 +255,26 @@ fn push_c_closure_function(
     }
 
     for statement in &function.statements {
-        push_c_statement(source, statement, 1, structs);
+        push_c_statement(source, statement, 1, structs, uses_panic);
     }
 
     if function.return_type != LoweredType::Void && function.return_value.type_ != LoweredType::Void
     {
-        source.push_str("    return ");
-        push_c_value(source, &function.return_value, structs);
-        source.push_str(";\n");
+        if uses_panic {
+            source.push_str("    ");
+            push_c_type(source, &function.return_value.type_);
+            source.push_str(" gust_rt_return_value = ");
+            push_c_value_with_panic(source, &function.return_value, structs, uses_panic);
+            source.push_str(";\n");
+            source.push_str("    gust_rt_stack_pop();\n");
+            source.push_str("    return gust_rt_return_value;\n");
+        } else {
+            source.push_str("    return ");
+            push_c_value_with_panic(source, &function.return_value, structs, uses_panic);
+            source.push_str(";\n");
+        }
+    } else if uses_panic {
+        source.push_str("    gust_rt_stack_pop();\n");
     }
 
     source.push_str("}\n");

@@ -1014,6 +1014,7 @@ fn lower_expr(
                     kind: LoweredExprKind::Call {
                         name: lowered_name,
                         args: lowered_args,
+                        location: lower_source_location(expr.span),
                     },
                 }
             } else if let ExprKind::Member { object, name } = &callee.kind {
@@ -1121,6 +1122,7 @@ fn lower_expr(
                         kind: LoweredExprKind::Call {
                             name: format!("intrinsic StringBuilder.{source_name}"),
                             args: lowered_args,
+                            location: lower_source_location(expr.span),
                         },
                     });
                 }
@@ -1143,6 +1145,7 @@ fn lower_expr(
                         kind: LoweredExprKind::Call {
                             name: "intrinsic string.len".to_string(),
                             args: vec![object],
+                            location: lower_source_location(expr.span),
                         },
                     });
                 }
@@ -1262,6 +1265,7 @@ fn lower_expr(
                             object: Box::new(object),
                             method: source_name.to_string(),
                             args: lowered_args,
+                            location: lower_source_location(expr.span),
                         },
                     });
                 }
@@ -1341,6 +1345,7 @@ fn lower_expr(
                     kind: LoweredExprKind::Call {
                         name: lowered_name,
                         args: lowered_args,
+                        location: lower_source_location(expr.span),
                     },
                 }
             } else {
@@ -1399,6 +1404,7 @@ fn lower_expr(
                         kind: LoweredExprKind::IndirectCall {
                             callee: Box::new(callee),
                             args: lowered_args,
+                            location: lower_source_location(expr.span),
                         },
                     });
                 }
@@ -1458,6 +1464,7 @@ fn lower_expr(
                     kind: LoweredExprKind::Call {
                         name: name.clone(),
                         args: lowered_args,
+                        location: lower_source_location(expr.span),
                     },
                 }
             }
@@ -1718,6 +1725,7 @@ fn lower_collection_literal(
             constructor,
             add,
             items: lowered_items,
+            location: lower_source_location(span),
         },
     })
 }

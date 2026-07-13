@@ -7,11 +7,61 @@ use crate::ast::{
     TraitDecl, TraitMethodDecl, TypeRef, UnaryOp, number_literal_is_float,
 };
 use crate::diagnostic::Diagnostic;
-use crate::span::Span;
+use crate::span::{SourceMap, Span};
 
 pub fn lower_program(program: &Program) -> Result<LoweredProgram, Vec<Diagnostic>> {
-    let program = crate::monomorphize::monomorphize(program)?;
-    lower_monomorphized_program(&program)
+    lower_program_with_source_files(program, Vec::new())
+}
+
+pub fn lower_program_with_source(
+    program: &Program,
+    path: impl Into<String>,
+    source: impl Into<String>,
+) -> Result<LoweredProgram, Vec<Diagnostic>> {
+    lower_program_with_source_files(
+        program,
+        vec![LoweringSourceFile {
+            path: path.into(),
+            source: source.into(),
+            offset: 0,
+        }],
+    )
+}
+
+pub fn lower_program_with_source_files(
+    program: &Program,
+    source_files: Vec<LoweringSourceFile>,
+) -> Result<LoweredProgram, Vec<Diagnostic>> {
+    SOURCE_FILES.with(|files| *files.borrow_mut() = source_files);
+    let result = crate::monomorphize::monomorphize(program)
+        .and_then(|program| lower_monomorphized_program(&program));
+    SOURCE_FILES.with(|files| files.borrow_mut().clear());
+    result
+}
+
+fn lower_source_location(span: Span) -> LoweredSourceLocation {
+    SOURCE_FILES.with(|files| {
+        let files = files.borrow();
+        let Some(file) = files
+            .iter()
+            .rev()
+            .find(|file| span.start >= file.offset)
+            .or_else(|| files.first())
+        else {
+            return LoweredSourceLocation {
+                path: "<source>".to_string(),
+                line: 1,
+                column: 1,
+            };
+        };
+        let local_start = span.start.saturating_sub(file.offset);
+        let location = SourceMap::new(&file.source).location(local_start);
+        LoweredSourceLocation {
+            path: file.path.clone(),
+            line: location.line,
+            column: location.column,
+        }
+    })
 }
 
 fn lower_monomorphized_program(program: &Program) -> Result<LoweredProgram, Vec<Diagnostic>> {
@@ -532,6 +582,7 @@ fn lower_monomorphized_program(program: &Program) -> Result<LoweredProgram, Vec<
             functions,
             closure_functions,
             statements,
+            main_location: lower_source_location(main.span),
         })
     } else {
         Err(diagnostics)

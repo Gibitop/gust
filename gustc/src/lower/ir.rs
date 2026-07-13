@@ -7,6 +7,14 @@ pub struct LoweredProgram {
     pub functions: Vec<LoweredFunction>,
     pub closure_functions: Vec<LoweredClosureFunction>,
     pub statements: Vec<LoweredStatement>,
+    pub main_location: LoweredSourceLocation,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LoweredSourceLocation {
+    pub path: String,
+    pub line: usize,
+    pub column: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -64,6 +72,7 @@ pub struct LoweredTraitImplMethod {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LoweredFunction {
     pub name: String,
+    pub location: LoweredSourceLocation,
     pub params: Vec<LoweredParam>,
     pub return_type: LoweredType,
     pub statements: Vec<LoweredStatement>,
@@ -107,6 +116,10 @@ pub enum LoweredStatement {
         value: LoweredExpr,
     },
     Println(LoweredExpr),
+    Panic {
+        message: LoweredExpr,
+        location: LoweredSourceLocation,
+    },
     Expr(LoweredExpr),
     Return(Option<LoweredExpr>),
     If {
@@ -239,11 +252,13 @@ pub enum LoweredExprKind {
     Call {
         name: String,
         args: Vec<LoweredExpr>,
+        location: LoweredSourceLocation,
     },
     CollectionLiteral {
         constructor: String,
         add: String,
         items: Vec<LoweredExpr>,
+        location: LoweredSourceLocation,
     },
     TraitObject {
         trait_name: String,
@@ -254,6 +269,7 @@ pub enum LoweredExprKind {
         object: Box<LoweredExpr>,
         method: String,
         args: Vec<LoweredExpr>,
+        location: LoweredSourceLocation,
     },
     Closure {
         name: String,
@@ -262,6 +278,7 @@ pub enum LoweredExprKind {
     IndirectCall {
         callee: Box<LoweredExpr>,
         args: Vec<LoweredExpr>,
+        location: LoweredSourceLocation,
     },
 }
 

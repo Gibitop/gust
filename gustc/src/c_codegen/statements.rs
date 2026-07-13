@@ -3,6 +3,7 @@ fn push_c_statement(
     statement: &LoweredStatement,
     indent: usize,
     structs: &[LoweredStruct],
+    uses_panic: bool,
 ) {
     match statement {
         LoweredStatement::Local { name, value } => {
@@ -11,7 +12,7 @@ fn push_c_statement(
             source.push(' ');
             push_c_local_name(source, name);
             source.push_str(" = ");
-            push_c_value(source, value, structs);
+            push_c_value_with_panic(source, value, structs, uses_panic);
             source.push_str(";\n");
         }
         LoweredStatement::LocalCell { name, value } => {
@@ -26,37 +27,58 @@ fn push_c_statement(
             source.push('*');
             push_c_local_name(source, name);
             source.push_str(" = ");
-            push_c_value(source, value, structs);
+            push_c_value_with_panic(source, value, structs, uses_panic);
             source.push_str(";\n");
         }
         LoweredStatement::Assignment { target, value } => {
             push_c_indent(source, indent);
-            push_c_value(source, target, structs);
+            push_c_value_with_panic(source, target, structs, uses_panic);
             source.push_str(" = ");
-            push_c_value(source, value, structs);
+            push_c_value_with_panic(source, value, structs, uses_panic);
             source.push_str(";\n");
         }
         LoweredStatement::Println(value) => {
             push_c_indent(source, indent);
             source.push_str("gust_rt_io_println(");
-            push_c_value(source, value, structs);
+            push_c_value_with_panic(source, value, structs, uses_panic);
+            source.push_str(");\n");
+        }
+        LoweredStatement::Panic { message, location } => {
+            push_c_stack_update(source, location, indent);
+            push_c_indent(source, indent);
+            source.push_str("gust_rt_panic(");
+            push_c_value_with_panic(source, message, structs, uses_panic);
             source.push_str(");\n");
         }
         LoweredStatement::Expr(value) => {
             push_c_indent(source, indent);
-            push_c_value(source, value, structs);
+            push_c_value_with_panic(source, value, structs, uses_panic);
             source.push_str(";\n");
         }
         LoweredStatement::Return(value) => {
             push_c_indent(source, indent);
-            source.push_str("return");
-
             if let Some(value) = value {
-                source.push(' ');
-                push_c_value(source, value, structs);
+                if uses_panic {
+                    push_c_type(source, &value.type_);
+                    source.push_str(" gust_rt_return_value = ");
+                    push_c_value_with_panic(source, value, structs, uses_panic);
+                    source.push_str(";\n");
+                    push_c_indent(source, indent);
+                    source.push_str("gust_rt_stack_pop();\n");
+                    push_c_indent(source, indent);
+                    source.push_str("return gust_rt_return_value;\n");
+                } else {
+                    source.push_str("return ");
+                    push_c_value_with_panic(source, value, structs, uses_panic);
+                    source.push_str(";\n");
+                }
+            } else {
+                if uses_panic {
+                    source.push_str("gust_rt_stack_pop();\n");
+                    push_c_indent(source, indent);
+                }
+                source.push_str("return;\n");
             }
-
-            source.push_str(";\n");
         }
         LoweredStatement::If {
             condition,
@@ -65,11 +87,11 @@ fn push_c_statement(
         } => {
             push_c_indent(source, indent);
             source.push_str("if (");
-            push_c_value(source, condition, structs);
+            push_c_value_with_panic(source, condition, structs, uses_panic);
             source.push_str(") {\n");
 
             for statement in then_branch {
-                push_c_statement(source, statement, indent + 1, structs);
+                push_c_statement(source, statement, indent + 1, structs, uses_panic);
             }
 
             push_c_indent(source, indent);
@@ -79,7 +101,7 @@ fn push_c_statement(
                 source.push_str(" else {\n");
 
                 for statement in else_branch {
-                    push_c_statement(source, statement, indent + 1, structs);
+                    push_c_statement(source, statement, indent + 1, structs, uses_panic);
                 }
 
                 push_c_indent(source, indent);
@@ -91,11 +113,11 @@ fn push_c_statement(
         LoweredStatement::While { condition, body } => {
             push_c_indent(source, indent);
             source.push_str("while (");
-            push_c_value(source, condition, structs);
+            push_c_value_with_panic(source, condition, structs, uses_panic);
             source.push_str(") {\n");
 
             for statement in body {
-                push_c_statement(source, statement, indent + 1, structs);
+                push_c_statement(source, statement, indent + 1, structs, uses_panic);
             }
 
             push_c_indent(source, indent);
@@ -121,9 +143,9 @@ fn push_c_statement(
             source.push(' ');
             push_c_local_name(source, temp_name);
             source.push_str(" = ");
-            push_c_value(source, value, structs);
+            push_c_value_with_panic(source, value, structs, uses_panic);
             source.push_str(";\n");
-            push_c_match_decision(source, decision, temp_name, None, indent + 1, structs);
+            push_c_match_decision(source, decision, temp_name, None, indent + 1, structs, uses_panic);
             push_c_indent(source, indent);
             source.push_str("}\n");
         }
@@ -137,6 +159,7 @@ fn push_c_match_decision(
     result_name: Option<&str>,
     indent: usize,
     structs: &[LoweredStruct],
+    uses_panic: bool,
 ) {
     push_c_match_decision_with_labels(
         source,
@@ -147,6 +170,7 @@ fn push_c_match_decision(
         None,
         indent,
         structs,
+        uses_panic,
     );
 }
 
@@ -159,6 +183,7 @@ fn push_c_match_decision_with_labels(
     end_label: Option<&str>,
     indent: usize,
     structs: &[LoweredStruct],
+    uses_panic: bool,
 ) {
     match decision {
         LoweredMatchDecision::Arms { arms } => {
@@ -174,6 +199,7 @@ fn push_c_match_decision_with_labels(
                     Some(&end),
                     indent,
                     structs,
+                    uses_panic,
                 );
                 push_c_indent(source, indent);
                 source.push_str(&fail);
@@ -191,7 +217,7 @@ fn push_c_match_decision_with_labels(
         } => {
             push_c_indent(source, indent);
             source.push_str("if (");
-            push_c_match_test(source, subject, test, structs);
+            push_c_match_test(source, subject, test, structs, uses_panic);
             source.push_str(") {\n");
             push_c_match_decision_with_labels(
                 source,
@@ -202,6 +228,7 @@ fn push_c_match_decision_with_labels(
                 end_label,
                 indent + 1,
                 structs,
+                uses_panic,
             );
             push_c_indent(source, indent);
             source.push_str("} else {\n");
@@ -214,6 +241,7 @@ fn push_c_match_decision_with_labels(
                 end_label,
                 indent + 1,
                 structs,
+                uses_panic,
             );
             push_c_indent(source, indent);
             source.push_str("}\n");
@@ -243,6 +271,7 @@ fn push_c_match_decision_with_labels(
                 end_label,
                 indent,
                 structs,
+                uses_panic,
             );
         }
         LoweredMatchDecision::Or {
@@ -291,6 +320,7 @@ fn push_c_match_decision_with_labels(
                 end_label,
                 indent + 1,
                 structs,
+                uses_panic,
             );
             push_c_indent(source, indent);
             source.push_str("} else {\n");
@@ -303,6 +333,7 @@ fn push_c_match_decision_with_labels(
                 end_label,
                 indent + 1,
                 structs,
+                uses_panic,
             );
             push_c_indent(source, indent);
             source.push_str("}\n");
@@ -310,13 +341,13 @@ fn push_c_match_decision_with_labels(
         LoweredMatchDecision::Matched => {}
         LoweredMatchDecision::Body { statements, value } => {
             for statement in statements {
-                push_c_statement(source, statement, indent, structs);
+                push_c_statement(source, statement, indent, structs, uses_panic);
             }
             if let (Some(result_name), Some(value)) = (result_name, value) {
                 push_c_indent(source, indent);
                 push_c_local_name(source, result_name);
                 source.push_str(" = ");
-                push_c_value(source, value, structs);
+                push_c_value_with_panic(source, value, structs, uses_panic);
                 source.push_str(";\n");
             }
             if let Some(end_label) = end_label {
@@ -354,7 +385,7 @@ fn push_c_match_or_alternative(
         } => {
             push_c_indent(source, indent);
             source.push_str("if (");
-            push_c_match_test(source, subject, test, structs);
+            push_c_match_test(source, subject, test, structs, false);
             source.push_str(") {\n");
             push_c_match_or_alternative(source, then, matched_flag, indent + 1, structs);
             push_c_indent(source, indent);
@@ -399,6 +430,7 @@ fn push_c_match_test(
     subject: &str,
     test: &LoweredMatchTest,
     structs: &[LoweredStruct],
+    uses_panic: bool,
 ) {
     match test {
         LoweredMatchTest::EnumTag { enum_name, variant } => {
@@ -448,7 +480,7 @@ fn push_c_match_test(
             source.push(')');
         }
         LoweredMatchTest::Guard(guard) => {
-            push_c_value(source, guard, structs);
+            push_c_value_with_panic(source, guard, structs, uses_panic);
         }
     }
 }

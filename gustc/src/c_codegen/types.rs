@@ -162,6 +162,7 @@ fn collect_statement_function_types(statement: &LoweredStatement, types: &mut Ve
         LoweredStatement::Local { value, .. }
         | LoweredStatement::LocalCell { value, .. }
         | LoweredStatement::Println(value)
+        | LoweredStatement::Panic { message: value, .. }
         | LoweredStatement::Expr(value) => collect_expr_function_types(value, types),
         LoweredStatement::Assignment { target, value } => {
             collect_expr_function_types(target, types);
@@ -249,7 +250,7 @@ fn collect_expr_function_types(expr: &LoweredExpr, types: &mut Vec<LoweredType>)
                 collect_expr_function_types(item, types);
             }
         }
-        LoweredExprKind::IndirectCall { callee, args } => {
+        LoweredExprKind::IndirectCall { callee, args, .. } => {
             collect_expr_function_types(callee, types);
             for arg in args {
                 collect_expr_function_types(arg, types);

@@ -5,7 +5,7 @@ use std::process::{self, Command, ExitCode};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use gustc::c_codegen::emit_c;
-use gustc::lower::lower_program;
+use gustc::lower::lower_program_with_source_files;
 use gustc::project::check_project;
 
 const USAGE: &str = "usage: gustc <file.gust> [-o <output>] [--emit-c <output.c>]";
@@ -82,7 +82,10 @@ fn main() -> ExitCode {
         return ExitCode::FAILURE;
     }
 
-    let lowered = match lower_program(&result.program) {
+    let lowered = match lower_program_with_source_files(
+        &result.program,
+        result.sources.to_lowering_source_files(),
+    ) {
         Ok(program) => program,
         Err(diagnostics) => {
             for diagnostic in diagnostics {

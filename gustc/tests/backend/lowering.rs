@@ -537,6 +537,7 @@ fn main() {
         lowered.functions,
         vec![LoweredFunction {
             name: "greet".to_string(),
+            location: source_location(1),
             params: vec![LoweredParam {
                 name: "name".to_string(),
                 type_: basic(BasicType::String),
@@ -571,6 +572,7 @@ fn main() {
                             type_: basic(BasicType::String),
                             kind: LoweredExprKind::StringLiteral("Gust".to_string()),
                         }],
+                        location: source_location(1),
                     },
                 },
             },
@@ -750,6 +752,34 @@ fn main() {
 }
 
 #[test]
+fn panic_lowers_successfully() {
+    let result = check_source(
+        r#"fn main() {
+    panic("boom")
+}"#,
+    );
+
+    assert!(
+        !result.has_errors(),
+        "expected no frontend errors, got {:?}",
+        result.diagnostics
+    );
+
+    let lowered = lower_program(&result.program).expect("panic should lower");
+
+    assert_eq!(
+        lowered.statements,
+        vec![LoweredStatement::Panic {
+            message: LoweredExpr {
+                type_: basic(BasicType::String),
+                kind: LoweredExprKind::StringLiteral("boom".to_string()),
+            },
+            location: source_location(1),
+        }]
+    );
+}
+
+#[test]
 fn basic_struct_local_lowers_successfully() {
     let result = check_source(
         r#"struct Person {
@@ -819,4 +849,3 @@ fn main() {
         }]
     );
 }
-

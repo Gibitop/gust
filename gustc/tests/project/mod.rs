@@ -5,7 +5,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use gustc::c_codegen::emit_c;
 use gustc::diagnostic::Severity;
-use gustc::lower::lower_program;
+use gustc::lower::{lower_program, lower_program_with_source_files};
 use gustc::project::check_project;
 
 static NEXT_PROJECT: AtomicUsize = AtomicUsize::new(0);

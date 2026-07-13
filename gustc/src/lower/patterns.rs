@@ -62,7 +62,7 @@ fn lowered_expression_has_mutable_capability(
         }
         LoweredExprKind::Clone(_) => true,
         LoweredExprKind::TraitObject { .. } => true,
-        LoweredExprKind::Call { name, args } => signatures.get(name).is_some_and(|signature| {
+        LoweredExprKind::Call { name, args, .. } => signatures.get(name).is_some_and(|signature| {
             matches!(signature.return_type, LoweredType::Struct(_))
                 && args.iter().zip(&signature.params).all(|(arg, param)| {
                     !matches!(param.type_, LoweredType::Struct(_))

@@ -48,7 +48,12 @@ fn push_c_u128_literal(source: &mut String, value: &str) {
     }
 }
 
-fn push_c_value(source: &mut String, value: &LoweredExpr, structs: &[LoweredStruct]) {
+fn push_c_value_with_panic(
+    source: &mut String,
+    value: &LoweredExpr,
+    structs: &[LoweredStruct],
+    uses_panic: bool,
+) {
     match &value.kind {
         LoweredExprKind::Void => {}
         LoweredExprKind::StringLiteral(value) => {
@@ -79,19 +84,19 @@ fn push_c_value(source: &mut String, value: &LoweredExpr, structs: &[LoweredStru
         }
         LoweredExprKind::PostfixIncrement(target) => {
             source.push('(');
-            push_c_value(source, target, structs);
+            push_c_value_with_panic(source, target, structs, uses_panic);
             source.push_str("++)");
         }
         LoweredExprKind::StringConcat(left, right) => {
             source.push_str("gust_rt_string_concat(");
-            push_c_value(source, left, structs);
+            push_c_value_with_panic(source, left, structs, uses_panic);
             source.push_str(", ");
-            push_c_value(source, right, structs);
+            push_c_value_with_panic(source, right, structs, uses_panic);
             source.push(')');
         }
         LoweredExprKind::Not(operand) => {
             source.push_str("(!");
-            push_c_value(source, operand, structs);
+            push_c_value_with_panic(source, operand, structs, uses_panic);
             source.push(')');
         }
         LoweredExprKind::Negate(operand) => {
@@ -107,7 +112,7 @@ fn push_c_value(source: &mut String, value: &LoweredExpr, structs: &[LoweredStru
             }
 
             source.push_str("(-");
-            push_c_value(source, operand, structs);
+            push_c_value_with_panic(source, operand, structs, uses_panic);
             source.push(')');
         }
         LoweredExprKind::Cast { value, type_ } => {
@@ -119,13 +124,13 @@ fn push_c_value(source: &mut String, value: &LoweredExpr, structs: &[LoweredStru
             {
                 push_c_float_to_int_cast_name(source, *source_type, *target_type);
                 source.push('(');
-                push_c_value(source, value, structs);
+                push_c_value_with_panic(source, value, structs, uses_panic);
                 source.push(')');
             } else {
                 source.push_str("((");
                 push_c_type(source, type_);
                 source.push(')');
-                push_c_value(source, value, structs);
+                push_c_value_with_panic(source, value, structs, uses_panic);
                 source.push(')');
             }
         }
@@ -141,28 +146,28 @@ fn push_c_value(source: &mut String, value: &LoweredExpr, structs: &[LoweredStru
                 } else {
                     source.push_str("fmod(");
                 }
-                push_c_value(source, left, structs);
+                push_c_value_with_panic(source, left, structs, uses_panic);
                 source.push_str(", ");
-                push_c_value(source, right, structs);
+                push_c_value_with_panic(source, right, structs, uses_panic);
                 source.push(')');
                 return;
             }
 
             source.push('(');
-            push_c_value(source, left, structs);
+            push_c_value_with_panic(source, left, structs, uses_panic);
             source.push(' ');
             source.push_str(op.symbol());
             source.push(' ');
-            push_c_value(source, right, structs);
+            push_c_value_with_panic(source, right, structs, uses_panic);
             source.push(')');
         }
         LoweredExprKind::Logical { left, op, right } => {
             source.push('(');
-            push_c_value(source, left, structs);
+            push_c_value_with_panic(source, left, structs, uses_panic);
             source.push(' ');
             source.push_str(op.symbol());
             source.push(' ');
-            push_c_value(source, right, structs);
+            push_c_value_with_panic(source, right, structs, uses_panic);
             source.push(')');
         }
         LoweredExprKind::Comparison { left, op, right } => {
@@ -172,17 +177,17 @@ fn push_c_value(source: &mut String, value: &LoweredExpr, structs: &[LoweredStru
                 }
 
                 source.push_str("gust_rt_string_equal(");
-                push_c_value(source, left, structs);
+                push_c_value_with_panic(source, left, structs, uses_panic);
                 source.push_str(", ");
-                push_c_value(source, right, structs);
+                push_c_value_with_panic(source, right, structs, uses_panic);
                 source.push(')');
             } else {
                 source.push('(');
-                push_c_value(source, left, structs);
+                push_c_value_with_panic(source, left, structs, uses_panic);
                 source.push(' ');
                 source.push_str(op.symbol());
                 source.push(' ');
-                push_c_value(source, right, structs);
+                push_c_value_with_panic(source, right, structs, uses_panic);
                 source.push(')');
             }
         }
@@ -203,7 +208,7 @@ fn push_c_value(source: &mut String, value: &LoweredExpr, structs: &[LoweredStru
                     .iter()
                     .find(|value| value.name == field.name)
                     .expect("lowered struct literal must contain every declared field");
-                push_c_value(source, &value.value, structs);
+                push_c_value_with_panic(source, &value.value, structs, uses_panic);
             }
 
             source.push(')');
@@ -222,7 +227,7 @@ fn push_c_value(source: &mut String, value: &LoweredExpr, structs: &[LoweredStru
                 source.push_str(", .gust_payload.");
                 push_c_local_name(source, variant);
                 source.push_str(" = ");
-                push_c_value(source, payload, structs);
+                push_c_value_with_panic(source, payload, structs, uses_panic);
             }
 
             source.push_str(" }");
@@ -239,21 +244,29 @@ fn push_c_value(source: &mut String, value: &LoweredExpr, structs: &[LoweredStru
             source.push(' ');
             push_c_local_name(source, temp_name);
             source.push_str(" = ");
-            push_c_value(source, matched_value, structs);
+            push_c_value_with_panic(source, matched_value, structs, uses_panic);
             source.push_str(";\n    ");
             push_c_type(source, &value.type_);
             source.push(' ');
             push_c_local_name(source, &result_name);
             source.push_str(";\n");
 
-            push_c_match_decision(source, decision, temp_name, Some(&result_name), 1, structs);
+            push_c_match_decision(
+                source,
+                decision,
+                temp_name,
+                Some(&result_name),
+                1,
+                structs,
+                false,
+            );
 
             source.push_str("    ");
             push_c_local_name(source, &result_name);
             source.push_str(";\n})");
         }
         LoweredExprKind::FieldAccess { object, field } => {
-            push_c_value(source, object, structs);
+            push_c_value_with_panic(source, object, structs, uses_panic);
             if object.type_ == LoweredType::Basic(BasicType::String) {
                 source.push('.');
             } else {
@@ -267,7 +280,7 @@ fn push_c_value(source: &mut String, value: &LoweredExpr, structs: &[LoweredStru
             };
             push_c_struct_clone_name(source, name);
             source.push('(');
-            push_c_value(source, object, structs);
+            push_c_value_with_panic(source, object, structs, uses_panic);
             source.push(')');
         }
         LoweredExprKind::NumberToString(object) => {
@@ -277,13 +290,17 @@ fn push_c_value(source: &mut String, value: &LoweredExpr, structs: &[LoweredStru
             source.push_str("gust_rt_");
             source.push_str(type_.name());
             source.push_str("_to_string(");
-            push_c_value(source, object, structs);
+            push_c_value_with_panic(source, object, structs, uses_panic);
             source.push(')');
         }
-        LoweredExprKind::Call { name, args } => {
+        LoweredExprKind::Call {
+            name,
+            args,
+            location,
+        } => {
             if name == "intrinsic string.len" {
                 source.push_str("gust_rt_string_char_len(");
-                push_c_value(source, &args[0], structs);
+                push_c_value_with_panic(source, &args[0], structs, uses_panic);
                 source.push(')');
                 return;
             }
@@ -297,7 +314,7 @@ fn push_c_value(source: &mut String, value: &LoweredExpr, structs: &[LoweredStru
                     source.push_str(" gust_builder = ");
                     push_c_struct_new_name(source, builder_name);
                     source.push_str("();\n    gust_builder->gust_capacity = ");
-                    push_c_value(source, &args[0], structs);
+                    push_c_value_with_panic(source, &args[0], structs, uses_panic);
                     source.push_str(";\n    if (gust_builder->gust_capacity > 0) {\n        gust_builder->gust_data = gust_rt_alloc(gust_builder->gust_capacity);\n    }\n    gust_builder;\n})");
                     return;
                 }
@@ -313,9 +330,9 @@ fn push_c_value(source: &mut String, value: &LoweredExpr, structs: &[LoweredStru
                             source.push_str("gust_rt_string_builder_append_");
                             push_c_struct_name(source, builder_name);
                             source.push('(');
-                            push_c_value(source, builder, structs);
+                            push_c_value_with_panic(source, builder, structs, uses_panic);
                             source.push_str(", ");
-                            push_c_value(source, &args[1], structs);
+                            push_c_value_with_panic(source, &args[1], structs, uses_panic);
                             source.push(')');
                             return;
                         }
@@ -323,7 +340,7 @@ fn push_c_value(source: &mut String, value: &LoweredExpr, structs: &[LoweredStru
                             source.push_str("gust_rt_string_builder_build_");
                             push_c_struct_name(source, builder_name);
                             source.push('(');
-                            push_c_value(source, builder, structs);
+                            push_c_value_with_panic(source, builder, structs, uses_panic);
                             source.push(')');
                             return;
                         }
@@ -343,7 +360,7 @@ fn push_c_value(source: &mut String, value: &LoweredExpr, structs: &[LoweredStru
                         source.push_str(" gust_buffer = gust_rt_alloc(sizeof(*gust_buffer));\n");
                         source.push_str("    memset(gust_buffer, 0, sizeof(*gust_buffer));\n");
                         source.push_str("    gust_buffer->gust_capacity = ");
-                        push_c_value(source, &args[0], structs);
+                        push_c_value_with_panic(source, &args[0], structs, uses_panic);
                         source.push_str(";\n    if (gust_buffer->gust_capacity > 0) {\n        gust_buffer->gust_data = gust_rt_alloc(sizeof(");
                         push_c_type(source, element);
                         source.push_str(
@@ -352,7 +369,7 @@ fn push_c_value(source: &mut String, value: &LoweredExpr, structs: &[LoweredStru
                         return;
                     }
                     "capacity" => {
-                        push_c_value(source, &args[0], structs);
+                        push_c_value_with_panic(source, &args[0], structs, uses_panic);
                         source.push_str("->gust_capacity");
                         return;
                     }
@@ -369,9 +386,9 @@ fn push_c_value(source: &mut String, value: &LoweredExpr, structs: &[LoweredStru
                         source.push_str(" = ((");
                         push_c_type(source, element);
                         source.push_str("*)");
-                        push_c_value(source, &args[0], structs);
+                        push_c_value_with_panic(source, &args[0], structs, uses_panic);
                         source.push_str("->gust_data)[");
-                        push_c_value(source, &args[1], structs);
+                        push_c_value_with_panic(source, &args[1], structs, uses_panic);
                         source.push_str("] }");
                         return;
                     }
@@ -379,21 +396,21 @@ fn push_c_value(source: &mut String, value: &LoweredExpr, structs: &[LoweredStru
                         source.push_str("((");
                         push_c_type(source, element);
                         source.push_str("*)");
-                        push_c_value(source, &args[0], structs);
+                        push_c_value_with_panic(source, &args[0], structs, uses_panic);
                         source.push_str("->gust_data)[");
-                        push_c_value(source, &args[1], structs);
+                        push_c_value_with_panic(source, &args[1], structs, uses_panic);
                         source.push_str("] = ");
-                        push_c_value(source, &args[2], structs);
+                        push_c_value_with_panic(source, &args[2], structs, uses_panic);
                         source.push_str(", ");
-                        push_c_value(source, &args[0], structs);
+                        push_c_value_with_panic(source, &args[0], structs, uses_panic);
                         source.push_str("->gust_length = ");
-                        push_c_value(source, &args[0], structs);
+                        push_c_value_with_panic(source, &args[0], structs, uses_panic);
                         source.push_str("->gust_length > ");
-                        push_c_value(source, &args[1], structs);
+                        push_c_value_with_panic(source, &args[1], structs, uses_panic);
                         source.push_str(" ? ");
-                        push_c_value(source, &args[0], structs);
+                        push_c_value_with_panic(source, &args[0], structs, uses_panic);
                         source.push_str("->gust_length : ");
-                        push_c_value(source, &args[1], structs);
+                        push_c_value_with_panic(source, &args[1], structs, uses_panic);
                         source.push_str(" + 1");
                         return;
                     }
@@ -401,19 +418,19 @@ fn push_c_value(source: &mut String, value: &LoweredExpr, structs: &[LoweredStru
                         source.push_str("({ memset(&( (");
                         push_c_type(source, element);
                         source.push_str("*)");
-                        push_c_value(source, &args[0], structs);
+                        push_c_value_with_panic(source, &args[0], structs, uses_panic);
                         source.push_str("->gust_data)[");
-                        push_c_value(source, &args[1], structs);
+                        push_c_value_with_panic(source, &args[1], structs, uses_panic);
                         source.push_str("], 0, sizeof(");
                         push_c_type(source, element);
                         source.push_str(")); if (");
-                        push_c_value(source, &args[0], structs);
+                        push_c_value_with_panic(source, &args[0], structs, uses_panic);
                         source.push_str("->gust_length == ");
-                        push_c_value(source, &args[1], structs);
+                        push_c_value_with_panic(source, &args[1], structs, uses_panic);
                         source.push_str(" + 1) { ");
-                        push_c_value(source, &args[0], structs);
+                        push_c_value_with_panic(source, &args[0], structs, uses_panic);
                         source.push_str("->gust_length = ");
-                        push_c_value(source, &args[1], structs);
+                        push_c_value_with_panic(source, &args[1], structs, uses_panic);
                         source.push_str("; } })");
                         return;
                     }
@@ -421,9 +438,9 @@ fn push_c_value(source: &mut String, value: &LoweredExpr, structs: &[LoweredStru
                         source.push_str("({ ");
                         push_c_type(source, &args[0].type_);
                         source.push_str(" gust_buffer = ");
-                        push_c_value(source, &args[0], structs);
+                        push_c_value_with_panic(source, &args[0], structs, uses_panic);
                         source.push_str("; size_t gust_capacity = ");
-                        push_c_value(source, &args[1], structs);
+                        push_c_value_with_panic(source, &args[1], structs, uses_panic);
                         source.push_str("; void* gust_data = gust_rt_alloc(sizeof(");
                         push_c_type(source, element);
                         source.push_str(") * gust_capacity); if (gust_buffer->gust_length > 0) { memcpy(gust_data, gust_buffer->gust_data, sizeof(");
@@ -434,6 +451,7 @@ fn push_c_value(source: &mut String, value: &LoweredExpr, structs: &[LoweredStru
                     _ => unreachable!("raw buffer methods are exhaustive"),
                 }
             }
+            let wrapped = push_c_call_site_update_start(source, location, uses_panic);
             push_c_function_name(source, name);
             source.push('(');
 
@@ -442,17 +460,23 @@ fn push_c_value(source: &mut String, value: &LoweredExpr, structs: &[LoweredStru
                     source.push_str(", ");
                 }
 
-                push_c_value(source, arg, structs);
+                push_c_value_with_panic(source, arg, structs, uses_panic);
             }
 
             source.push(')');
+            push_c_call_site_update_end(source, wrapped);
         }
         LoweredExprKind::CollectionLiteral {
             constructor,
             add,
             items,
+            location,
         } => {
-            source.push_str("({\n    ");
+            source.push_str("({\n");
+            if uses_panic {
+                push_c_stack_update(source, location, 1);
+            }
+            source.push_str("    ");
             push_c_type(source, &value.type_);
             source.push_str(" gust_collection = ");
             push_c_function_name(source, constructor);
@@ -460,10 +484,13 @@ fn push_c_value(source: &mut String, value: &LoweredExpr, structs: &[LoweredStru
             source.push_str(&items.len().to_string());
             source.push_str(");\n");
             for item in items {
+                if uses_panic {
+                    push_c_stack_update(source, location, 1);
+                }
                 source.push_str("    ");
                 push_c_function_name(source, add);
                 source.push_str("(gust_collection, ");
-                push_c_value(source, item, structs);
+                push_c_value_with_panic(source, item, structs, uses_panic);
                 source.push_str(");\n");
             }
             source.push_str("    gust_collection;\n})");
@@ -477,7 +504,7 @@ fn push_c_value(source: &mut String, value: &LoweredExpr, structs: &[LoweredStru
                 source.push('(');
                 push_c_trait_name(source, trait_name);
                 source.push_str("){ .gust_self = ");
-                push_c_value(source, value, structs);
+                push_c_value_with_panic(source, value, structs, uses_panic);
                 source.push_str(", .gust_vtable = &");
                 push_c_trait_impl_vtable_name(source, trait_name, type_name);
                 source.push_str(" }");
@@ -488,7 +515,7 @@ fn push_c_value(source: &mut String, value: &LoweredExpr, structs: &[LoweredStru
                 source.push_str("* gust_trait_self = gust_rt_alloc(sizeof(");
                 push_c_enum_name(source, type_name);
                 source.push_str("));\n    *gust_trait_self = ");
-                push_c_value(source, value, structs);
+                push_c_value_with_panic(source, value, structs, uses_panic);
                 source.push_str(";\n    (");
                 push_c_trait_name(source, trait_name);
                 source.push_str("){ .gust_self = gust_trait_self, .gust_vtable = &");
@@ -501,6 +528,7 @@ fn push_c_value(source: &mut String, value: &LoweredExpr, structs: &[LoweredStru
             object,
             method,
             args,
+            location,
         } => {
             let LoweredType::Trait(trait_name) = &object.type_ else {
                 unreachable!("dynamic calls require trait-typed receivers")
@@ -508,8 +536,12 @@ fn push_c_value(source: &mut String, value: &LoweredExpr, structs: &[LoweredStru
             source.push_str("({\n    ");
             push_c_trait_name(source, trait_name);
             source.push_str(" gust_trait_value = ");
-            push_c_value(source, object, structs);
-            source.push_str(";\n    ");
+            push_c_value_with_panic(source, object, structs, uses_panic);
+            source.push_str(";\n");
+            if uses_panic {
+                push_c_stack_update(source, location, 1);
+            }
+            source.push_str("    ");
             if value.type_ != LoweredType::Void {
                 push_c_type(source, &value.type_);
                 source.push_str(" gust_trait_result = ");
@@ -519,7 +551,7 @@ fn push_c_value(source: &mut String, value: &LoweredExpr, structs: &[LoweredStru
             source.push_str("(gust_trait_value.gust_self");
             for arg in args {
                 source.push_str(", ");
-                push_c_value(source, arg, structs);
+                push_c_value_with_panic(source, arg, structs, uses_panic);
             }
             source.push_str(");\n");
             if value.type_ != LoweredType::Void {
@@ -558,17 +590,44 @@ fn push_c_value(source: &mut String, value: &LoweredExpr, structs: &[LoweredStru
                 source.push_str(" };\n})");
             }
         }
-        LoweredExprKind::IndirectCall { callee, args } => {
-            push_c_value(source, callee, structs);
+        LoweredExprKind::IndirectCall {
+            callee,
+            args,
+            location,
+        } => {
+            let wrapped = push_c_call_site_update_start(source, location, uses_panic);
+            push_c_value_with_panic(source, callee, structs, uses_panic);
             source.push_str(".gust_call(");
-            push_c_value(source, callee, structs);
+            push_c_value_with_panic(source, callee, structs, uses_panic);
             source.push_str(".gust_env");
             for arg in args {
                 source.push_str(", ");
-                push_c_value(source, arg, structs);
+                push_c_value_with_panic(source, arg, structs, uses_panic);
             }
             source.push(')');
+            push_c_call_site_update_end(source, wrapped);
         }
+    }
+}
+
+fn push_c_call_site_update_start(
+    source: &mut String,
+    location: &LoweredSourceLocation,
+    uses_panic: bool,
+) -> bool {
+    if !uses_panic {
+        return false;
+    }
+
+    source.push_str("({\n");
+    push_c_stack_update(source, location, 1);
+    source.push_str("    ");
+    true
+}
+
+fn push_c_call_site_update_end(source: &mut String, wrapped: bool) {
+    if wrapped {
+        source.push_str(";\n})");
     }
 }
 

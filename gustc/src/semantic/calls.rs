@@ -1,5 +1,24 @@
 impl Analyzer {
     fn validate_call(&mut self, expr: &Expr, name: &str, args: &[Expr]) -> Type {
+        if name == "panic" {
+            if args.len() != 1 {
+                self.diagnostics.push(Diagnostic::error(
+                    expr.span,
+                    format!("function `panic` expects 1 argument, got {}", args.len()),
+                ));
+                for arg in args {
+                    self.validate_expr(arg);
+                }
+                return Type::Void;
+            }
+
+            let arg_type =
+                self.validate_expr_with_context(&args[0], Some(Type::Basic(BasicType::String)));
+            self.report_type_mismatch(args[0].span, Type::Basic(BasicType::String), arg_type);
+
+            return Type::Void;
+        }
+
         let Some(signature) = self.functions.get(name).cloned() else {
             if let Some(Binding {
                 type_:
