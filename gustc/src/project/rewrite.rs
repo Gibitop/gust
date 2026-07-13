@@ -82,6 +82,20 @@ impl<'names, 'diagnostics> ModuleRewriter<'names, 'diagnostics> {
                 for bound in &mut item.type_param_bounds {
                     self.rewrite_type(&mut bound.trait_ref);
                 }
+                for associated_type in &mut item.associated_types {
+                    self.scopes
+                        .push(associated_type.type_params.iter().cloned().collect());
+                    for bound in &mut associated_type.type_param_bounds {
+                        self.rewrite_type(&mut bound.trait_ref);
+                    }
+                    for bound in &mut associated_type.bounds {
+                        self.rewrite_type(bound);
+                    }
+                    if let Some(default) = &mut associated_type.default {
+                        self.rewrite_type(default);
+                    }
+                    self.scopes.pop();
+                }
                 for method in &mut item.methods {
                     for param in &mut method.params {
                         if let Some(type_ref) = &mut param.type_ref {
@@ -102,7 +116,13 @@ impl<'names, 'diagnostics> ModuleRewriter<'names, 'diagnostics> {
                 self.rewrite_type(&mut item.trait_ref);
                 self.rewrite_type(&mut item.type_ref);
                 for associated_type in &mut item.associated_types {
+                    self.scopes
+                        .push(associated_type.type_params.iter().cloned().collect());
+                    for bound in &mut associated_type.type_param_bounds {
+                        self.rewrite_type(&mut bound.trait_ref);
+                    }
                     self.rewrite_type(&mut associated_type.type_ref);
+                    self.scopes.pop();
                 }
                 for member in &mut item.methods {
                     self.rewrite_function(&mut member.function);

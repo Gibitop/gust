@@ -1,5 +1,6 @@
 from ./collection import { FromElements, FromIterator }
 from ./iter import { Iterable, Iterator }
+from ./index import { Index, IndexSet }
 from ./option import { Option }
 from ./result import { Result }
 from ./internal/rawBuffer import { RawBuffer }
@@ -13,7 +14,7 @@ struct ArrayList<T> {
         count: 0,
     }
 
-    static fn fromIterator(mut iterator: Iterator<T>): Self {
+    static fn fromIterator(mut iterator: Iterator<type Item: T>): Self {
         let mut result: Self = ArrayList<T>.withCapacity(0)
         for value in iterator {
             result.push(value)
@@ -97,7 +98,7 @@ struct ArrayList<T> {
         }
     }
 
-    fn iterator(): Iterator<T> => ArrayListIterator<T> {
+    fn iterator(): Iterator<type Item: T> => ArrayListIterator<T> {
         list: self,
         index: 0,
         end: self.count,
@@ -110,11 +111,13 @@ struct ArrayListIterator<T> {
     end: usize
 }
 
-impl<T> Iterable<T> for ArrayList<T> {
-    fn iterator(): Iterator<T> => self.iterator()
+impl<T> Iterable for ArrayList<T> {
+    type Item: T
+    fn iterator(): Iterator<type Item: T> => self.iterator()
 }
 
-impl<T> Iterator<T> for ArrayListIterator<T> {
+impl<T> Iterator for ArrayListIterator<T> {
+    type Item: T
     fn next(mut self): Option<T> {
         if self.index >= self.end {
             return Option<T>.None
@@ -133,7 +136,8 @@ impl<T> Iterator<T> for ArrayListIterator<T> {
     }
 }
 
-impl<T> FromElements<T> for ArrayList<T> {
+impl<T> FromElements for ArrayList<T> {
+    type Item: T
     static fn withElementCapacity(capacity: usize): Self => ArrayList<T>.withCapacity(capacity)
 
     fn add(mut self, value: T) {
@@ -141,6 +145,17 @@ impl<T> FromElements<T> for ArrayList<T> {
     }
 }
 
-impl<T> FromIterator<T> for ArrayList<T> {
-    static fn fromIterator(mut iterator: Iterator<T>): Self => ArrayList<T>.fromIterator(iterator)
+impl<T> FromIterator for ArrayList<T> {
+    type Item: T
+    static fn fromIterator(mut iterator: Iterator<type Item: T>): Self => ArrayList<T>.fromIterator(iterator)
+}
+
+impl<T> Index<usize> for ArrayList<T> {
+    type Output: T
+    fn index(index: usize): Option<T> => self.get(index)
+}
+
+impl<T> IndexSet<usize> for ArrayList<T> {
+    type Output: T
+    fn indexSet(mut self, index: usize, value: T): Result<T, string> => self.set(index, value)
 }

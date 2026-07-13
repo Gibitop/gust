@@ -443,7 +443,7 @@ impl Analyzer {
                     self.diagnostics.push(Diagnostic::error(
                         iterable.span,
                         format!(
-                            "`for` requires an `Iterator<T>` or `Iterable<T>`, got `{}`",
+                            "`for` requires an `Iterator` or `Iterable`, got `{}`",
                             iterable_type.name()
                         ),
                     ));
@@ -453,7 +453,7 @@ impl Analyzer {
                 {
                     self.diagnostics.push(Diagnostic::error(
                         iterable.span,
-                        "cannot advance an iterator through an immutable binding; declare it with `let mut` or iterate an `Iterable<T>` instead",
+                        "cannot advance an iterator through an immutable binding; declare it with `let mut` or iterate an `Iterable` instead",
                     ));
                 }
                 self.loop_depth += 1;

@@ -26,11 +26,21 @@ fn source_callable_name(name: &str) -> &str {
     name.rsplit_once("::").map_or(name, |(_, name)| name)
 }
 
-fn generic_trait_item_type_name<'a>(trait_name: &'a str, protocol: &str) -> Option<&'a str> {
-    let (trait_head, item_type) = trait_name.split_once('<')?;
-    (source_callable_name(trait_head) == protocol)
-        .then(|| item_type.strip_suffix('>'))
-        .flatten()
+fn trait_item_type_name<'a>(trait_name: &'a str, protocol: &str) -> Option<&'a str> {
+    let (trait_head, arguments) = trait_name.split_once('<')?;
+    if source_callable_name(trait_head) != protocol {
+        return None;
+    }
+    let arguments = arguments.strip_suffix('>')?;
+    arguments
+        .split(", type ")
+        .find_map(|argument| {
+            argument
+                .trim_start()
+                .strip_prefix("type Item: ")
+                .or_else(|| argument.trim_start().strip_prefix("Item: "))
+        })
+        .or_else(|| (!arguments.trim_start().starts_with("type ")).then_some(arguments))
 }
 
 fn requested_trait_name(name: &str) -> Option<&str> {

@@ -306,3 +306,102 @@ fn main() {
         result.diagnostics
     );
 }
+
+#[test]
+fn generic_associated_types_resolve_through_trait_impl_methods() {
+    let result = check_source(
+        r#"enum Option<T> {
+    Some(T)
+    None
+}
+
+trait Mapper {
+    type Wrapped<T>
+    fn value(): Self.Wrapped<i32>
+}
+
+struct Numbers {}
+
+impl Mapper for Numbers {
+    type Wrapped<T>: Option<T>
+    fn value(): Option<i32> => Option.Some(7)
+}
+
+fn read<M: Mapper>(mapper: M): M.Wrapped<i32> => mapper.value()
+
+fn main() {
+    let numbers = Numbers {}
+    match read(numbers) {
+        Option.Some(value) => io.println(value.toString())
+        Option.None => io.println("missing")
+    }
+}"#,
+    );
+
+    assert!(
+        !result.has_errors(),
+        "expected generic associated types to validate, got {:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
+fn associated_type_defaults_supply_omitted_impl_definitions() {
+    let result = check_source(
+        r#"trait Producer {
+    type Item = i32
+    fn next(): Self.Item
+}
+
+struct Counter {}
+
+impl Producer for Counter {
+    fn next(): i32 => 7
+}
+
+fn read<P: Producer>(producer: P): P.Item => producer.next()
+
+fn main() {
+    io.println(read(Counter {}).toString())
+}"#,
+    );
+
+    assert!(
+        !result.has_errors(),
+        "expected associated type defaults to validate, got {:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
+fn associated_type_bounds_are_checked_against_impl_definitions() {
+    let result = check_source(
+        r#"trait Printable {}
+
+struct Label {}
+struct NotPrintable {}
+
+impl Printable for Label {}
+
+trait Source {
+    type Item: Printable
+}
+
+struct Good {}
+struct Bad {}
+
+impl Source for Good {
+    type Item: Label
+}
+
+impl Source for Bad {
+    type Item: NotPrintable
+}
+
+fn main() {}"#,
+    );
+
+    assert!(result.diagnostics.iter().any(|diagnostic| diagnostic
+        .message
+        .contains("type `NotPrintable` does not satisfy bound `NotPrintable: Printable`")));
+}

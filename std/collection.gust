@@ -1,10 +1,12 @@
 from ./iter import { Iterator }
 
-trait FromElements<T> {
+trait FromElements {
+    type Item
     static fn withElementCapacity(capacity: usize): Self
-    fn add(mut self, value: T): void
+    fn add(mut self, value: Self.Item): void
 }
 
-trait FromIterator<T> {
-    static fn fromIterator(mut iterator: Iterator<T>): Self
+trait FromIterator {
+    type Item
+    static fn fromIterator(mut iterator: Iterator<type Item: Self.Item>): Self
 }

@@ -188,8 +188,33 @@ impl Parser {
             } else if self.current_keyword() == Some(Keyword::Type) {
                 let type_start = self.expect_keyword(Keyword::Type, "`type`").span;
                 let name = self.expect_identifier("expected associated type name");
+                let (type_params, type_param_bounds) = self.parse_type_params();
+                let mut bounds = Vec::new();
+                if self.match_kind(&TokenKind::Colon) {
+                    loop {
+                        let bound = self
+                            .parse_type()
+                            .unwrap_or_else(|| self.missing_type(self.current().span));
+                        bounds.push(bound);
+                        if !self.match_kind(&TokenKind::Plus) {
+                            break;
+                        }
+                    }
+                }
+                let default = if self.match_kind(&TokenKind::Equal) {
+                    Some(
+                        self.parse_type()
+                            .unwrap_or_else(|| self.missing_type(self.current().span)),
+                    )
+                } else {
+                    None
+                };
                 associated_types.push(AssociatedTypeDecl {
                     name,
+                    type_params,
+                    type_param_bounds,
+                    bounds,
+                    default,
                     span: type_start.join(self.previous_span()),
                 });
             } else {
@@ -275,12 +300,15 @@ impl Parser {
             } else if self.current_keyword() == Some(Keyword::Type) {
                 let type_start = self.expect_keyword(Keyword::Type, "`type`").span;
                 let name = self.expect_identifier("expected associated type name");
+                let (type_params, type_param_bounds) = self.parse_type_params();
                 self.expect_kind(&TokenKind::Colon, "`:`");
                 let type_ref = self
                     .parse_type()
                     .unwrap_or_else(|| self.missing_type(self.current().span));
                 associated_types.push(AssociatedTypeDef {
                     name,
+                    type_params,
+                    type_param_bounds,
                     span: type_start.join(type_ref.span),
                     type_ref,
                 });

@@ -72,6 +72,10 @@ impl Analyzer {
             return self_type.unwrap_or(Type::Unknown);
         }
 
+        if type_ref.name.starts_with("Self.") {
+            return Type::Named(type_ref.name.clone());
+        }
+
         let basic_type = BasicType::from_name(&type_ref.name);
         let imported_namespace_member = self.is_imported_namespace_member(&type_ref.name);
 

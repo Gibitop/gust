@@ -599,11 +599,11 @@ impl Analyzer {
 
         trait_names
             .iter()
-            .find_map(|trait_name| generic_trait_item_type_name(trait_name, "Iterator"))
+            .find_map(|trait_name| trait_item_type_name(trait_name, "Iterator"))
             .or_else(|| {
                 trait_names
                     .iter()
-                    .find_map(|trait_name| generic_trait_item_type_name(trait_name, "Iterable"))
+                    .find_map(|trait_name| trait_item_type_name(trait_name, "Iterable"))
             })
             .map(|item_type_name| self.type_from_name(item_type_name))
     }
@@ -637,7 +637,7 @@ impl Analyzer {
     fn for_uses_iterator_directly(&self, iterable_type: &Type) -> bool {
         self.for_trait_names(iterable_type)
             .iter()
-            .any(|trait_name| generic_trait_item_type_name(trait_name, "Iterator").is_some())
+            .any(|trait_name| trait_item_type_name(trait_name, "Iterator").is_some())
     }
 
     fn for_trait_names(&self, iterable_type: &Type) -> Vec<String> {

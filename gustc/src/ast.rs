@@ -90,6 +90,10 @@ pub struct TraitDecl {
 #[derive(Debug, Clone)]
 pub struct AssociatedTypeDecl {
     pub name: String,
+    pub type_params: Vec<String>,
+    pub type_param_bounds: Vec<TypeParamBound>,
+    pub bounds: Vec<TypeRef>,
+    pub default: Option<TypeRef>,
     pub span: Span,
 }
 
@@ -116,6 +120,8 @@ pub struct ImplDecl {
 #[derive(Debug, Clone)]
 pub struct AssociatedTypeDef {
     pub name: String,
+    pub type_params: Vec<String>,
+    pub type_param_bounds: Vec<TypeParamBound>,
     pub type_ref: TypeRef,
     pub span: Span,
 }

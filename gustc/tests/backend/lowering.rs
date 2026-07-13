@@ -157,8 +157,9 @@ fn iterator_for_loop_lowers_and_emits_c() {
     None
 }
 
-trait Iterator<T> {
-    fn next(mut self): Option<T>
+trait Iterator {
+    type Item
+    fn next(mut self): Option<Self.Item>
 }
 
 struct Counter {
@@ -166,7 +167,8 @@ struct Counter {
     end: i32
 }
 
-impl Iterator<i32> for Counter {
+impl Iterator for Counter {
+    type Item: i32
     fn next(mut self): Option<i32> {
         if self.value < self.end {
             let value = self.value
@@ -218,12 +220,14 @@ fn iterable_for_loop_lowers_and_emits_c() {
     None
 }
 
-trait Iterator<T> {
-    fn next(mut self): Option<T>
+trait Iterator {
+    type Item
+    fn next(mut self): Option<Self.Item>
 }
 
-trait Iterable<T> {
-    fn iterator(): Iterator<T>
+trait Iterable {
+    type Item
+    fn iterator(): Iterator<type Item: Self.Item>
 }
 
 struct Counter {
@@ -236,7 +240,8 @@ struct CounterIterator {
     end: i32
 }
 
-impl Iterator<i32> for CounterIterator {
+impl Iterator for CounterIterator {
+    type Item: i32
     fn next(mut self): Option<i32> {
         if self.value < self.end {
             let value = self.value
@@ -248,8 +253,9 @@ impl Iterator<i32> for CounterIterator {
     }
 }
 
-impl Iterable<i32> for Counter {
-    fn iterator(): Iterator<i32> => CounterIterator {
+impl Iterable for Counter {
+    type Item: i32
+    fn iterator(): Iterator<type Item: i32> => CounterIterator {
         value: self.start,
         end: self.end
     }

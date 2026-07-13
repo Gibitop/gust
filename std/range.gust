@@ -18,8 +18,9 @@ struct RangeIterator {
     finished: bool
 }
 
-impl Iterable<i32> for Range {
-    fn iterator(): Iterator<i32> => RangeIterator {
+impl Iterable for Range {
+    type Item: i32
+    fn iterator(): Iterator<type Item: i32> => RangeIterator {
         current: self.start,
         end: self.end,
         inclusive: false,
@@ -27,8 +28,9 @@ impl Iterable<i32> for Range {
     }
 }
 
-impl Iterable<i32> for RangeInclusive {
-    fn iterator(): Iterator<i32> => RangeIterator {
+impl Iterable for RangeInclusive {
+    type Item: i32
+    fn iterator(): Iterator<type Item: i32> => RangeIterator {
         current: self.start,
         end: self.end,
         inclusive: true,
@@ -36,7 +38,8 @@ impl Iterable<i32> for RangeInclusive {
     }
 }
 
-impl Iterator<i32> for RangeIterator {
+impl Iterator for RangeIterator {
+    type Item: i32
     fn next(mut self): Option<i32> {
         if self.finished {
             return Option<i32>.None

@@ -161,7 +161,7 @@ fn lower_for_statement(
             diagnostics.push(Diagnostic::error(
                 statement.span,
                 format!(
-                    "`for` requires an `Iterator<T>` or `Iterable<T>`, got `{}`",
+                    "`for` requires an `Iterator` or `Iterable`, got `{}`",
                     iterable.type_.name()
                 ),
             ));
@@ -185,7 +185,7 @@ fn lower_for_statement(
             diagnostics.push(Diagnostic::error(
                 statement.span,
                 format!(
-                    "`{}.iterator()` must return an `Iterator<T>`",
+                    "`{}.iterator()` must return an `Iterator`",
                     iterable_trait.name
                 ),
             ));
@@ -202,7 +202,7 @@ fn lower_for_statement(
             diagnostics.push(Diagnostic::error(
                 statement.span,
                 format!(
-                    "`{}.iterator()` must return an `Iterator<T>`",
+                    "`{}.iterator()` must return an `Iterator`",
                     iterable_trait.name
                 ),
             ));
@@ -276,7 +276,7 @@ fn lower_for_statement(
     let LoweredType::Enum(option_name) = &next_method.return_type else {
         diagnostics.push(Diagnostic::error(
             statement.span,
-            format!("`{}.next()` must return `Option<T>`", iterator_trait.name),
+            format!("`{}.next()` must return `Option<Self.Item>`", iterator_trait.name),
         ));
         return Vec::new();
     };

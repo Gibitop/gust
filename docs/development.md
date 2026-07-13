@@ -43,12 +43,12 @@ that users need to import.
 ## Collection literals
 
 `[value, ...]` is a collection literal. When a surrounding type supplies a concrete collection,
-that collection must implement `FromElements<T>`; without a target type, the literal defaults to
+that collection must implement `FromElements<type Item: T>`; without a target type, the literal defaults to
 an imported `ArrayList<T>`. The compiler lowers the literal to the collection's
 `withElementCapacity` and `add` trait-implementation functions, preserving left-to-right element
 evaluation. Collection behaviour therefore remains standard-library code.
 
-`FromIterator<T>` is a separate standard-library construction trait for iterators. `ArrayList<T>`
+`FromIterator<type Item: T>` is a separate standard-library construction trait for iterators. `ArrayList<T>`
 implements both traits. The internal `RawBuffer<T>` storage type is the only collection-specific
 runtime primitive; its compiler-implemented declaration lives in `std/internal/rawBuffer.gust`.
 Its allocation and typed storage operations are lowered by the executable backend so future GC
@@ -150,12 +150,13 @@ bodies. Executable builds lower `while`, `break`, and `continue` directly to C c
 
 ## Iterable for loops
 
-`for value in iterable` accepts a value that implements either `Iterator<T>` or `Iterable<T>`.
+`for value in iterable` accepts a value that implements either `Iterator<type Item: T>` or
+`Iterable<type Item: T>`.
 An iterator is used directly; an iterable first produces one through `iterator()`. The compiler
 evaluates the iterable expression once, keeps the resulting iterator in a hidden mutable binding,
 and repeatedly matches `next()` against `Option.Some(value)` and `Option.None`. Loop bindings are
-immutable and scoped to the loop body. Iterating an `Iterator<T>` directly requires a
-mutable-capable expression because `next()` advances it; an `Iterable<T>` may be iterated through
+immutable and scoped to the loop body. Iterating an `Iterator<type Item: T>` directly requires a
+mutable-capable expression because `next()` advances it; an `Iterable<type Item: T>` may be iterated through
 an immutable binding because it produces the iterator. `break` and `continue` apply to the
 generated loop.
 
@@ -164,7 +165,7 @@ generated loop.
 Bounded range literals use Rust-shaped syntax. `start..end` creates an exclusive `Range`, and
 `start..=end` creates an inclusive `RangeInclusive`. The first implementation supports `i32`
 endpoints and requires the corresponding standard-library range types to be imported. Both range
-types implement `Iterable<i32>` through standard-library code, so `for value in 0..10` works when
+types implement `Iterable<type Item: i32>` through standard-library code, so `for value in 0..10` works when
 `std/range.gust` is part of the loaded module graph. Open-ended and full ranges are not implemented
 yet.
 
@@ -498,8 +499,11 @@ Bounds remain inline; Gust does not have `where` clause syntax.
 
 ## Associated types
 
-Traits may declare associated types with `type Name`, and every implementation must define each
-declared type exactly once with `type Name: ConcreteType`. Associated types are canonical related
+Traits may declare associated types with `type Name`, optional direct bounds such as
+`type Name: Display`, and optional defaults such as `type Name = string` or
+`type Name: Display = string`. Every implementation must define each non-defaulted associated type
+exactly once with `type Name: ConcreteType`; omitted defaulted definitions use the trait default.
+Associated types are canonical related
 types selected by an implementation: they are determined by the trait, its positional generic
 arguments, and the implementing type, and may appear in either parameter or return positions. They
 do not participate in implementation identity, so two otherwise-overlapping impls cannot be
@@ -519,12 +523,21 @@ types from caller-selected named generic arguments. A trait-typed value must bin
 type needed to determine its instance-method signatures. Those bindings are part of the specialized
 trait-object type and vtable signature, but remain outside impl coherence identity.
 
+Generic associated types declare their own parameters, such as `type Item<T>`, and implementations
+define them with the matching arity, such as `type Item<T>: Option<T>`. They are projected with
+ordinary type arguments, for example `Self.Item<i32>` or `T.Item<string>`.
+
 Monomorphization resolves associated-type projections before semantic analysis and executable
 lowering. Generic impl associated-type definitions are first substituted with the concrete impl
 arguments; trait methods are then specialized with both positional arguments and associated-type
 bindings. Module rewriting preserves declarations, definitions, bindings, and projections so the
-same process applies across local-module boundaries. Generic associated types, associated-type
-defaults, and bounds declared directly on associated types are not supported.
+same process applies across local-module boundaries. Associated-type equality bindings remain
+limited to non-generic associated types, so generic associated types are currently statically
+dispatched rather than carried through trait-object vtables.
+
+`Iterator`, `Iterable`, `FromElements`, and `FromIterator` use an associated `Item` type instead
+of a positional element type parameter. The standard-library `Index<Key>` and `IndexSet<Key>`
+traits likewise expose their accessed value through associated `Output` types.
 
 ## First-class functions
 

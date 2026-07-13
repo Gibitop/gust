@@ -317,6 +317,12 @@ impl Monomorphizer {
     }
 
     fn generic_trait_member_type(&self, receiver: &TypeRef, member_name: &str) -> Option<TypeRef> {
+        if let Some(return_type) = self
+            .trait_method_returns
+            .get(&(receiver.name.clone(), member_name.to_string()))
+        {
+            return Some(return_type.clone());
+        }
         let receiver = self.expanded_type(receiver);
         let trait_ = self.trait_templates.get(&receiver.name)?;
         let return_type = trait_

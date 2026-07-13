@@ -286,7 +286,7 @@ fn for_loops_require_iterator_or_iterable_values() {
         diagnostic.severity == Severity::Error
             && diagnostic
                 .message
-                .contains("`for` requires an `Iterator<T>` or `Iterable<T>`")
+                .contains("`for` requires an `Iterator` or `Iterable`")
     }));
 }
 

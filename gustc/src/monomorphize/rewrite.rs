@@ -74,10 +74,17 @@ impl Monomorphizer {
                 for bound in &mut item.type_param_bounds {
                     self.rewrite_type(&mut bound.trait_ref, substitutions);
                 }
+                self.apply_associated_type_defaults(item);
                 self.rewrite_type(&mut item.type_ref, substitutions);
                 for associated_type in &mut item.associated_types {
-                    self.rewrite_type(&mut associated_type.type_ref, substitutions);
+                    if associated_type.type_params.is_empty() {
+                        self.rewrite_type(&mut associated_type.type_ref, substitutions);
+                    } else {
+                        associated_type.type_ref =
+                            substitute_type(&associated_type.type_ref, substitutions);
+                    }
                 }
+                self.record_associated_type_bound_checks(item);
                 let required_associated_types = self
                     .trait_declarations
                     .get(&item.trait_ref.name)
@@ -98,12 +105,17 @@ impl Monomorphizer {
                 self.rewrite_type(&mut item.trait_ref, substitutions);
                 self.self_types.push(item.type_ref.clone());
                 let mut impl_substitutions = substitutions.clone();
-                impl_substitutions.extend(item.associated_types.iter().map(|associated_type| {
-                    (
-                        format!("Self.{}", associated_type.name),
-                        associated_type.type_ref.clone(),
-                    )
-                }));
+                impl_substitutions.extend(
+                    item.associated_types
+                        .iter()
+                        .filter(|associated_type| associated_type.type_params.is_empty())
+                        .map(|associated_type| {
+                            (
+                                format!("Self.{}", associated_type.name),
+                                associated_type.type_ref.clone(),
+                            )
+                        }),
+                );
                 for member in &mut item.methods {
                     self.rewrite_function(&mut member.function, &impl_substitutions);
                 }
@@ -311,8 +323,7 @@ impl Monomorphizer {
             return;
         }
 
-        if type_ref.args.is_empty()
-            && type_ref.bindings.is_empty()
+        if type_ref.bindings.is_empty()
             && let Some((receiver_name, associated_type)) = type_ref.name.rsplit_once('.')
         {
             let receiver = substitutions
@@ -333,7 +344,11 @@ impl Monomorphizer {
                     })
                 });
             if let Some(receiver) = receiver {
-                match self.resolve_associated_projection(&receiver, associated_type) {
+                match self.resolve_associated_projection(
+                    &receiver,
+                    associated_type,
+                    &type_ref.args,
+                ) {
                     Ok(mut resolved) => {
                         resolved.span = type_ref.span;
                         self.rewrite_type(&mut resolved, substitutions);
