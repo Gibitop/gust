@@ -16,3 +16,7 @@ path = "tests/backend/mod.rs"
 [[test]]
 name = "project"
 path = "tests/project/mod.rs"
+
+[[test]]
+name = "cli"
+path = "tests/cli.rs"
