@@ -1,5 +1,5 @@
 use gustc::ast::BasicType;
-use gustc::c_codegen::emit_c;
+use gustc::c_codegen::{CCodegenOptions, emit_c, emit_c_with_options};
 use gustc::check_source;
 use gustc::diagnostic::Severity;
 use gustc::lower::{

@@ -7,17 +7,41 @@ use crate::lower::{
     LoweredSourceLocation, LoweredStatement, LoweredStruct, LoweredType,
 };
 
+#[derive(Debug, Clone, Copy, Default)]
+pub struct CCodegenOptions {
+    pub gc_stress: bool,
+}
+
 pub fn emit_c(program: &LoweredProgram) -> String {
+    emit_c_with_options(program, CCodegenOptions::default())
+}
+
+pub fn emit_c_with_options(program: &LoweredProgram, options: CCodegenOptions) -> String {
     let uses_string = program_uses_type(program, BasicType::String);
     let uses_string_equality = program_uses_string_equality(program);
     let number_to_string_types = number_to_string_types(program);
     let float_to_int_casts = float_to_int_casts(program);
-    let uses_bool = program_uses_type(program, BasicType::Bool)
+    let uses_string_concat = program_uses_string_concat(program);
+    let uses_string_builder = program
+        .structs
+        .iter()
+        .any(|struct_| is_string_builder_name(&struct_.name));
+    let uses_number_to_string = !number_to_string_types.is_empty();
+    let uses_enum_trait_object = program_uses_enum_trait_object(program);
+    let uses_alloc = uses_string_concat
+        || uses_string_builder
+        || uses_number_to_string
+        || uses_enum_trait_object
+        || !program.structs.is_empty()
+        || !program.closure_functions.is_empty();
+    let uses_bool = uses_alloc
+        || program_uses_type(program, BasicType::Bool)
         || uses_string_equality
         || number_to_string_types.contains(&BasicType::I128)
         || program_uses_match_or(program)
         || !float_to_int_casts.is_empty();
-    let uses_usize = uses_string
+    let uses_usize = uses_alloc
+        || uses_string
         || program_uses_type(program, BasicType::Usize)
         || program
             .structs
@@ -26,13 +50,6 @@ pub fn emit_c(program: &LoweredProgram) -> String {
     let uses_float =
         program_uses_type(program, BasicType::F32) || program_uses_type(program, BasicType::F64);
     let uses_fixed_width_int = program_uses_fixed_width_int(program);
-    let uses_string_concat = program_uses_string_concat(program);
-    let uses_string_builder = program
-        .structs
-        .iter()
-        .any(|struct_| is_string_builder_name(&struct_.name));
-    let uses_number_to_string = !number_to_string_types.is_empty();
-    let uses_enum_trait_object = program_uses_enum_trait_object(program);
     let uses_panic = program_uses_panic(program);
     let uses_println = program.statements.iter().any(statement_uses_println)
         || program
@@ -66,13 +83,6 @@ pub fn emit_c(program: &LoweredProgram) -> String {
         source.push_str("#include <math.h>\n");
     }
 
-    let uses_alloc = uses_string_concat
-        || uses_string_builder
-        || uses_number_to_string
-        || uses_enum_trait_object
-        || !program.structs.is_empty()
-        || !program.closure_functions.is_empty();
-
     if uses_alloc || uses_panic {
         source.push_str("#include <stdlib.h>\n#include <string.h>\n");
     } else if uses_string_equality {
@@ -98,9 +108,9 @@ pub fn emit_c(program: &LoweredProgram) -> String {
     push_c_type_definitions(&mut source, program);
 
     if uses_alloc {
-        source.push_str("static void* gust_rt_alloc(size_t size) {\n");
-        source.push_str("    return malloc(size);\n");
-        source.push_str("}\n\n");
+        push_c_closure_env_structs(&mut source, &program.closure_functions);
+        push_c_gc_runtime(&mut source, options.gc_stress);
+        push_c_gc_descriptors(&mut source, program);
     }
 
     if uses_string_concat {
@@ -108,7 +118,7 @@ pub fn emit_c(program: &LoweredProgram) -> String {
             "static gust_rt_string gust_rt_string_concat(gust_rt_string left, gust_rt_string right) {\n",
         );
         source.push_str("    size_t byte_len = left.gust_byte_len + right.gust_byte_len;\n");
-        source.push_str("    unsigned char* data = gust_rt_alloc(byte_len == 0 ? 1 : byte_len);\n");
+        source.push_str("    unsigned char* data = gust_rt_alloc(&gust_rt_desc_bytes, byte_len == 0 ? 1 : byte_len);\n");
         source.push_str("    memcpy(data, left.gust_data, left.gust_byte_len);\n");
         source.push_str(
             "    memcpy(data + left.gust_byte_len, right.gust_data, right.gust_byte_len);\n",
@@ -152,7 +162,6 @@ pub fn emit_c(program: &LoweredProgram) -> String {
     push_c_string_builder_helpers(&mut source, &program.structs);
 
     push_c_struct_runtime_helpers(&mut source, program);
-    push_c_closure_env_structs(&mut source, &program.closure_functions);
 
     for function in &program.closure_functions {
         push_c_closure_function_signature(&mut source, function);
@@ -167,12 +176,24 @@ pub fn emit_c(program: &LoweredProgram) -> String {
             source.push_str(";\n\n");
         }
 
-        push_c_function(&mut source, function, &program.structs, uses_panic);
+        push_c_function(
+            &mut source,
+            function,
+            &program.structs,
+            uses_panic,
+            uses_alloc,
+        );
         source.push('\n');
     }
 
     for function in &program.closure_functions {
-        push_c_closure_function(&mut source, function, &program.structs, uses_panic);
+        push_c_closure_function(
+            &mut source,
+            function,
+            &program.structs,
+            uses_panic,
+            uses_alloc,
+        );
         source.push('\n');
     }
 
@@ -181,11 +202,25 @@ pub fn emit_c(program: &LoweredProgram) -> String {
     if uses_panic {
         push_c_stack_push(&mut source, "main", &program.main_location, 1);
     }
-
-    for statement in &program.statements {
-        push_c_statement(&mut source, statement, 1, &program.structs, uses_panic);
+    if uses_alloc {
+        source.push_str("    gust_rt_root_slot* gust_rt_function_roots = gust_rt_roots;\n");
     }
 
+    for statement in &program.statements {
+        push_c_statement(
+            &mut source,
+            statement,
+            1,
+            &program.structs,
+            uses_panic,
+            uses_alloc,
+            None,
+        );
+    }
+
+    if uses_alloc {
+        source.push_str("    gust_rt_roots_pop_to(gust_rt_function_roots);\n");
+    }
     if uses_panic {
         source.push_str("    gust_rt_stack_pop();\n");
     }

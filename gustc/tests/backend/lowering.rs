@@ -724,7 +724,8 @@ fn main() {
 
     assert!(source.contains("static gust_rt_string gust_fn_"));
     assert!(source.contains("static void gust_fn_"));
-    assert!(source.contains("    return gust_fn_"));
+    assert!(source.contains("gust_rt_return_value = gust_fn_"));
+    assert!(source.contains("return gust_rt_return_value;"));
     assert!(source.contains("    gust_rt_io_println(gust_fn_"));
 }
 

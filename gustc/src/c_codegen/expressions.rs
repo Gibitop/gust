@@ -259,6 +259,8 @@ fn push_c_value_with_panic(
                 1,
                 structs,
                 false,
+                false,
+                None,
             );
 
             source.push_str("    ");
@@ -315,7 +317,7 @@ fn push_c_value_with_panic(
                     push_c_struct_new_name(source, builder_name);
                     source.push_str("();\n    gust_builder->gust_capacity = ");
                     push_c_value_with_panic(source, &args[0], structs, uses_panic);
-                    source.push_str(";\n    if (gust_builder->gust_capacity > 0) {\n        gust_builder->gust_data = gust_rt_alloc(gust_builder->gust_capacity);\n    }\n    gust_builder;\n})");
+                    source.push_str(";\n    if (gust_builder->gust_capacity > 0) {\n        gust_builder->gust_data = gust_rt_alloc(&gust_rt_desc_bytes, gust_builder->gust_capacity);\n    }\n    gust_builder;\n})");
                     return;
                 }
                 let builder = args
@@ -357,11 +359,17 @@ fn push_c_value_with_panic(
                     "withCapacity" => {
                         source.push_str("({\n    ");
                         push_c_type(source, &value.type_);
-                        source.push_str(" gust_buffer = gust_rt_alloc(sizeof(*gust_buffer));\n");
+                        source.push_str(" gust_buffer = gust_rt_alloc(&");
+                        if let LoweredType::Struct(name) = &value.type_ {
+                            push_c_struct_desc_name(source, name);
+                        } else {
+                            unreachable!("raw buffer constructors return RawBuffer structs")
+                        }
+                        source.push_str(", sizeof(*gust_buffer));\n");
                         source.push_str("    memset(gust_buffer, 0, sizeof(*gust_buffer));\n");
                         source.push_str("    gust_buffer->gust_capacity = ");
                         push_c_value_with_panic(source, &args[0], structs, uses_panic);
-                        source.push_str(";\n    if (gust_buffer->gust_capacity > 0) {\n        gust_buffer->gust_data = gust_rt_alloc(sizeof(");
+                        source.push_str(";\n    if (gust_buffer->gust_capacity > 0) {\n        gust_buffer->gust_data = gust_rt_alloc(&gust_rt_desc_bytes, sizeof(");
                         push_c_type(source, element);
                         source.push_str(
                             ") * gust_buffer->gust_capacity);\n    }\n    gust_buffer;\n})",
@@ -441,7 +449,7 @@ fn push_c_value_with_panic(
                         push_c_value_with_panic(source, &args[0], structs, uses_panic);
                         source.push_str("; size_t gust_capacity = ");
                         push_c_value_with_panic(source, &args[1], structs, uses_panic);
-                        source.push_str("; void* gust_data = gust_rt_alloc(sizeof(");
+                        source.push_str("; void* gust_data = gust_rt_alloc(&gust_rt_desc_bytes, sizeof(");
                         push_c_type(source, element);
                         source.push_str(") * gust_capacity); if (gust_buffer->gust_length > 0) { memcpy(gust_data, gust_buffer->gust_data, sizeof(");
                         push_c_type(source, element);
@@ -512,7 +520,9 @@ fn push_c_value_with_panic(
             LoweredType::Enum(type_name) => {
                 source.push_str("({\n    ");
                 push_c_enum_name(source, type_name);
-                source.push_str("* gust_trait_self = gust_rt_alloc(sizeof(");
+                source.push_str("* gust_trait_self = gust_rt_alloc(&");
+                push_c_enum_desc_name(source, type_name);
+                source.push_str(", sizeof(");
                 push_c_enum_name(source, type_name);
                 source.push_str("));\n    *gust_trait_self = ");
                 push_c_value_with_panic(source, value, structs, uses_panic);
@@ -573,7 +583,9 @@ fn push_c_value_with_panic(
                 let env_type = closure_env_type_name(name);
                 source.push_str("({\n    ");
                 source.push_str(&env_type);
-                source.push_str("* gust_env = gust_rt_alloc(sizeof(");
+                source.push_str("* gust_env = gust_rt_alloc(&");
+                push_c_closure_env_desc_name(source, name);
+                source.push_str(", sizeof(");
                 source.push_str(&env_type);
                 source.push_str("));\n");
                 for capture in captures {

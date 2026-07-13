@@ -47,9 +47,9 @@ fn string_concat_c_output_is_stable() {
     ));
     assert!(source.contains("size_t byte_len = left.gust_byte_len + right.gust_byte_len;"));
     assert!(source.contains(".gust_byte_len = 4"));
-    assert_eq!(source.matches("malloc(").count(), 1);
-    assert!(source.contains("return malloc(size);"));
-    assert!(source.contains("unsigned char* data = gust_rt_alloc(byte_len == 0 ? 1 : byte_len);"));
+    assert!(source.contains("static void* gust_rt_alloc(const gust_rt_type_desc* desc, size_t size)"));
+    assert!(source.contains("header = malloc(sizeof(gust_rt_object_header) + payload_size);"));
+    assert!(source.contains("unsigned char* data = gust_rt_alloc(&gust_rt_desc_bytes, byte_len == 0 ? 1 : byte_len);"));
 }
 
 #[test]
@@ -116,7 +116,9 @@ fn main() {
     assert!(
         source.contains("static gust_rt_string gust_fn_fb1de34a_greet(gust_rt_string gust_name)")
     );
-    assert!(source.contains("return gust_rt_string_concat((gust_rt_string){"));
+    assert!(source.contains("gust_rt_return_value = gust_rt_string_concat((gust_rt_string){"));
+    assert!(source.contains("gust_rt_roots_pop_to(gust_rt_function_roots);"));
+    assert!(source.contains("return gust_rt_return_value;"));
 }
 
 #[test]
@@ -211,7 +213,8 @@ fn main() {
     assert!(source.contains(
         "static gust_rt_string gust_fn_1f1b2f34_getName(gust_struct_f1168775_Lang* gust_lang) {"
     ));
-    assert!(source.contains("return gust_lang->gust_name;"));
+    assert!(source.contains("gust_rt_return_value = gust_lang->gust_name;"));
+    assert!(source.contains("return gust_rt_return_value;"));
     assert!(source.contains("gust_struct_f1168775_Lang* gust_lang = gust_fn_de4514cf_makeLang();"));
     assert!(source.contains("gust_rt_io_println(gust_fn_1f1b2f34_getName(gust_lang));"));
     assert!(source.contains("gust_rt_io_println(gust_fn_de4514cf_makeLang()->gust_name);"));
@@ -231,7 +234,7 @@ fn main() {
     let lowered = lower_program(&result.program).expect("alloc helper should lower");
     let source = emit_c(&lowered);
 
-    assert!(source.contains("static void* gust_rt_alloc(size_t size)"));
+    assert!(source.contains("static void* gust_rt_alloc(const gust_rt_type_desc* desc, size_t size)"));
     assert!(source.contains("// Gust function: alloc"));
     assert!(source.contains("static gust_rt_string gust_fn_bab1bb16_alloc("));
     assert!(source.contains("gust_rt_io_println(gust_fn_bab1bb16_alloc((gust_rt_string){"));
@@ -588,5 +591,186 @@ fn panic_rejects_non_string_operands() {
                     .contains("expected value of type `string`, got `i32`")),
         "expected string panic diagnostic, got {:?}",
         result.diagnostics
+    );
+}
+
+#[test]
+fn gc_stress_keeps_registered_roots_alive() {
+    let source = r#"struct Box {
+    text: string
+}
+
+fn make(label: string, value: i32): Box {
+    return Box { text: label + value.toString() }
+}
+
+fn main() {
+    let first = make("first ", 1)
+    let second = make("second ", 2)
+    io.println(first.text)
+    io.println(second.text)
+}"#;
+    let result = check_source(source);
+
+    assert!(
+        !result.has_errors(),
+        "expected no frontend errors, got {:?}",
+        result.diagnostics
+    );
+
+    let lowered = lower_program_with_source(&result.program, "gc_stress.gust", source)
+        .expect("GC stress should lower");
+    let source = emit_c_with_options(&lowered, CCodegenOptions { gc_stress: true });
+    assert!(source.contains("gust_rt_root_push"));
+    assert!(source.contains("gust_rt_mark_roots();"));
+    assert!(source.contains("static const bool gust_rt_gc_stress = true;"));
+
+    let test_dir = std::env::temp_dir().join(format!("gust-gc-stress-test-{}", std::process::id()));
+    fs::create_dir_all(&test_dir).expect("GC stress temp dir should be created");
+    let c_path = test_dir.join("gc_stress.c");
+    let executable = test_dir.join("gc_stress");
+    fs::write(&c_path, source).expect("generated C should be written");
+
+    let output = Command::new("cc")
+        .arg(&c_path)
+        .arg("-o")
+        .arg(&executable)
+        .output()
+        .expect("C compiler should build GC stress executable");
+    assert!(
+        output.status.success(),
+        "generated GC stress C should build: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let output = Command::new(&executable)
+        .output()
+        .expect("GC stress executable should run");
+    assert!(
+        output.status.success(),
+        "GC stress executable should succeed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "first 1\nsecond 2\n"
+    );
+}
+
+#[test]
+fn gc_stress_covers_control_flow_matches_closures_and_trait_objects() {
+    let source = r#"struct Box {
+    text: string
+}
+
+enum Choice {
+    Boxed(Box)
+    Text(string)
+}
+
+trait Describe {
+    fn describe(): string
+}
+
+impl Describe for Box {
+    fn describe(): string {
+        return self.text
+    }
+}
+
+fn choose(useBox: bool, label: string): Choice {
+    if useBox {
+        let boxed = Box { text: label + " box" }
+        return Choice.Boxed(boxed)
+    }
+
+    let text = label + " text"
+    return Choice.Text(text)
+}
+
+fn describeChoice(choice: Choice): string {
+    return match choice {
+        Choice.Boxed(boxed) => boxed.text,
+        Choice.Text(text) => text,
+    }
+}
+
+fn makeFormatter(prefix: string): fn(i32): string {
+    let captured = Box { text: prefix + ":" }
+    return fn(value) => captured.text + value.toString()
+}
+
+fn printDescription(value: Describe) {
+    io.println(value.describe())
+}
+
+fn main() {
+    let first = choose(true, "first")
+    let second = choose(false, "second")
+    io.println(describeChoice(first))
+    io.println(describeChoice(second))
+
+    let formatter = makeFormatter("count")
+    io.println(formatter(7))
+
+    let described = Box { text: "trait " + "object" }
+    printDescription(described)
+
+    let mut index = 0
+    while index < 5 {
+        let item = Box { text: "loop " + index.toString() }
+        index++
+        if index == 2 {
+            continue
+        }
+        if index == 5 {
+            break
+        }
+        io.println(item.text)
+    }
+}"#;
+    let result = check_source(source);
+
+    assert!(
+        !result.has_errors(),
+        "expected no frontend errors, got {:?}",
+        result.diagnostics
+    );
+
+    let lowered = lower_program_with_source(&result.program, "gc_roots.gust", source)
+        .expect("GC root stress should lower");
+    let source = emit_c_with_options(&lowered, CCodegenOptions { gc_stress: true });
+    assert!(source.contains("static const bool gust_rt_gc_stress = true;"));
+
+    let test_dir =
+        std::env::temp_dir().join(format!("gust-gc-roots-test-{}", std::process::id()));
+    fs::create_dir_all(&test_dir).expect("GC roots temp dir should be created");
+    let c_path = test_dir.join("gc_roots.c");
+    let executable = test_dir.join("gc_roots");
+    fs::write(&c_path, source).expect("generated C should be written");
+
+    let output = Command::new("cc")
+        .arg(&c_path)
+        .arg("-o")
+        .arg(&executable)
+        .output()
+        .expect("C compiler should build GC root stress executable");
+    assert!(
+        output.status.success(),
+        "generated GC root stress C should build: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let output = Command::new(&executable)
+        .output()
+        .expect("GC root stress executable should run");
+    assert!(
+        output.status.success(),
+        "GC root stress executable should succeed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "first box\nsecond text\ncount:7\ntrait object\nloop 0\nloop 2\nloop 3\n"
     );
 }

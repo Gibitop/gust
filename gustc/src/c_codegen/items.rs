@@ -109,6 +109,7 @@ fn push_c_function(
     function: &LoweredFunction,
     structs: &[LoweredStruct],
     uses_panic: bool,
+    uses_gc: bool,
 ) {
     source.push_str("// Gust function: ");
     source.push_str(&function.name);
@@ -118,28 +119,44 @@ fn push_c_function(
     if uses_panic {
         push_c_stack_push(source, &function.name, &function.location, 1);
     }
+    if uses_gc {
+        source.push_str("    gust_rt_root_slot* gust_rt_function_roots = gust_rt_roots;\n");
+        for param in &function.params {
+            push_c_root_for_local(source, &param.name, &param.type_, 1);
+        }
+    }
 
     for statement in &function.statements {
-        push_c_statement(source, statement, 1, structs, uses_panic);
+        push_c_statement(source, statement, 1, structs, uses_panic, uses_gc, None);
     }
 
     if function.return_type != LoweredType::Void && function.return_value.type_ != LoweredType::Void
     {
-        if uses_panic {
+        if uses_panic || uses_gc {
             source.push_str("    ");
             push_c_type(source, &function.return_value.type_);
             source.push_str(" gust_rt_return_value = ");
             push_c_value_with_panic(source, &function.return_value, structs, uses_panic);
             source.push_str(";\n");
-            source.push_str("    gust_rt_stack_pop();\n");
+            if uses_gc {
+                source.push_str("    gust_rt_roots_pop_to(gust_rt_function_roots);\n");
+            }
+            if uses_panic {
+                source.push_str("    gust_rt_stack_pop();\n");
+            }
             source.push_str("    return gust_rt_return_value;\n");
         } else {
             source.push_str("    return ");
             push_c_value_with_panic(source, &function.return_value, structs, uses_panic);
             source.push_str(";\n");
         }
-    } else if uses_panic {
-        source.push_str("    gust_rt_stack_pop();\n");
+    } else {
+        if uses_gc {
+            source.push_str("    gust_rt_roots_pop_to(gust_rt_function_roots);\n");
+        }
+        if uses_panic {
+            source.push_str("    gust_rt_stack_pop();\n");
+        }
     }
 
     source.push_str("}\n");
@@ -221,6 +238,7 @@ fn push_c_closure_function(
     function: &LoweredClosureFunction,
     structs: &[LoweredStruct],
     uses_panic: bool,
+    uses_gc: bool,
 ) {
     source.push_str("// Gust closure: ");
     source.push_str(&function.name);
@@ -239,35 +257,57 @@ fn push_c_closure_function(
             1,
         );
     }
+    if uses_gc {
+        source.push_str("    gust_rt_root_slot* gust_rt_function_roots = gust_rt_roots;\n");
+    }
     if !function.captures.is_empty() {
         source.push_str("    ");
         source.push_str(&closure_env_type_name(&function.name));
         source.push_str("* gust_env = gust_raw_env;\n");
+        if uses_gc {
+            source.push_str("    gust_rt_root_slot gust_rt_root_env = { &gust_env, gust_rt_trace_heap_object_root, NULL };\n");
+            source.push_str("    gust_rt_root_push(&gust_rt_root_env);\n");
+        }
     } else {
         source.push_str("    (void)gust_raw_env;\n");
     }
+    if uses_gc {
+        for param in &function.params {
+            push_c_root_for_local(source, &param.name, &param.type_, 1);
+        }
+    }
 
     for statement in &function.statements {
-        push_c_statement(source, statement, 1, structs, uses_panic);
+        push_c_statement(source, statement, 1, structs, uses_panic, uses_gc, None);
     }
 
     if function.return_type != LoweredType::Void && function.return_value.type_ != LoweredType::Void
     {
-        if uses_panic {
+        if uses_panic || uses_gc {
             source.push_str("    ");
             push_c_type(source, &function.return_value.type_);
             source.push_str(" gust_rt_return_value = ");
             push_c_value_with_panic(source, &function.return_value, structs, uses_panic);
             source.push_str(";\n");
-            source.push_str("    gust_rt_stack_pop();\n");
+            if uses_gc {
+                source.push_str("    gust_rt_roots_pop_to(gust_rt_function_roots);\n");
+            }
+            if uses_panic {
+                source.push_str("    gust_rt_stack_pop();\n");
+            }
             source.push_str("    return gust_rt_return_value;\n");
         } else {
             source.push_str("    return ");
             push_c_value_with_panic(source, &function.return_value, structs, uses_panic);
             source.push_str(";\n");
         }
-    } else if uses_panic {
-        source.push_str("    gust_rt_stack_pop();\n");
+    } else {
+        if uses_gc {
+            source.push_str("    gust_rt_roots_pop_to(gust_rt_function_roots);\n");
+        }
+        if uses_panic {
+            source.push_str("    gust_rt_stack_pop();\n");
+        }
     }
 
     source.push_str("}\n");

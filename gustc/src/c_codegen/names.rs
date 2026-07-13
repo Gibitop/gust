@@ -11,6 +11,56 @@ fn closure_env_type_name(name: &str) -> String {
     )
 }
 
+fn push_c_struct_desc_name(source: &mut String, name: &str) {
+    source.push_str("gust_rt_desc_struct_");
+    push_hashed_c_name(source, name);
+}
+
+fn push_c_struct_trace_name(source: &mut String, name: &str) {
+    source.push_str("gust_rt_trace_struct_");
+    push_hashed_c_name(source, name);
+}
+
+fn push_c_enum_desc_name(source: &mut String, name: &str) {
+    source.push_str("gust_rt_desc_enum_");
+    push_hashed_c_name(source, name);
+}
+
+fn push_c_enum_trace_name(source: &mut String, name: &str) {
+    source.push_str("gust_rt_trace_enum_");
+    push_hashed_c_name(source, name);
+}
+
+fn push_c_enum_box_trace_name(source: &mut String, name: &str) {
+    source.push_str("gust_rt_trace_enum_box_");
+    push_hashed_c_name(source, name);
+}
+
+fn push_c_cell_desc_name(source: &mut String, type_: &LoweredType) {
+    source.push_str("gust_rt_desc_cell_");
+    push_hashed_c_name(source, &type_name_key(type_));
+}
+
+fn push_c_cell_trace_name(source: &mut String, type_: &LoweredType) {
+    source.push_str("gust_rt_trace_cell_");
+    push_hashed_c_name(source, &type_name_key(type_));
+}
+
+fn push_c_closure_env_desc_name(source: &mut String, name: &str) {
+    source.push_str("gust_rt_desc_");
+    source.push_str(&closure_env_type_name(name));
+}
+
+fn push_c_root_name(source: &mut String, name: &str) {
+    source.push_str("gust_rt_root_");
+    push_c_identifier_suffix(source, name);
+}
+
+fn push_hashed_c_name(source: &mut String, name: &str) {
+    source.push_str(&format!("{:08x}_", stable_name_hash(name)));
+    push_c_identifier_suffix(source, name);
+}
+
 fn sanitized_name(name: &str) -> String {
     let mut result = String::new();
     push_c_identifier_suffix(&mut result, name);
@@ -63,4 +113,3 @@ fn push_c_identifier_suffix(source: &mut String, name: &str) {
         }
     }
 }
-

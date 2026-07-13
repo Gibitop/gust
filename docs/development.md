@@ -140,6 +140,17 @@ through zero-argument `toString()` calls, with `string.toString()` treated as an
 
 Generated C should route operations that will later be runtime-managed through Gust-shaped helpers instead of calling C primitives directly.
 
+Managed allocations in executable C builds use descriptor-aware `gust_rt_alloc(desc, size)` calls.
+The emitted runtime keeps a non-moving heap object header, type descriptors, trace callbacks,
+mark/sweep helpers, a safepoint hook, precise generated root slots for parameters and locals, and
+a no-op pointer write-barrier hook. Safepoints mark registered roots and sweep unreachable heap
+objects when the allocation threshold is reached. The compiler `--gc-stress` flag emits a binary
+that forces collection at every safepoint for generated-C tests. Future concurrent or generational
+collectors should preserve the
+compiler/runtime contract: generated code allocates with descriptors, emitted descriptors trace
+managed references, pointer writes go through the runtime barrier abstraction where needed, and
+safepoints are the coordination boundary.
+
 ## Panics
 
 `panic(message)` is a compiler intrinsic that accepts a single `string` value. Executable builds
