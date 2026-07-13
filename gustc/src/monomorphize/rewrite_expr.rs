@@ -419,6 +419,9 @@ impl Monomorphizer {
                     for type_arg in &mut resolution.impl_type_args {
                         self.rewrite_type(type_arg, substitutions);
                     }
+                    for binding in &mut resolution.associated_type_bindings {
+                        self.rewrite_type(&mut binding.type_ref, substitutions);
+                    }
                     self.rewrite_type(&mut resolution.return_type, substitutions);
                     self.record_type_param_bound_checks(
                         format!(
@@ -434,6 +437,7 @@ impl Monomorphizer {
                     self.specialize_trait(
                         &resolution.trait_name,
                         &resolution.trait_args,
+                        &resolution.associated_type_bindings,
                         expr.span,
                     );
 
@@ -449,7 +453,11 @@ impl Monomorphizer {
                         object: Box::new(object),
                         name: format!(
                             "{}::{method_name}",
-                            specialized_name(&resolution.trait_name, &resolution.trait_args)
+                            specialized_trait_name(
+                                &resolution.trait_name,
+                                &resolution.trait_args,
+                                &resolution.associated_type_bindings,
+                            )
                         ),
                     };
                     self.inferred_expr_types
@@ -656,6 +664,7 @@ impl Monomorphizer {
             let mut collection = TypeRef {
                 name: array_list,
                 args: vec![element],
+                bindings: Vec::new(),
                 function: None,
                 span: expr.span,
             };
@@ -775,6 +784,7 @@ impl Monomorphizer {
                 let endpoint = TypeRef {
                     name: "i32".to_string(),
                     args: Vec::new(),
+                    bindings: Vec::new(),
                     function: None,
                     span: expr.span,
                 };

@@ -82,7 +82,14 @@ pub struct TraitDecl {
     pub name: String,
     pub type_params: Vec<String>,
     pub type_param_bounds: Vec<TypeParamBound>,
+    pub associated_types: Vec<AssociatedTypeDecl>,
     pub methods: Vec<TraitMethodDecl>,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone)]
+pub struct AssociatedTypeDecl {
+    pub name: String,
     pub span: Span,
 }
 
@@ -101,7 +108,15 @@ pub struct ImplDecl {
     pub type_param_bounds: Vec<TypeParamBound>,
     pub trait_ref: TypeRef,
     pub type_ref: TypeRef,
+    pub associated_types: Vec<AssociatedTypeDef>,
     pub methods: Vec<ImplMember>,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone)]
+pub struct AssociatedTypeDef {
+    pub name: String,
+    pub type_ref: TypeRef,
     pub span: Span,
 }
 
@@ -453,7 +468,15 @@ impl Pattern {
 pub struct TypeRef {
     pub name: String,
     pub args: Vec<TypeRef>,
+    pub bindings: Vec<AssociatedTypeBinding>,
     pub function: Option<FunctionTypeRef>,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone)]
+pub struct AssociatedTypeBinding {
+    pub name: String,
+    pub type_ref: TypeRef,
     pub span: Span,
 }
 

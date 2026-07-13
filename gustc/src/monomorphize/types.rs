@@ -64,6 +64,7 @@ fn concrete_type_refs(items: &[Item]) -> Vec<TypeRef> {
             Some(TypeRef {
                 name: name.clone(),
                 args: Vec::new(),
+                bindings: Vec::new(),
                 function: None,
                 span,
             })
@@ -81,6 +82,7 @@ fn concrete_trait_refs(items: &[Item]) -> Vec<TypeRef> {
             Some(TypeRef {
                 name: item.name.clone(),
                 args: Vec::new(),
+                bindings: Vec::new(),
                 function: None,
                 span: item.span,
             })
@@ -92,12 +94,36 @@ fn concrete_impl_exists(items: &[Item], trait_ref: &TypeRef, type_ref: &TypeRef)
     let trait_name = type_name(trait_ref);
     let self_type_name = type_name(type_ref);
     items.iter().any(|item| {
-        matches!(
-            item,
-            Item::Impl(item)
-                if type_name(&item.trait_ref) == trait_name && type_name(&item.type_ref) == self_type_name
-        )
+        let Item::Impl(item) = item else {
+            return false;
+        };
+        let candidate_trait_name = type_name(&item.trait_ref);
+        let trait_matches = candidate_trait_name == trait_name
+            || (!trait_name.contains("<type ")
+                && !trait_name.contains(", type ")
+                && impl_trait_identity_name(item) == trait_name);
+        trait_matches && type_name(&item.type_ref) == self_type_name
     })
+}
+
+fn impl_trait_identity_name(item: &ImplDecl) -> String {
+    let name = type_name(&item.trait_ref);
+    let marker = item
+        .associated_types
+        .iter()
+        .filter_map(|associated_type| {
+            let first = format!("<type {}: ", associated_type.name);
+            let later = format!(", type {}: ", associated_type.name);
+            name.find(&first)
+                .map(|index| (index, false))
+                .or_else(|| name.find(&later).map(|index| (index, true)))
+        })
+        .min_by_key(|(index, _)| *index);
+    match marker {
+        Some((index, true)) => format!("{}>", &name[..index]),
+        Some((index, false)) => name[..index].to_string(),
+        None => name,
+    }
 }
 
 fn type_names(type_ref: &TypeRef) -> Vec<&str> {
@@ -112,6 +138,9 @@ fn type_names(type_ref: &TypeRef) -> Vec<&str> {
     let mut names = vec![type_ref.name.as_str()];
     for arg in &type_ref.args {
         names.extend(type_names(arg));
+    }
+    for binding in &type_ref.bindings {
+        names.extend(type_names(&binding.type_ref));
     }
     names
 }
@@ -152,6 +181,15 @@ fn substitute_type(type_ref: &TypeRef, substitutions: &HashMap<String, TypeRef>)
             .iter()
             .map(|arg| substitute_type(arg, substitutions))
             .collect(),
+        bindings: type_ref
+            .bindings
+            .iter()
+            .map(|binding| crate::ast::AssociatedTypeBinding {
+                name: binding.name.clone(),
+                type_ref: substitute_type(&binding.type_ref, substitutions),
+                span: binding.span,
+            })
+            .collect(),
         function: type_ref
             .function
             .as_ref()
@@ -175,10 +213,33 @@ fn specialized_name(name: &str, args: &[TypeRef]) -> String {
     format!("{name}<{args}>")
 }
 
+fn specialized_trait_name(
+    name: &str,
+    args: &[TypeRef],
+    bindings: &[crate::ast::AssociatedTypeBinding],
+) -> String {
+    if bindings.is_empty() {
+        return specialized_name(name, args);
+    }
+    let mut parts = args.iter().map(type_name).collect::<Vec<_>>();
+    parts.extend(
+        bindings
+            .iter()
+            .map(|binding| {
+                format!(
+                    "type {}: {}",
+                    binding.name,
+                    type_name(&binding.type_ref)
+                )
+            }),
+    );
+    format!("{name}<{}>", parts.join(", "))
+}
+
 fn type_name(type_ref: &TypeRef) -> String {
-    if type_ref.args.is_empty() {
+    if type_ref.args.is_empty() && type_ref.bindings.is_empty() {
         type_ref.name.clone()
     } else {
-        specialized_name(&type_ref.name, &type_ref.args)
+        specialized_trait_name(&type_ref.name, &type_ref.args, &type_ref.bindings)
     }
 }

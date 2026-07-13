@@ -49,6 +49,53 @@ fn mood(): Mood => Mood.Happy"#,
 }
 
 #[test]
+fn associated_types_resolve_across_modules() {
+    let project = TempProject::new();
+    project.write(
+        "main.gust",
+        r#"from ./producer import { Producer }
+from ./counter import { Counter }
+
+fn main() {
+    let producer: Producer<type Item: i32> = Counter { value: 7 }
+    io.println(producer.next().toString())
+}"#,
+    );
+    project.write(
+        "producer.gust",
+        r#"trait Producer {
+    type Item
+    fn next(): Self.Item
+}"#,
+    );
+    project.write(
+        "counter.gust",
+        r#"from ./producer import { Producer }
+
+struct Counter {
+    value: i32
+}
+
+impl Producer for Counter {
+    type Item: i32
+    fn next(): i32 => self.value
+}"#,
+    );
+
+    let result = check_project(&project.path("main.gust")).expect("project should load");
+    assert!(
+        result.diagnostics.is_empty(),
+        "expected cross-module associated types to validate, got {:?}",
+        result.diagnostics
+    );
+
+    let lowered = lower_program(&result.program).expect("project should lower");
+    let source = emit_c(&lowered);
+    assert!(source.contains("Producer_type_Item__i32"));
+    assert!(source.contains("gust_method_next"));
+}
+
+#[test]
 fn directory_entry_uses_main_gust() {
     let project = TempProject::new();
     project.write("main.gust", "fn main() {}");

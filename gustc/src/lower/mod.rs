@@ -344,7 +344,8 @@ fn lower_monomorphized_program(program: &Program) -> Result<LoweredProgram, Vec<
                     let Some(name) = &function.name else {
                         continue;
                     };
-                    let lowered_name = if item.trait_ref.name.contains('<') {
+                    let lowered_name = if trait_has_positional_type_arguments(&item.trait_ref.name)
+                    {
                         if member.static_ {
                             qualified_static_trait_method_name(
                                 &item.trait_ref.name,

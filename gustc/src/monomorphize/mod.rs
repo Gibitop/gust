@@ -23,4 +23,5 @@ include!("expr_inference.rs");
 include!("specialize.rs");
 include!("bounds.rs");
 include!("impl_coherence.rs");
+include!("associated_types.rs");
 include!("reachability.rs");

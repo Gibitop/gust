@@ -37,3 +37,9 @@ fn requested_trait_name(name: &str) -> Option<&str> {
     name.rsplit_once("::").map(|(trait_name, _)| trait_name)
 }
 
+fn trait_has_positional_type_arguments(name: &str) -> bool {
+    name.split_once('<')
+        .and_then(|(_, arguments)| arguments.strip_suffix('>'))
+        .and_then(|arguments| arguments.split(',').next())
+        .is_some_and(|argument| !argument.trim_start().starts_with("type "))
+}

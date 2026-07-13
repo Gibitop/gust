@@ -1,9 +1,10 @@
 use crate::ast::{
-    BinaryOp, Block, ElseBranch, EnumDecl, EnumVariant, Expr, ExprKind, ExtensionDecl, FieldDecl,
-    FunctionBody, FunctionDecl, FunctionTypeParam, FunctionTypeRef, ImplDecl, ImplMember,
-    ImportDecl, ImportName, ImportNamespace, Item, MatchBranch, MatchBranchBody, Param, Pattern,
-    Program, Stmt, StmtKind, StructDecl, StructInitField, StructMember, TraitDecl, TraitMethodDecl,
-    TypeParamBound, TypeRef, UnaryOp,
+    AssociatedTypeBinding, AssociatedTypeDecl, AssociatedTypeDef, BinaryOp, Block, ElseBranch,
+    EnumDecl, EnumVariant, Expr, ExprKind, ExtensionDecl, FieldDecl, FunctionBody, FunctionDecl,
+    FunctionTypeParam, FunctionTypeRef, ImplDecl, ImplMember, ImportDecl, ImportName,
+    ImportNamespace, Item, MatchBranch, MatchBranchBody, Param, Pattern, Program, Stmt, StmtKind,
+    StructDecl, StructInitField, StructMember, TraitDecl, TraitMethodDecl, TypeParamBound, TypeRef,
+    UnaryOp,
 };
 use crate::diagnostic::Diagnostic;
 use crate::lexer::{Keyword, Token, TokenKind};
@@ -40,6 +41,13 @@ impl Parser {
                 Some(Keyword::Impl) => items.push(Item::Impl(self.parse_impl())),
                 Some(Keyword::Fn) => items.push(self.parse_top_level_function()),
                 Some(Keyword::Static) => items.push(self.parse_static_extension()),
+                Some(Keyword::Type) => {
+                    self.error_here(
+                        "associated-type definitions are only allowed inside trait impls",
+                    );
+                    self.advance();
+                    self.synchronize_top_level();
+                }
                 _ => {
                     self.error_here("expected a top-level declaration");
                     self.advance();

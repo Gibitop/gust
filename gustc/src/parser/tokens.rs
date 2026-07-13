@@ -3,6 +3,7 @@ impl Parser {
         TypeRef {
             name: "<missing>".to_string(),
             args: Vec::new(),
+            bindings: Vec::new(),
             function: None,
             span,
         }

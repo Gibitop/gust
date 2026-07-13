@@ -6,6 +6,7 @@ impl Monomorphizer {
         let inferred = |name: &str| TypeRef {
             name: name.to_string(),
             args: Vec::new(),
+            bindings: Vec::new(),
             function: None,
             span: expr.span,
         };
@@ -37,6 +38,7 @@ impl Monomorphizer {
                     return Some(TypeRef {
                         name: name.clone(),
                         args,
+                        bindings: Vec::new(),
                         function: None,
                         span: expr.span,
                     });
@@ -47,6 +49,7 @@ impl Monomorphizer {
                     Some(TypeRef {
                         name: name.clone(),
                         args: args.clone(),
+                        bindings: Vec::new(),
                         function: None,
                         span: expr.span,
                     })
@@ -66,6 +69,7 @@ impl Monomorphizer {
                     .map(|name| TypeRef {
                         name: name.clone(),
                         args: Vec::new(),
+                        bindings: Vec::new(),
                         function: None,
                         span: expr.span,
                     })
@@ -83,6 +87,7 @@ impl Monomorphizer {
                     Some(TypeRef {
                         name: name.clone(),
                         args: args.clone(),
+                        bindings: Vec::new(),
                         function: None,
                         span: expr.span,
                     })
@@ -102,6 +107,7 @@ impl Monomorphizer {
                     return Some(TypeRef {
                         name: enum_name.clone(),
                         args: args.clone(),
+                        bindings: Vec::new(),
                         function: None,
                         span: expr.span,
                     });
@@ -144,6 +150,7 @@ impl Monomorphizer {
                                 return Some(TypeRef {
                                     name: enum_name.clone(),
                                     args: type_args,
+                                    bindings: Vec::new(),
                                     function: None,
                                     span: expr.span,
                                 });
@@ -156,6 +163,7 @@ impl Monomorphizer {
                             return Some(TypeRef {
                                 name: enum_name.clone(),
                                 args: args.clone(),
+                                bindings: Vec::new(),
                                 function: None,
                                 span: expr.span,
                             });
@@ -337,6 +345,7 @@ impl Monomorphizer {
                 Some(TypeRef {
                     name: name.clone(),
                     args: Vec::new(),
+                    bindings: Vec::new(),
                     function: None,
                     span: expr.span,
                 })
@@ -345,6 +354,7 @@ impl Monomorphizer {
                 Some(TypeRef {
                     name: name.clone(),
                     args: args.clone(),
+                    bindings: Vec::new(),
                     function: None,
                     span: expr.span,
                 })
@@ -360,6 +370,7 @@ impl Monomorphizer {
             return TypeRef {
                 name: name.clone(),
                 args: args.clone(),
+                bindings: type_ref.bindings.clone(),
                 function: None,
                 span: type_ref.span,
             };

@@ -496,6 +496,36 @@ Bounds are written inside type parameter lists, such as `fn getName<T: Named>(va
 Concrete specializations must satisfy their bounds through an available concrete or generated impl.
 Bounds remain inline; Gust does not have `where` clause syntax.
 
+## Associated types
+
+Traits may declare associated types with `type Name`, and every implementation must define each
+declared type exactly once with `type Name: ConcreteType`. Associated types are canonical related
+types selected by an implementation: they are determined by the trait, its positional generic
+arguments, and the implementing type, and may appear in either parameter or return positions. They
+do not participate in implementation identity, so two otherwise-overlapping impls cannot be
+distinguished by choosing different associated types. Generic impl definitions may refer to impl
+type parameters, such as `type Output: T`.
+
+Trait method signatures may project through `Self`, such as `Self.Item`. A bounded type parameter
+may project through the uniquely applicable bound with `T.Item`. Projection resolution substitutes
+the selected impl definition recursively inside function types, struct fields, enum payloads, and
+generic types. A projection is rejected when no applicable trait or implementation declares it, or
+when multiple bounds or applicable implementations make the associated-type name ambiguous.
+
+Associated-type equality bindings are marked with `type` and written alongside positional trait
+arguments, for example `Producer<type Item: i32>` and
+`Index<usize, type Output: string>`. The marker distinguishes implementation-selected associated
+types from caller-selected named generic arguments. A trait-typed value must bind every associated
+type needed to determine its instance-method signatures. Those bindings are part of the specialized
+trait-object type and vtable signature, but remain outside impl coherence identity.
+
+Monomorphization resolves associated-type projections before semantic analysis and executable
+lowering. Generic impl associated-type definitions are first substituted with the concrete impl
+arguments; trait methods are then specialized with both positional arguments and associated-type
+bindings. Module rewriting preserves declarations, definitions, bindings, and projections so the
+same process applies across local-module boundaries. Generic associated types, associated-type
+defaults, and bounds declared directly on associated types are not supported.
+
 ## First-class functions
 
 Function values are represented as closure pairs: an environment pointer plus a call pointer.

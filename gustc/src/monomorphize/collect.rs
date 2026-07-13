@@ -32,13 +32,19 @@ impl Monomorphizer {
                     .flatten()
             })
             .collect();
-        let trait_templates = program
+        let trait_declarations: HashMap<String, TraitDecl> = program
             .items
             .iter()
             .filter_map(|item| {
                 let Item::Trait(item) = item else {
                     return None;
                 };
+                Some((item.name.clone(), item.clone()))
+            })
+            .collect();
+        let trait_templates = trait_declarations
+            .values()
+            .filter_map(|item| {
                 (!item.type_params.is_empty()).then(|| (item.name.clone(), item.clone()))
             })
             .collect();
@@ -165,6 +171,7 @@ impl Monomorphizer {
         Self {
             struct_templates,
             enum_templates,
+            trait_declarations,
             trait_templates,
             impl_declarations,
             impl_templates,
