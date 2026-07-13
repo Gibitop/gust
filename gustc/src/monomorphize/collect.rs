@@ -68,7 +68,7 @@ impl Monomorphizer {
                 Some(item.clone())
             })
             .collect();
-        let extensions = program
+        let mut extensions: Vec<crate::ast::ExtensionDecl> = program
             .items
             .iter()
             .filter_map(|item| {
@@ -78,6 +78,8 @@ impl Monomorphizer {
                 Some(item.clone())
             })
             .collect();
+        let trait_default_extension_start = extensions.len();
+        extensions.extend(trait_default_extensions(program));
         let concrete_structs = program
             .items
             .iter()
@@ -176,6 +178,7 @@ impl Monomorphizer {
             impl_declarations,
             impl_templates,
             extensions,
+            trait_default_extension_start,
             function_templates,
             concrete_structs,
             concrete_struct_defs,
@@ -203,4 +206,112 @@ impl Monomorphizer {
         }
     }
 
+}
+
+fn trait_default_extensions(program: &Program) -> Vec<crate::ast::ExtensionDecl> {
+    program
+        .items
+        .iter()
+        .filter_map(|item| {
+            let Item::Trait(trait_) = item else {
+                return None;
+            };
+            Some(
+                trait_
+                    .methods
+                    .iter()
+                    .filter_map(|method| trait_default_extension(trait_, method)),
+            )
+        })
+        .flatten()
+        .collect()
+}
+
+fn trait_default_extension(
+    trait_: &TraitDecl,
+    method: &crate::ast::TraitMethodDecl,
+) -> Option<crate::ast::ExtensionDecl> {
+    if method.static_ {
+        return None;
+    }
+    let body = method.body.clone()?;
+    let mut type_params = trait_.type_params.clone();
+    let mut substitutions = HashMap::new();
+    let bindings = trait_
+        .associated_types
+        .iter()
+        .map(|associated_type| {
+            let name = format!("{}{}", trait_.name, associated_type.name);
+            type_params.push(name.clone());
+            let type_ref = TypeRef {
+                name: name.clone(),
+                args: Vec::new(),
+                bindings: Vec::new(),
+                function: None,
+                span: associated_type.span,
+            };
+            substitutions.insert(format!("Self.{}", associated_type.name), type_ref.clone());
+            crate::ast::AssociatedTypeBinding {
+                name: associated_type.name.clone(),
+                type_ref,
+                span: associated_type.span,
+            }
+        })
+        .collect();
+    let function = FunctionDecl {
+        name: Some(method.name.clone()),
+        type_params: method.type_params.clone(),
+        type_param_bounds: method
+            .type_param_bounds
+            .iter()
+            .map(|bound| TypeParamBound {
+                param: bound.param.clone(),
+                trait_ref: substitute_type(&bound.trait_ref, &substitutions),
+                span: bound.span,
+            })
+            .collect(),
+        params: method
+            .params
+            .iter()
+            .cloned()
+            .map(|mut param| {
+                param.type_ref = param
+                    .type_ref
+                    .as_ref()
+                    .map(|type_ref| substitute_type(type_ref, &substitutions));
+                param
+            })
+            .collect(),
+        return_type: method
+            .return_type
+            .as_ref()
+            .map(|type_ref| substitute_type(type_ref, &substitutions)),
+        body,
+        span: method.span,
+    };
+
+    Some(crate::ast::ExtensionDecl {
+        type_ref: TypeRef {
+            name: trait_.name.clone(),
+            args: trait_
+                .type_params
+                .iter()
+                .map(|name| TypeRef {
+                    name: name.clone(),
+                    args: Vec::new(),
+                    bindings: Vec::new(),
+                    function: None,
+                    span: trait_.span,
+                })
+                .collect(),
+            bindings,
+            function: None,
+            span: trait_.span,
+        },
+        type_params,
+        type_param_bounds: trait_.type_param_bounds.clone(),
+        function,
+        static_: false,
+        span: method.span,
+    })
 }

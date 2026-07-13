@@ -29,36 +29,29 @@ fn push_c_struct(source: &mut String, struct_: &LoweredStruct) {
     source.push_str("};\n");
 }
 
-fn push_c_function_type_definitions(source: &mut String, program: &LoweredProgram) {
-    let mut types = Vec::new();
-    collect_program_function_types(program, &mut types);
-    types.sort_by_key(type_name_key);
-    types.dedup();
+fn push_c_function_type_definition(source: &mut String, type_: &LoweredType) {
+    let LoweredType::Function {
+        params,
+        return_type,
+    } = type_
+    else {
+        return;
+    };
 
-    for type_ in types {
-        let LoweredType::Function {
-            params,
-            return_type,
-        } = &type_
-        else {
-            continue;
-        };
-
-        source.push_str("typedef struct ");
-        push_c_function_type_name(source, &type_);
-        source.push_str(" {\n");
-        source.push_str("    void* gust_env;\n");
-        source.push_str("    ");
-        push_c_type(source, return_type);
-        source.push_str(" (*gust_call)(void*");
-        for param in params {
-            source.push_str(", ");
-            push_c_type(source, &param.type_);
-        }
-        source.push_str(");\n} ");
-        push_c_function_type_name(source, &type_);
-        source.push_str(";\n\n");
+    source.push_str("typedef struct ");
+    push_c_function_type_name(source, type_);
+    source.push_str(" {\n");
+    source.push_str("    void* gust_env;\n");
+    source.push_str("    ");
+    push_c_type(source, return_type);
+    source.push_str(" (*gust_call)(void*");
+    for param in params {
+        source.push_str(", ");
+        push_c_type(source, &param.type_);
     }
+    source.push_str(");\n} ");
+    push_c_function_type_name(source, type_);
+    source.push_str(";\n");
 }
 
 fn push_c_enum(source: &mut String, enum_: &LoweredEnum) {

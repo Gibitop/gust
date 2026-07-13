@@ -170,6 +170,29 @@ impl Monomorphizer {
             return;
         }
 
+        let receiver_needs_rewrite = match &expr.kind {
+            ExprKind::Call { callee, .. } => match &callee.kind {
+                ExprKind::Member { object, .. } | ExprKind::GenericMember { object, .. } => {
+                    self.infer_type_expression_ref(object).is_none()
+                        && self.infer_expr_type(object).is_none()
+                }
+                _ => false,
+            },
+            _ => false,
+        };
+        if receiver_needs_rewrite {
+            let ExprKind::Call { callee, .. } = &mut expr.kind else {
+                unreachable!("receiver rewrite requires a call expression")
+            };
+            let object = match &mut callee.kind {
+                ExprKind::Member { object, .. } | ExprKind::GenericMember { object, .. } => {
+                    object
+                }
+                _ => unreachable!("receiver rewrite requires a member callee"),
+            };
+            self.rewrite_expr(object, substitutions);
+        }
+
         let generic_method_call = match &expr.kind {
             ExprKind::Call { callee, .. } => match &callee.kind {
                 ExprKind::GenericMember { object, name, args } => self
@@ -302,7 +325,9 @@ impl Monomorphizer {
                     }
                     _ => unreachable!("generic method call requires a member callee"),
                 };
-                self.rewrite_expr(&mut object, substitutions);
+                if !receiver_needs_rewrite {
+                    self.rewrite_expr(&mut object, substitutions);
+                }
                 callee.kind = ExprKind::Member {
                     object: Box::new(object),
                     name: specialized_name(&method_name, &type_args),
@@ -427,7 +452,9 @@ impl Monomorphizer {
                     }
                     _ => unreachable!("extension call requires a member callee"),
                 };
-                self.rewrite_expr(&mut object, substitutions);
+                if !receiver_needs_rewrite {
+                    self.rewrite_expr(&mut object, substitutions);
+                }
                 let name = if resolution.function_type_args.is_empty() {
                     method_name
                 } else {
@@ -476,9 +503,19 @@ impl Monomorphizer {
             }
             _ => None,
         };
-        if let Some((object, receiver, method_name, static_, source_args)) = generic_trait_call
-            && !self.has_real_or_extension_method(&receiver, &method_name, static_)
-        {
+        if let Some((object, receiver, method_name, static_, source_args)) = generic_trait_call {
+            if self.has_real_or_extension_method(&receiver, &method_name, static_) {
+                let ExprKind::Call { callee, .. } = &mut expr.kind else {
+                    unreachable!("generic trait call was matched above")
+                };
+                callee.kind = ExprKind::Member {
+                    object: Box::new(object),
+                    name: method_name,
+                };
+                self.rewrite_expr_children(expr, substitutions);
+                return;
+            }
+
             let (requested_trait, source_method_name) = requested_trait_method(&method_name);
             if let Some(requested_trait) = requested_trait {
                 let expanded_receiver = self.expanded_trait_type(&receiver);

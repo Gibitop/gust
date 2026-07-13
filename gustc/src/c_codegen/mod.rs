@@ -96,7 +96,6 @@ pub fn emit_c(program: &LoweredProgram) -> String {
     }
 
     push_c_type_definitions(&mut source, program);
-    push_c_function_type_definitions(&mut source, program);
 
     if uses_alloc {
         source.push_str("static void* gust_rt_alloc(size_t size) {\n");

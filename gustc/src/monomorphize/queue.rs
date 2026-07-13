@@ -180,6 +180,7 @@ impl Monomorphizer {
                     specialized.name = specialized_name;
                     specialized.type_params.clear();
                     specialized.type_param_bounds.clear();
+                    specialized.methods.retain(|method| method.body.is_none());
                     for method in &mut specialized.methods {
                         for param in &mut method.params {
                             if let Some(type_ref) = &mut param.type_ref {

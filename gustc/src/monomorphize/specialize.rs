@@ -315,15 +315,19 @@ impl Monomorphizer {
     fn specialize_extension(&mut self, resolution: &ExtensionResolution, span: crate::span::Span) {
         let extension = self.extensions[resolution.template_index].clone();
         let name = extension.function.name.as_deref().unwrap_or("<anonymous>");
+        let mut type_params = resolution.receiver_type_params.clone();
+        type_params.extend(extension.function.type_params.iter().cloned());
+        let mut type_args = resolution.receiver_type_args.clone();
+        type_args.extend(resolution.function_type_args.iter().cloned());
         self.record_type_param_bound_checks(
             format!(
                 "extension method `{}.{}`",
                 type_name(&resolution.receiver),
                 name
             ),
-            &resolution.receiver_type_params,
+            &type_params,
             &extension.type_param_bounds,
-            &resolution.receiver_type_args,
+            &type_args,
             span,
         );
         self.record_type_param_bound_checks(
@@ -332,9 +336,9 @@ impl Monomorphizer {
                 type_name(&resolution.receiver),
                 name
             ),
-            &extension.function.type_params,
+            &type_params,
             &extension.function.type_param_bounds,
-            &resolution.function_type_args,
+            &type_args,
             span,
         );
         self.pending.push_back(PendingSpecialization::Extension {
@@ -392,6 +396,18 @@ impl Monomorphizer {
                 .cloned()
                 .zip(function_args.iter().cloned()),
         );
+        let associated_type_substitutions = template
+            .type_ref
+            .bindings
+            .iter()
+            .map(|binding| {
+                (
+                    format!("Self.{}", binding.name),
+                    substitute_type(&binding.type_ref, &substitutions),
+                )
+            })
+            .collect::<Vec<_>>();
+        substitutions.extend(associated_type_substitutions);
 
         let mut specialized = template;
         specialized.type_ref = receiver.clone();

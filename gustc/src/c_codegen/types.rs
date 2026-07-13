@@ -1,6 +1,10 @@
 fn push_c_type_definitions(source: &mut String, program: &LoweredProgram) {
     let mut emitted = HashSet::new();
-    let mut remaining = program.structs.len() + program.enums.len();
+    let mut function_types = Vec::new();
+    collect_program_function_types(program, &mut function_types);
+    function_types.sort_by_key(type_name_key);
+    function_types.dedup();
+    let mut remaining = program.structs.len() + program.enums.len() + function_types.len();
 
     for trait_ in &program.traits {
         source.push_str("typedef struct ");
@@ -38,6 +42,18 @@ fn push_c_type_definitions(source: &mut String, program: &LoweredProgram) {
 
     while remaining > 0 {
         let previous_remaining = remaining;
+
+        for type_ in &function_types {
+            let key = function_type_definition_key(type_);
+            if emitted.contains(&key) || !function_type_dependencies_are_emitted(type_, &emitted) {
+                continue;
+            }
+
+            push_c_function_type_definition(source, type_);
+            source.push('\n');
+            emitted.insert(key);
+            remaining -= 1;
+        }
 
         for struct_ in &program.structs {
             let key = format!("struct:{}", struct_.name);
@@ -112,6 +128,14 @@ fn collect_program_function_types(program: &LoweredProgram, types: &mut Vec<Lowe
         for variant in &enum_.variants {
             if let Some(payload) = &variant.payload {
                 collect_function_type(payload, types);
+            }
+        }
+    }
+    for trait_ in &program.traits {
+        for method in &trait_.methods {
+            collect_function_type(&method.return_type, types);
+            for param in &method.params {
+                collect_function_type(&param.type_, types);
             }
         }
     }
@@ -278,10 +302,32 @@ fn type_definition_is_emitted(type_: &LoweredType, emitted: &HashSet<String>) ->
         LoweredType::Basic(_)
         | LoweredType::Struct(_)
         | LoweredType::Trait(_)
-        | LoweredType::Function { .. }
         | LoweredType::Void => true,
         LoweredType::Enum(name) => emitted.contains(&format!("enum:{name}")),
+        LoweredType::Function { .. } => emitted.contains(&function_type_definition_key(type_)),
     }
+}
+
+fn function_type_definition_key(type_: &LoweredType) -> String {
+    format!("function:{}", type_name_key(type_))
+}
+
+fn function_type_dependencies_are_emitted(
+    type_: &LoweredType,
+    emitted: &HashSet<String>,
+) -> bool {
+    let LoweredType::Function {
+        params,
+        return_type,
+    } = type_
+    else {
+        return false;
+    };
+
+    params
+        .iter()
+        .all(|param| type_definition_is_emitted(&param.type_, emitted))
+        && type_definition_is_emitted(return_type, emitted)
 }
 
 fn push_c_type(source: &mut String, type_: &LoweredType) {

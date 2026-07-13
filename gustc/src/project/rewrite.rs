@@ -97,6 +97,11 @@ impl<'names, 'diagnostics> ModuleRewriter<'names, 'diagnostics> {
                     self.scopes.pop();
                 }
                 for method in &mut item.methods {
+                    self.scopes
+                        .push(method.type_params.iter().cloned().collect());
+                    for bound in &mut method.type_param_bounds {
+                        self.rewrite_type(&mut bound.trait_ref);
+                    }
                     for param in &mut method.params {
                         if let Some(type_ref) = &mut param.type_ref {
                             self.rewrite_type(type_ref);
@@ -105,6 +110,17 @@ impl<'names, 'diagnostics> ModuleRewriter<'names, 'diagnostics> {
                     if let Some(return_type) = &mut method.return_type {
                         self.rewrite_type(return_type);
                     }
+                    if let Some(body) = &mut method.body {
+                        self.scopes.push(
+                            method.params.iter().map(|param| param.name.clone()).collect(),
+                        );
+                        match body {
+                            FunctionBody::Block(block) => self.rewrite_block(block),
+                            FunctionBody::Expr(expr) => self.rewrite_expr(expr),
+                        }
+                        self.scopes.pop();
+                    }
+                    self.scopes.pop();
                 }
                 self.scopes.pop();
             }

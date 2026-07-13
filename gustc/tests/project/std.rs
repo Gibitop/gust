@@ -371,6 +371,66 @@ fn main() {
 }
 
 #[test]
+fn iterator_adapters_map_filter_and_collect() {
+    let project = TempProject::new();
+    project.write("std/option.gust", include_str!("../../../std/option.gust"));
+    project.write("std/result.gust", include_str!("../../../std/result.gust"));
+    project.write("std/iter.gust", include_str!("../../../std/iter.gust"));
+    project.write("std/index.gust", include_str!("../../../std/index.gust"));
+    project.write(
+        "std/collection.gust",
+        include_str!("../../../std/collection.gust"),
+    );
+    project.write(
+        "std/internal/rawBuffer.gust",
+        include_str!("../../../std/internal/rawBuffer.gust"),
+    );
+    project.write(
+        "std/arrayList.gust",
+        include_str!("../../../std/arrayList.gust"),
+    );
+    project.write(
+        "main.gust",
+r#"from ./std/arrayList import { ArrayList }
+
+fn main() {
+    let values = [1, 2, 3, 4, 5]
+    let transformed: ArrayList<string> = values.iterator()
+        .filter(fn(value) => value % 2 == 1)
+        .map(fn(value) => value.toString())
+        .collect()
+
+    for value in transformed {
+        io.println(value)
+    }
+}"#,
+    );
+
+    let result = check_project(&project.path("main.gust")).expect("project should load");
+    assert!(
+        result.diagnostics.is_empty(),
+        "expected iterator adapters to validate, got {:?}",
+        result.diagnostics
+    );
+
+    let lowered = lower_program(&result.program).expect("iterator adapters should lower");
+    let source = emit_c(&lowered);
+    assert_eq!(lowered.closure_functions.len(), 2);
+    let c_path = project.path("iterator_adapters.c");
+    fs::write(&c_path, &source).expect("generated C should be written");
+    let output = Command::new("cc")
+        .arg("-fsyntax-only")
+        .arg(&c_path)
+        .output()
+        .expect("C compiler should run");
+    assert!(
+        output.status.success(),
+        "generated iterator-adapter C should compile: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
 fn array_list_indexed_reads_and_writes_panic_out_of_bounds() {
     assert_array_list_index_panic(
         r#"from ./std/arrayList import { ArrayList }

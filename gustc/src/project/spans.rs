@@ -59,6 +59,12 @@ fn shift_program(program: &mut Program, offset: usize) {
                     if let Some(return_type) = &mut method.return_type {
                         shift_type(return_type, offset);
                     }
+                    if let Some(body) = &mut method.body {
+                        match body {
+                            FunctionBody::Block(block) => shift_block(block, offset),
+                            FunctionBody::Expr(expr) => shift_expr(expr, offset),
+                        }
+                    }
                 }
             }
             Item::Impl(item) => {

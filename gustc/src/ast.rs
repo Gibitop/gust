@@ -104,8 +104,11 @@ pub struct AssociatedTypeDecl {
 pub struct TraitMethodDecl {
     pub name: String,
     pub static_: bool,
+    pub type_params: Vec<String>,
+    pub type_param_bounds: Vec<TypeParamBound>,
     pub params: Vec<Param>,
     pub return_type: Option<TypeRef>,
+    pub body: Option<FunctionBody>,
     pub span: Span,
 }
 

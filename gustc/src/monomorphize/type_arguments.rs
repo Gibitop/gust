@@ -588,7 +588,8 @@ impl Monomorphizer {
         for (template_index, extension) in self.extensions.clone().iter().enumerate() {
             if extension.static_ != static_
                 || extension.function.name.as_deref() != Some(method_name)
-                || !self.is_generic_extension_template(extension)
+                || (!self.is_generic_extension_template(extension)
+                    && template_index < self.trait_default_extension_start)
             {
                 continue;
             }
@@ -636,7 +637,7 @@ impl Monomorphizer {
                     .iter()
                     .zip(args)
                     .filter_map(|(expected, arg)| {
-                        self.infer_expr_type(arg)
+                        self.infer_extension_argument_type(expected, arg)
                             .map(|actual| (expected.clone(), actual))
                     })
                     .collect::<Vec<_>>();
@@ -645,7 +646,7 @@ impl Monomorphizer {
                 {
                     constraints.push((substitute_type(return_type, &substitutions), expected_return.clone()));
                 }
-                self.solve_type_arguments(
+                let mut type_args = self.solve_type_arguments(
                     method_name,
                     &extension.function.type_params,
                     constraints,
@@ -655,7 +656,11 @@ impl Monomorphizer {
                         "cannot infer type arguments for generic extension method `{}.{method_name}`: {reason}; write `.{method_name}<Type>(...)` or add a concrete expected type",
                         type_name(&receiver)
                     )
-                })?
+                })?;
+                for type_arg in &mut type_args {
+                    self.rewrite_type(type_arg, &HashMap::new());
+                }
+                type_args
             };
 
             substitutions.extend(
@@ -705,6 +710,52 @@ impl Monomorphizer {
         }
 
         Ok(candidates.into_iter().next())
+    }
+
+    fn infer_extension_argument_type(
+        &mut self,
+        expected: &TypeRef,
+        arg: &Expr,
+    ) -> Option<TypeRef> {
+        let ExprKind::Lambda(function) = &arg.kind else {
+            return self.infer_expr_type(arg);
+        };
+        let expected_function = expected.function.as_ref()?;
+        if function.params.len() != expected_function.params.len() {
+            return None;
+        }
+
+        let scope = function
+            .params
+            .iter()
+            .zip(&expected_function.params)
+            .map(|(param, expected_param)| (param.name.clone(), expected_param.type_ref.clone()))
+            .collect();
+        self.scopes.push(scope);
+        let return_type = function.return_type.clone().or_else(|| match &function.body {
+            FunctionBody::Expr(expr) => self.infer_expr_type(expr),
+            FunctionBody::Block(_) => None,
+        });
+        self.scopes.pop();
+
+        Some(TypeRef {
+            name: "fn".to_string(),
+            args: Vec::new(),
+            bindings: Vec::new(),
+            function: Some(crate::ast::FunctionTypeRef {
+                params: function
+                    .params
+                    .iter()
+                    .zip(&expected_function.params)
+                    .map(|(param, expected_param)| crate::ast::FunctionTypeParam {
+                        mutable: param.mutable,
+                        type_ref: expected_param.type_ref.clone(),
+                    })
+                    .collect(),
+                return_type: Box::new(return_type?),
+            }),
+            span: arg.span,
+        })
     }
 
     fn apply_extension_argument_contexts(

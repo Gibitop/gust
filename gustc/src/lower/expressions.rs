@@ -1184,7 +1184,9 @@ fn lower_expr(
                     });
                 }
 
-                if let LoweredType::Trait(trait_name) = &object.type_ {
+                if let LoweredType::Trait(trait_name) = &object.type_
+                    && !signatures.contains_key(&extension_name(&object.type_.name(), name))
+                {
                     let Some(trait_) = traits.get(trait_name) else {
                         diagnostics.push(Diagnostic::error(
                             callee.span,

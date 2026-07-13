@@ -54,6 +54,25 @@ runtime primitive; its compiler-implemented declaration lives in `std/internal/r
 Its allocation and typed storage operations are lowered by the executable backend so future GC
 integration stays behind that boundary.
 
+## Iterator adapters
+
+`map`, `filter`, and `collect` are lazy provided methods of `Iterator`, so they are available on
+every iterator without importing extension functions. They return a trait-typed iterator backed by
+standard-library adapter structs, so calls can be chained without compiler-owned iterator syntax.
+`map` accepts `fn(T): U`; `filter` accepts `fn(T): bool`; and `collect` delegates to
+`FromIterator<type Item: T>.fromIterator`.
+
+Trait instance methods may have a body and declare their own type parameters. Implementations need
+only provide bodyless trait methods. The compiler specializes provided methods for the concrete trait
+arguments and associated-type bindings at a call site, then dispatches them statically; they are not
+vtable entries. `Iterator.next` remains dynamically dispatched through the iterator value.
+The adapter structs are named `MapIterator` and `FilterIterator` to distinguish them from
+map-like collections and filter values.
+
+`FromIterator` is declared alongside `Iterator` in `std/iter.gust`, avoiding an import cycle while
+allowing `collect` to be a provided iterator method. `FromElements` remains in
+`std/collection.gust`.
+
 ## Indexed access
 
 `value[key]` is indexed read syntax. The compiler resolves it through the standard-library

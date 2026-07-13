@@ -1,0 +1,13 @@
+from ../std/arrayList import { ArrayList }
+
+fn main() {
+    let values = [1, 2, 3, 4, 5]
+    let transformed: ArrayList<i32> = values.iterator()
+        .filter(fn(value) => value % 2 == 1)
+        .map(fn(value) => value * 10)
+        .collect()
+
+    for value in transformed {
+        io.println(value.toString())
+    }
+}

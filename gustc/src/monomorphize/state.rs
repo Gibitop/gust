@@ -6,6 +6,7 @@ struct Monomorphizer {
     impl_declarations: Vec<ImplDecl>,
     impl_templates: Vec<ImplDecl>,
     extensions: Vec<crate::ast::ExtensionDecl>,
+    trait_default_extension_start: usize,
     function_templates: HashMap<String, FunctionDecl>,
     concrete_structs: HashSet<String>,
     concrete_struct_defs: HashMap<String, StructDecl>,

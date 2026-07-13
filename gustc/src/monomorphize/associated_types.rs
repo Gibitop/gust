@@ -17,6 +17,14 @@ impl Monomorphizer {
                     associated_type,
                 );
             }
+            for method in &trait_.methods {
+                if method.static_ && method.body.is_some() {
+                    self.diagnostics.push(Diagnostic::error(
+                        method.span,
+                        "provided trait methods must be instance methods",
+                    ));
+                }
+            }
         }
 
         for item in &program.items {
