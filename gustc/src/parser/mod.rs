@@ -7,7 +7,9 @@ use crate::ast::{
     TypeParamBound, TypeRef, UnaryOp,
 };
 use crate::diagnostic::Diagnostic;
-use crate::lexer::{Keyword, Token, TokenKind};
+use crate::lexer::{
+    InterpolatedPathSegment, InterpolatedStringPart, Keyword, Lexer, Token, TokenKind,
+};
 use crate::span::Span;
 
 pub struct Parser {

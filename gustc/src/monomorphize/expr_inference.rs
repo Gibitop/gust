@@ -229,6 +229,13 @@ impl Monomorphizer {
                 {
                     return Some(inferred("string"));
                 }
+                if name == "toString" && args.is_empty()
+                    && self
+                        .infer_expr_type(object)
+                        .is_some_and(|type_ref| type_ref.name == "string")
+                {
+                    return Some(inferred("string"));
+                }
                 if let ExprKind::Identifier(type_name) = &object.kind {
                     if self.enum_variant_payload(type_name, name).is_some() {
                         return Some(inferred(type_name));

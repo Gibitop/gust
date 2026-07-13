@@ -95,3 +95,23 @@ fn main() {
     );
 }
 
+#[test]
+fn string_interpolation_validates() {
+    let source = r#"struct Person {
+    name: string
+}
+
+fn main() {
+    let person = Person { name: "Gust" }
+    let count = 2
+    let message = "Hello, $person.name ${count + 1}! \$literal"
+    io.println(message)
+}"#;
+    let result = check_source(source);
+
+    assert!(
+        !result.has_errors(),
+        "expected string interpolation to validate, got {:?}",
+        result.diagnostics
+    );
+}

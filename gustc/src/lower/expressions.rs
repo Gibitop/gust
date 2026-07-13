@@ -1054,6 +1054,23 @@ fn lower_expr(
                     });
                 }
 
+                if source_callable_name(name) == "toString"
+                    && object.type_ == LoweredType::Basic(BasicType::String)
+                {
+                    if !args.is_empty() {
+                        diagnostics.push(Diagnostic::error(
+                            expr.span,
+                            format!(
+                                "method `string.toString` expects 0 arguments, got {}",
+                                args.len()
+                            ),
+                        ));
+                        return None;
+                    }
+
+                    return Some(object);
+                }
+
                 if matches!(object.type_, LoweredType::Basic(BasicType::String))
                     && source_callable_name(name) == "byteLen"
                 {
