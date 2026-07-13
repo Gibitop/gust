@@ -1,12 +1,9 @@
-from ./option import { Option }
-from ./result import { Result }
-
 trait Index<Key> {
     type Output
-    fn index(key: Key): Option<Self.Output>
+    fn index(key: Key): Self.Output
 }
 
 trait IndexSet<Key> {
-    type Output
-    fn indexSet(mut self, key: Key, value: Self.Output): Result<Self.Output, string>
+    type Value
+    fn indexSet(mut self, key: Key, value: Self.Value): void
 }

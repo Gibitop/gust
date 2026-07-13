@@ -35,6 +35,32 @@ impl Parser {
 
                 if let Some(op) = self.match_assignment_operator() {
                     let value = self.parse_expression();
+                    if let Some((object, mut args)) = indexed_access_parts(&target) {
+                        if op.is_some() {
+                            self.diagnostics.push(Diagnostic::error(
+                                target.span,
+                                "compound assignment through indexed access is not supported; read, compute, and assign the indexed value explicitly",
+                            ));
+                        }
+                        args.push(value);
+                        let span = target.span.join(args.last().expect("value was added").span);
+                        return Stmt {
+                            span,
+                            kind: StmtKind::Expr(Expr {
+                                span,
+                                kind: ExprKind::Call {
+                                    callee: Box::new(Expr {
+                                        span,
+                                        kind: ExprKind::Member {
+                                            object: Box::new(object),
+                                            name: INDEX_SET_METHOD.to_string(),
+                                        },
+                                    }),
+                                    args,
+                                },
+                            }),
+                        };
+                    }
                     Stmt {
                         span: target.span.join(value.span),
                         kind: StmtKind::Assign { target, op, value },
@@ -177,4 +203,14 @@ impl Parser {
         }
     }
 
+}
+
+fn indexed_access_parts(expr: &Expr) -> Option<(Expr, Vec<Expr>)> {
+    let ExprKind::Call { callee, args } = &expr.kind else {
+        return None;
+    };
+    let ExprKind::Member { object, name } = &callee.kind else {
+        return None;
+    };
+    (name == INDEX_METHOD && args.len() == 1).then(|| ((**object).clone(), args.clone()))
 }

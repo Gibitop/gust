@@ -4,13 +4,15 @@ from ../std/iter import { Iterator }
 fn main() {
     let mut values = [1, 2, 3]
     values.push(4)
-    values.set(1, 20)
+    values[1] = 20
+    let first = values[0]
     let removed = values.pop()
 
     let iterator = values.iterator()
     let copied = ArrayList.fromIterator(iterator)
 
     io.println(copied.len().toString())
+    io.println(first.toString())
     for value in copied {
         io.println(value.toString())
     }

@@ -1,10 +1,10 @@
 use crate::ast::{
     AssociatedTypeBinding, AssociatedTypeDecl, AssociatedTypeDef, BinaryOp, Block, ElseBranch,
     EnumDecl, EnumVariant, Expr, ExprKind, ExtensionDecl, FieldDecl, FunctionBody, FunctionDecl,
-    FunctionTypeParam, FunctionTypeRef, ImplDecl, ImplMember, ImportDecl, ImportName,
-    ImportNamespace, Item, MatchBranch, MatchBranchBody, Param, Pattern, Program, Stmt, StmtKind,
-    StructDecl, StructInitField, StructMember, TraitDecl, TraitMethodDecl, TypeParamBound, TypeRef,
-    UnaryOp,
+    FunctionTypeParam, FunctionTypeRef, INDEX_METHOD, INDEX_SET_METHOD, ImplDecl, ImplMember,
+    ImportDecl, ImportName, ImportNamespace, Item, MatchBranch, MatchBranchBody, Param, Pattern,
+    Program, Stmt, StmtKind, StructDecl, StructInitField, StructMember, TraitDecl, TraitMethodDecl,
+    TypeParamBound, TypeRef, UnaryOp,
 };
 use crate::diagnostic::Diagnostic;
 use crate::lexer::{Keyword, Token, TokenKind};

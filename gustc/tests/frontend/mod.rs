@@ -13,3 +13,4 @@ include!("matches.rs");
 include!("generics_traits.rs");
 include!("generics_traits_more.rs");
 include!("associated_types.rs");
+include!("indexing.rs");

@@ -284,7 +284,6 @@ fn collection_literals_lower_through_from_elements() {
         "main.gust",
         r#"from ./std/arrayList import { ArrayList }
 from ./std/collection import { FromElements }
-from ./std/index import { Index, IndexSet }
 
 struct TestCollection<T> {
     values: ArrayList<T>
@@ -303,8 +302,9 @@ impl<T> FromElements for TestCollection<T> {
 
 fn main() {
     let mut values = [1, 2, 3]
-    let indexed = values.index(0).unwrapOr(-1)
-    let indexReplaced = values.indexSet(0, 10).unwrapOr(-1)
+    let indexed = values[0]
+    let indexReplaced = values[0]
+    values[0] = 10
     values.push(4)
     let replaced = values.set(1, 20)
     let rejected = values.set(10, 100)
@@ -368,6 +368,78 @@ fn main() {
         String::from_utf8_lossy(&output.stdout),
         "3\n1\n1\n2\nindex out of bounds\n3\n10\n20\n3\n"
     );
+}
+
+#[test]
+fn array_list_indexed_reads_and_writes_panic_out_of_bounds() {
+    assert_array_list_index_panic(
+        r#"from ./std/arrayList import { ArrayList }
+
+fn main() {
+    let values = [1]
+    io.println(values[1].toString())
+}
+"#,
+        "read",
+    );
+    assert_array_list_index_panic(
+        r#"from ./std/arrayList import { ArrayList }
+
+fn main() {
+    let mut values = [1]
+    values[1] = 2
+}
+"#,
+        "write",
+    );
+}
+
+fn assert_array_list_index_panic(main: &str, name: &str) {
+    let project = TempProject::new();
+    project.write("std/option.gust", include_str!("../../../std/option.gust"));
+    project.write("std/result.gust", include_str!("../../../std/result.gust"));
+    project.write("std/iter.gust", include_str!("../../../std/iter.gust"));
+    project.write("std/index.gust", include_str!("../../../std/index.gust"));
+    project.write(
+        "std/collection.gust",
+        include_str!("../../../std/collection.gust"),
+    );
+    project.write(
+        "std/internal/rawBuffer.gust",
+        include_str!("../../../std/internal/rawBuffer.gust"),
+    );
+    project.write(
+        "std/arrayList.gust",
+        include_str!("../../../std/arrayList.gust"),
+    );
+    project.write("main.gust", main);
+
+    let result = check_project(&project.path("main.gust")).expect("project should load");
+    assert!(
+        result.diagnostics.is_empty(),
+        "expected indexed {name} panic project to validate, got {:?}",
+        result.diagnostics
+    );
+    let lowered = lower_program(&result.program).expect("indexed panic project should lower");
+    let c_path = project.path(&format!("index-{name}.c"));
+    fs::write(&c_path, emit_c(&lowered)).expect("generated C should be written");
+    let executable = project.path(&format!("index-{name}"));
+    let output = Command::new("cc")
+        .arg(&c_path)
+        .arg("-o")
+        .arg(&executable)
+        .output()
+        .expect("C compiler should build indexed panic executable");
+    assert!(
+        output.status.success(),
+        "generated indexed panic C should build: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let output = Command::new(executable)
+        .output()
+        .expect("indexed panic executable should run");
+    assert_eq!(output.status.code(), Some(101));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("panic: index out of bounds"));
 }
 
 #[test]

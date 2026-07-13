@@ -399,6 +399,24 @@ impl Monomorphizer {
         if let Some((object, receiver, method_name, static_, source_args)) = generic_trait_call
             && !self.has_real_or_extension_method(&receiver, &method_name, static_)
         {
+            let (requested_trait, source_method_name) = requested_trait_method(&method_name);
+            if let Some(requested_trait) = requested_trait {
+                let expanded_receiver = self.expanded_trait_type(&receiver);
+                if (self.trait_templates.contains_key(&expanded_receiver.name)
+                    || self.trait_declarations.contains_key(&expanded_receiver.name))
+                    && trait_name_matches_request(&expanded_receiver.name, requested_trait)
+                {
+                    let ExprKind::Call { callee, .. } = &mut expr.kind else {
+                        unreachable!("generic trait method call was matched above")
+                    };
+                    callee.kind = ExprKind::Member {
+                        object: Box::new(object),
+                        name: source_method_name.to_string(),
+                    };
+                    self.rewrite_expr_children(expr, substitutions);
+                    return;
+                }
+            }
             let mut expected_return = self.expected_expr_types.get(&expr.span).cloned();
             if let Some(expected_return) = &mut expected_return {
                 self.rewrite_type(expected_return, substitutions);
@@ -454,7 +472,7 @@ impl Monomorphizer {
                     callee.kind = ExprKind::Member {
                         object: Box::new(object),
                         name: format!(
-                            "{}::{method_name}",
+                            "{}::{source_method_name}",
                             specialized_trait_name(
                                 &resolution.trait_name,
                                 &resolution.trait_args,
@@ -464,6 +482,18 @@ impl Monomorphizer {
                     };
                     self.inferred_expr_types
                         .insert(expr.span, resolution.return_type);
+                    return;
+                }
+                Ok(None) if requested_trait.is_some() => {
+                    self.diagnostics.push(Diagnostic::error(
+                        expr.span,
+                        format!(
+                            "type `{}` does not implement `{}` for this indexed access",
+                            type_name(&receiver),
+                            requested_trait.expect("qualified method has a trait name")
+                        ),
+                    ));
+                    self.rewrite_expr_children(expr, substitutions);
                     return;
                 }
                 Ok(None) => {}

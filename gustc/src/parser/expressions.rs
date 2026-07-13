@@ -137,6 +137,23 @@ impl Parser {
                         name,
                     },
                 };
+            } else if self.match_kind(&TokenKind::LeftBracket) {
+                let key = self.parse_expression();
+                self.expect_kind(&TokenKind::RightBracket, "`]`");
+                let span = expr.span.join(self.previous_span());
+                expr = Expr {
+                    span,
+                    kind: ExprKind::Call {
+                        callee: Box::new(Expr {
+                            span,
+                            kind: ExprKind::Member {
+                                object: Box::new(expr),
+                                name: INDEX_METHOD.to_string(),
+                            },
+                        }),
+                        args: vec![key],
+                    },
+                };
             } else if self.check_kind(&TokenKind::Less)
                 && matches!(expr.kind, ExprKind::Member { .. })
             {
@@ -163,6 +180,12 @@ impl Parser {
                     break;
                 }
             } else if self.match_kind(&TokenKind::PlusPlus) {
+                if indexed_access_parts(&expr).is_some() {
+                    self.diagnostics.push(Diagnostic::error(
+                        expr.span,
+                        "increment through indexed access is not supported; read, increment, and assign the indexed value explicitly",
+                    ));
+                }
                 expr = Expr {
                     span: expr.span.join(self.previous_span()),
                     kind: ExprKind::PostfixIncrement(Box::new(expr)),

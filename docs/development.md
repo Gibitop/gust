@@ -54,6 +54,24 @@ runtime primitive; its compiler-implemented declaration lives in `std/internal/r
 Its allocation and typed storage operations are lowered by the executable backend so future GC
 integration stays behind that boundary.
 
+## Indexed access
+
+`value[key]` is indexed read syntax. The compiler resolves it through the standard-library
+`Index<Key>` trait's `index` method, so its type is `Index.Output`. `value[key] = newValue`
+resolves through `IndexSet<Key>.indexSet`, accepts `IndexSet.Value`, and requires a mutable-capable
+receiver. Indexed syntax uses qualified trait resolution: real members and extensions named `index`
+or `indexSet` do not override the syntax-defined operation.
+
+`ArrayList` treats bracket access as an assertion that the index is valid. An out-of-bounds bracket
+read or write panics with `index out of bounds`. Callers that expect an index to be absent use
+`get(index): Option<T>` or `set(index, value): Result<T, string>` instead. The traits do not impose
+that policy on every collection: an associative collection may choose `Option<V>` as its
+`Index.Output` while accepting `V` as its separate `IndexSet.Value`.
+
+Compound indexed assignments and indexed increments are not supported by the initial lowering.
+Indexing remains standard-library behaviour: the compiler owns the bracket syntax and trait dispatch
+but does not hard-code `ArrayList` storage, bounds policy, or key semantics.
+
 ## Option and Result
 
 `Option<T>` represents expected absence, including collection lookup misses, empty collection
@@ -536,8 +554,8 @@ limited to non-generic associated types, so generic associated types are current
 dispatched rather than carried through trait-object vtables.
 
 `Iterator`, `Iterable`, `FromElements`, and `FromIterator` use an associated `Item` type instead
-of a positional element type parameter. The standard-library `Index<Key>` and `IndexSet<Key>`
-traits likewise expose their accessed value through associated `Output` types.
+of a positional element type parameter. The standard-library `Index<Key>` trait exposes its read
+type through `Output`, while `IndexSet<Key>` exposes its assigned type through `Value`.
 
 ## First-class functions
 

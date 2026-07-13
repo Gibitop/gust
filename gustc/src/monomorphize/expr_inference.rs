@@ -134,7 +134,7 @@ impl Monomorphizer {
                 let return_type = function.return_type.as_ref()?;
                 Some(substitute_type(return_type, &substitutions))
             }
-            ExprKind::Call { callee, .. } => {
+            ExprKind::Call { callee, args } => {
                 if let ExprKind::Member { object, name } = &callee.kind {
                     match &object.kind {
                         ExprKind::Identifier(enum_name)
@@ -237,6 +237,26 @@ impl Monomorphizer {
                     }
                 }
                 let object_type = self.infer_expr_type(object)?;
+                let (requested_trait, source_method_name) = requested_trait_method(name);
+                if let Some(requested_trait) = requested_trait {
+                    let expanded_receiver = self.expanded_trait_type(&object_type);
+                    if (self.trait_templates.contains_key(&expanded_receiver.name)
+                        || self.trait_declarations.contains_key(&expanded_receiver.name))
+                        && trait_name_matches_request(&expanded_receiver.name, requested_trait)
+                    {
+                        return self
+                            .generic_trait_member_type(&object_type, source_method_name);
+                    }
+                    if let Ok(Some(resolution)) = self.resolve_generic_trait_method(
+                        &object_type,
+                        name,
+                        false,
+                        args,
+                        None,
+                    ) {
+                        return Some(resolution.return_type);
+                    }
+                }
                 self.generic_trait_member_type(&object_type, name)
                     .or_else(|| self.generic_member_type(&object_type, name, false))
             }

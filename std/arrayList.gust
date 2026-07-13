@@ -152,10 +152,12 @@ impl<T> FromIterator for ArrayList<T> {
 
 impl<T> Index<usize> for ArrayList<T> {
     type Output: T
-    fn index(index: usize): Option<T> => self.get(index)
+    fn index(index: usize): T => self.get(index).expect("index out of bounds")
 }
 
 impl<T> IndexSet<usize> for ArrayList<T> {
-    type Output: T
-    fn indexSet(mut self, index: usize, value: T): Result<T, string> => self.set(index, value)
+    type Value: T
+    fn indexSet(mut self, index: usize, value: T) {
+        self.set(index, value).expect("index out of bounds")
+    }
 }

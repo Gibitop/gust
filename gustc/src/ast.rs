@@ -1,5 +1,8 @@
 use crate::span::Span;
 
+pub const INDEX_METHOD: &str = "Index::index";
+pub const INDEX_SET_METHOD: &str = "IndexSet::indexSet";
+
 #[derive(Debug, Clone)]
 pub struct Program {
     pub items: Vec<Item>,

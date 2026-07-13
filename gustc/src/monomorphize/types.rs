@@ -243,3 +243,14 @@ fn type_name(type_ref: &TypeRef) -> String {
         specialized_trait_name(&type_ref.name, &type_ref.args, &type_ref.bindings)
     }
 }
+
+fn requested_trait_method(name: &str) -> (Option<&str>, &str) {
+    name.rsplit_once("::")
+        .map_or((None, name), |(trait_name, method_name)| {
+            (Some(trait_name), method_name)
+        })
+}
+
+fn trait_name_matches_request(actual: &str, requested: &str) -> bool {
+    actual == requested || actual.rsplit("::").next() == Some(requested)
+}
