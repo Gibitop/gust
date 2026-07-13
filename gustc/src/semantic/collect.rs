@@ -23,6 +23,7 @@ impl Analyzer {
             scopes: Vec::new(),
             return_types: Vec::new(),
             self_types: Vec::new(),
+            direct_struct_methods: Vec::new(),
             loop_depth: 0,
         }
     }
@@ -162,7 +163,10 @@ impl Analyzer {
                     if fields
                         .insert(
                             field.name.clone(),
-                            self.type_ref_without_diagnostics(Some(&field.type_ref)),
+                            StructField {
+                                type_: self.type_ref_without_diagnostics(Some(&field.type_ref)),
+                                internal: field.internal,
+                            },
                         )
                         .is_some()
                     {

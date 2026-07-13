@@ -12,35 +12,19 @@ struct RangeInclusive {
 }
 
 struct RangeIterator {
-    current: i32
-    end: i32
-    inclusive: bool
-    finished: bool
-}
+    internal current: i32
+    internal end: i32
+    internal inclusive: bool
+    internal finished: bool
 
-impl Iterable for Range {
-    type Item: i32
-    fn iterator(): Iterator<type Item: i32> => RangeIterator {
-        current: self.start,
-        end: self.end,
-        inclusive: false,
+    static fn new(current: i32, end: i32, inclusive: bool): Self => RangeIterator {
+        current: current,
+        end: end,
+        inclusive: inclusive,
         finished: false,
     }
-}
 
-impl Iterable for RangeInclusive {
-    type Item: i32
-    fn iterator(): Iterator<type Item: i32> => RangeIterator {
-        current: self.start,
-        end: self.end,
-        inclusive: true,
-        finished: false,
-    }
-}
-
-impl Iterator for RangeIterator {
-    type Item: i32
-    fn next(mut self): Option<i32> {
+    fn advance(mut self): Option<i32> {
         if self.finished {
             return Option<i32>.None
         }
@@ -61,4 +45,19 @@ impl Iterator for RangeIterator {
         }
         return Option.Some(value)
     }
+}
+
+impl Iterable for Range {
+    type Item: i32
+    fn iterator(): Iterator<type Item: i32> => RangeIterator.new(self.start, self.end, false)
+}
+
+impl Iterable for RangeInclusive {
+    type Item: i32
+    fn iterator(): Iterator<type Item: i32> => RangeIterator.new(self.start, self.end, true)
+}
+
+impl Iterator for RangeIterator {
+    type Item: i32
+    fn next(mut self): Option<i32> => self.advance()
 }

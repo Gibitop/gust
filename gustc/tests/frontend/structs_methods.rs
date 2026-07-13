@@ -70,6 +70,197 @@ fn main() {
 }
 
 #[test]
+fn internal_struct_fields_can_be_read_and_mutated_by_direct_methods() {
+    let result = check_source(
+        r#"
+struct Counter {
+    internal value: i32
+
+    static fn new(value: i32): Self => Counter {
+        value: value,
+    }
+
+    fn increment(mut self) {
+        self.value++
+    }
+
+    fn get(): i32 => self.value
+}
+
+fn main() {
+    let mut counter = Counter.new(1)
+    counter.increment()
+    let value: i32 = counter.value
+    let other: i32 = counter.get()
+}
+"#,
+    );
+
+    assert!(
+        !result.has_errors(),
+        "expected internal fields to validate inside direct methods and read outside, got {:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
+fn internal_struct_fields_cannot_be_initialized_outside_direct_methods() {
+    let result = check_source(
+        r#"
+struct Counter {
+    internal value: i32
+}
+
+fn main() {
+    let counter = Counter {
+        value: 1,
+    }
+}
+"#,
+    );
+
+    assert!(
+        result
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.severity == Severity::Error
+                && diagnostic
+                    .message
+                    .contains("cannot initialize internal field `value` of struct `Counter` outside its direct methods")),
+        "expected internal-field initialization error, got {:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
+fn internal_struct_fields_cannot_be_assigned_outside_direct_methods() {
+    let result = check_source(
+        r#"
+struct Counter {
+    internal value: i32
+
+    static fn new(value: i32): Self => Counter {
+        value: value,
+    }
+}
+
+fn main() {
+    let mut counter = Counter.new(1)
+    counter.value = 2
+    counter.value++
+}
+"#,
+    );
+
+    let internal_errors = result
+        .diagnostics
+        .iter()
+        .filter(|diagnostic| {
+            diagnostic.severity == Severity::Error
+                && diagnostic
+                    .message
+                    .contains("cannot mutate internal field `value` of struct `Counter` outside its direct methods")
+        })
+        .count();
+    assert_eq!(
+        internal_errors, 2,
+        "expected assignment and increment errors, got {:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
+fn internal_struct_fields_do_not_provide_mutable_capability_outside_direct_methods() {
+    let result = check_source(
+        r#"
+struct Inner {
+    value: i32
+
+    fn set(mut self, value: i32) {
+        self.value = value
+    }
+}
+
+struct Outer {
+    internal inner: Inner
+
+    static fn new(): Self => Outer {
+        inner: Inner { value: 0 },
+    }
+}
+
+fn main() {
+    let mut outer = Outer.new()
+    let mut inner = outer.inner
+    outer.inner.set(1)
+    Outer.new().inner.set(2)
+}
+"#,
+    );
+
+    assert!(
+        result
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.severity == Severity::Error
+                && diagnostic.message.contains(
+                    "cannot initialize mutable binding `inner` from an immutable value"
+                )),
+        "expected mutable binding error, got {:?}",
+        result.diagnostics
+    );
+    assert!(
+        result
+            .diagnostics
+            .iter()
+            .filter(|diagnostic| diagnostic.severity == Severity::Error
+                && diagnostic
+                    .message
+                    .contains("mutable function `Inner.set` requires a mutable receiver"))
+            .count()
+            >= 2,
+        "expected mutable receiver errors, got {:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
+fn extensions_cannot_mutate_internal_struct_fields() {
+    let result = check_source(
+        r#"
+struct Counter {
+    internal value: i32
+
+    static fn new(value: i32): Self => Counter {
+        value: value,
+    }
+}
+
+fn Counter.reset(mut self) {
+    self.value = 0
+}
+
+fn main() {
+    let mut counter = Counter.new(1)
+    counter.reset()
+}
+"#,
+    );
+
+    assert!(
+        result
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.severity == Severity::Error
+                && diagnostic
+                    .message
+                    .contains("cannot mutate internal field `value` of struct `Counter` outside its direct methods")),
+        "expected extension internal-field mutation error, got {:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
 fn struct_literal_missing_field_is_an_error() {
     let result = check_source(
         r#"

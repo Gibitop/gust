@@ -6,8 +6,8 @@ from ./result import { Result }
 from ./internal/rawBuffer import { RawBuffer }
 
 struct ArrayList<T> {
-    storage: RawBuffer<T>
-    count: usize
+    internal storage: RawBuffer<T>
+    internal count: usize
 
     static fn withCapacity(capacity: usize): Self => ArrayList<T> {
         storage: RawBuffer.withCapacity(capacity),
@@ -98,27 +98,21 @@ struct ArrayList<T> {
         }
     }
 
-    fn iterator(): Iterator<type Item: T> => ArrayListIterator<T> {
-        list: self,
-        index: 0,
-        end: self.count,
-    }
+    fn iterator(): Iterator<type Item: T> => ArrayListIterator<T>.new(self, self.count)
 }
 
 struct ArrayListIterator<T> {
-    list: ArrayList<T>
-    index: usize
-    end: usize
-}
+    internal list: ArrayList<T>
+    internal index: usize
+    internal end: usize
 
-impl<T> Iterable for ArrayList<T> {
-    type Item: T
-    fn iterator(): Iterator<type Item: T> => self.iterator()
-}
+    static fn new(list: ArrayList<T>, end: usize): Self => ArrayListIterator<T> {
+        list: list,
+        index: 0,
+        end: end,
+    }
 
-impl<T> Iterator for ArrayListIterator<T> {
-    type Item: T
-    fn next(mut self): Option<T> {
+    fn advance(mut self): Option<T> {
         if self.index >= self.end {
             return Option<T>.None
         }
@@ -134,6 +128,16 @@ impl<T> Iterator for ArrayListIterator<T> {
             },
         }
     }
+}
+
+impl<T> Iterable for ArrayList<T> {
+    type Item: T
+    fn iterator(): Iterator<type Item: T> => self.iterator()
+}
+
+impl<T> Iterator for ArrayListIterator<T> {
+    type Item: T
+    fn next(mut self): Option<T> => self.advance()
 }
 
 impl<T> FromElements for ArrayList<T> {

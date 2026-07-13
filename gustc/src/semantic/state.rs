@@ -18,6 +18,7 @@ struct Analyzer {
     scopes: Vec<HashMap<String, Binding>>,
     return_types: Vec<Type>,
     self_types: Vec<Type>,
+    direct_struct_methods: Vec<String>,
     loop_depth: usize,
 }
 
@@ -36,9 +37,15 @@ struct ParamSignature {
 
 #[derive(Debug, Clone)]
 struct StructDefinition {
-    fields: HashMap<String, Type>,
+    fields: HashMap<String, StructField>,
     methods: HashMap<String, FunctionSignature>,
     static_methods: HashMap<String, FunctionSignature>,
+}
+
+#[derive(Debug, Clone)]
+struct StructField {
+    type_: Type,
+    internal: bool,
 }
 
 #[derive(Debug, Clone)]

@@ -542,7 +542,12 @@ impl Analyzer {
                 fields.sort();
                 fields
                     .into_iter()
-                    .filter_map(|field| struct_.fields.get(&field).cloned())
+                    .filter_map(|field| {
+                        struct_
+                            .fields
+                            .get(&field)
+                            .map(|field_info| field_info.type_.clone())
+                    })
                     .collect()
             }
             _ => Vec::new(),
@@ -623,7 +628,7 @@ impl Analyzer {
                 }
                 let mut deconstructed_fields = Vec::new();
                 for field_name in &field_names {
-                    let field_type = struct_.fields.get(field_name)?;
+                    let field_type = &struct_.fields.get(field_name)?.type_;
                     if let Some(field_pattern) = field_patterns.get(field_name.as_str()) {
                         deconstructed_fields
                             .push(self.deconstruct_pattern(field_pattern, field_type)?);
@@ -745,7 +750,7 @@ impl Analyzer {
                         continue;
                     }
                     has_non_wildcard = true;
-                    let field_type = struct_.fields.get(field_name).unwrap();
+                    let field_type = &struct_.fields.get(field_name).unwrap().type_;
                     parts.push(format!(
                         "{field_name}: {}",
                         self.format_deconstructed_pattern(field_pattern, field_type)

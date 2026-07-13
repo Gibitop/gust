@@ -387,6 +387,14 @@ impl Analyzer {
                 format!("cannot mutate field of immutable binding `{binding_name}`"),
             ));
         }
+        if let Some((struct_name, field_name)) = self.internal_mutation_barrier(target) {
+            self.diagnostics.push(Diagnostic::error(
+                target.span,
+                format!(
+                    "cannot mutate internal field `{field_name}` of struct `{struct_name}` outside its direct methods"
+                ),
+            ));
+        }
 
         let field_type = self.validate_expr(target);
         if matches!(field_type, Type::Unknown) {
@@ -430,6 +438,14 @@ impl Analyzer {
             self.diagnostics.push(Diagnostic::error(
                 span,
                 format!("cannot mutate field of immutable binding `{binding_name}`"),
+            ));
+        }
+        if let Some((struct_name, field_name)) = self.internal_mutation_barrier(target) {
+            self.diagnostics.push(Diagnostic::error(
+                target.span,
+                format!(
+                    "cannot mutate internal field `{field_name}` of struct `{struct_name}` outside its direct methods"
+                ),
             ));
         }
 
@@ -530,7 +546,7 @@ impl Analyzer {
                 ));
             }
 
-            let Some(expected_type) = definition.fields.get(&field.name).cloned() else {
+            let Some(expected_field) = definition.fields.get(&field.name).cloned() else {
                 self.diagnostics.push(Diagnostic::error(
                     field.span,
                     format!("unknown field `{}` for struct `{name}`", field.name),
@@ -538,6 +554,17 @@ impl Analyzer {
                 self.validate_expr(&field.value);
                 continue;
             };
+            let expected_type = expected_field.type_;
+
+            if expected_field.internal && !self.can_mutate_internal_field(name) {
+                self.diagnostics.push(Diagnostic::error(
+                    field.span,
+                    format!(
+                        "cannot initialize internal field `{}` of struct `{name}` outside its direct methods",
+                        field.name
+                    ),
+                ));
+            }
 
             let value_type =
                 self.validate_expr_with_context(&field.value, Some(expected_type.clone()));
@@ -583,7 +610,7 @@ impl Analyzer {
             return Type::Unknown;
         };
 
-        let Some(type_) = definition.fields.get(name) else {
+        let Some(field) = definition.fields.get(name) else {
             self.diagnostics.push(Diagnostic::error(
                 span,
                 format!("unknown field `{name}` for struct `{struct_name}`"),
@@ -591,7 +618,7 @@ impl Analyzer {
             return Type::Unknown;
         };
 
-        type_.clone()
+        field.type_.clone()
     }
 
     fn for_item_type(&self, iterable_type: &Type) -> Option<Type> {
