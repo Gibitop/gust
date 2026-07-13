@@ -13,6 +13,7 @@ pub enum TokenKind {
     Identifier(String),
     Number(String),
     StringLiteral(String),
+    InterpolatedString(Vec<InterpolatedStringPart>),
     CharLiteral(u32),
     Keyword(Keyword),
     LeftParen,
@@ -60,6 +61,26 @@ pub enum TokenKind {
     Less,
     Greater,
     Eof,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum InterpolatedStringPart {
+    Text(String),
+    Path {
+        segments: Vec<InterpolatedPathSegment>,
+        span: Span,
+    },
+    Expr {
+        source: String,
+        source_start: usize,
+        span: Span,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InterpolatedPathSegment {
+    pub name: String,
+    pub span: Span,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -289,6 +310,7 @@ impl<'source> Lexer<'source> {
     }
 
     fn string_literal(&mut self, start: usize) -> Token {
+        let mut parts = Vec::new();
         let mut value = String::new();
         let mut escaped = false;
 
@@ -300,6 +322,7 @@ impl<'source> Lexer<'source> {
                     't' => '\t',
                     '0' => '\0',
                     '"' => '"',
+                    '$' => '$',
                     '\\' => '\\',
                     other => other,
                 });
@@ -309,8 +332,47 @@ impl<'source> Lexer<'source> {
 
             match character {
                 '\\' => escaped = true,
+                '$' => {
+                    let dollar_start = self.position - character.len_utf8();
+                    if self.peek() == Some('{') {
+                        self.flush_string_text(&mut value, &mut parts);
+                        self.bump();
+                        let expr_start = self.position;
+                        if let Some(source) = self.interpolation_expression(dollar_start) {
+                            let span = Span::new(dollar_start, self.position);
+                            parts.push(InterpolatedStringPart::Expr {
+                                source,
+                                source_start: expr_start,
+                                span,
+                            });
+                        }
+                    } else if matches!(self.peek(), Some(next) if is_identifier_start(next)) {
+                        self.flush_string_text(&mut value, &mut parts);
+                        let path = self.interpolation_path();
+                        let span = Span::new(dollar_start, self.position);
+                        parts.push(InterpolatedStringPart::Path {
+                            segments: path,
+                            span,
+                        });
+                    } else {
+                        value.push(character);
+                    }
+                }
                 '"' => {
-                    return self.token(TokenKind::StringLiteral(value), start, self.position);
+                    self.flush_string_text(&mut value, &mut parts);
+                    if parts.is_empty() {
+                        return self.token(
+                            TokenKind::StringLiteral(String::new()),
+                            start,
+                            self.position,
+                        );
+                    }
+                    if parts.len() == 1
+                        && let InterpolatedStringPart::Text(value) = parts.remove(0)
+                    {
+                        return self.token(TokenKind::StringLiteral(value), start, self.position);
+                    }
+                    return self.token(TokenKind::InterpolatedString(parts), start, self.position);
                 }
                 other => value.push(other),
             }
@@ -320,6 +382,97 @@ impl<'source> Lexer<'source> {
         self.diagnostics
             .push(Diagnostic::error(span, "unterminated string literal"));
         self.token(TokenKind::StringLiteral(value), start, self.position)
+    }
+
+    fn flush_string_text(&self, value: &mut String, parts: &mut Vec<InterpolatedStringPart>) {
+        if !value.is_empty() {
+            parts.push(InterpolatedStringPart::Text(std::mem::take(value)));
+        }
+    }
+
+    fn interpolation_path(&mut self) -> Vec<InterpolatedPathSegment> {
+        let mut path = vec![self.interpolation_path_segment()];
+
+        while self.peek() == Some('.')
+            && matches!(self.peek_next(), Some(character) if is_identifier_start(character))
+        {
+            self.bump();
+            path.push(self.interpolation_path_segment());
+        }
+
+        path
+    }
+
+    fn interpolation_path_segment(&mut self) -> InterpolatedPathSegment {
+        let start = self.position;
+        while matches!(self.peek(), Some(character) if is_identifier_continue(character)) {
+            self.bump();
+        }
+
+        InterpolatedPathSegment {
+            name: self.source[start..self.position].to_string(),
+            span: Span::new(start, self.position),
+        }
+    }
+
+    fn interpolation_expression(&mut self, dollar_start: usize) -> Option<String> {
+        let start = self.position;
+        let mut depth = 1usize;
+
+        while let Some(character) = self.bump() {
+            match character {
+                '"' => self.skip_string_in_interpolation(),
+                '\'' => self.skip_char_in_interpolation(),
+                '/' if self.peek() == Some('/') => {
+                    while !matches!(self.peek(), None | Some('\n')) {
+                        self.bump();
+                    }
+                }
+                '{' => depth += 1,
+                '}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        let end = self.position - character.len_utf8();
+                        return Some(self.source[start..end].to_string());
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        self.diagnostics.push(Diagnostic::error(
+            Span::new(dollar_start, self.position),
+            "unterminated string interpolation",
+        ));
+        None
+    }
+
+    fn skip_string_in_interpolation(&mut self) {
+        let mut escaped = false;
+
+        while let Some(character) = self.bump() {
+            if escaped {
+                escaped = false;
+            } else if character == '\\' {
+                escaped = true;
+            } else if character == '"' {
+                return;
+            }
+        }
+    }
+
+    fn skip_char_in_interpolation(&mut self) {
+        let mut escaped = false;
+
+        while let Some(character) = self.bump() {
+            if escaped {
+                escaped = false;
+            } else if character == '\\' {
+                escaped = true;
+            } else if character == '\'' {
+                return;
+            }
+        }
     }
 
     fn char_literal(&mut self, start: usize) -> Token {

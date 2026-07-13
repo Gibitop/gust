@@ -251,6 +251,9 @@ impl Parser {
                 kind: ExprKind::String(value),
                 span: token.span,
             },
+            TokenKind::InterpolatedString(parts) => {
+                self.finish_interpolated_string(token.span, parts)
+            }
             TokenKind::CharLiteral(value) => Expr {
                 kind: ExprKind::Char(value),
                 span: token.span,
@@ -283,6 +286,129 @@ impl Parser {
                     .push(Diagnostic::error(token.span, "expected expression"));
                 self.missing_expr(token.span)
             }
+        }
+    }
+
+    fn finish_interpolated_string(
+        &mut self,
+        span: Span,
+        parts: Vec<InterpolatedStringPart>,
+    ) -> Expr {
+        let mut expr: Option<Expr> = None;
+
+        for part in parts {
+            let part_expr = match part {
+                InterpolatedStringPart::Text(value) => Expr {
+                    kind: ExprKind::String(value),
+                    span,
+                },
+                InterpolatedStringPart::Path { segments, span } => {
+                    let value = self.interpolation_path_expr(segments, span);
+                    self.interpolated_value_to_string(value)
+                }
+                InterpolatedStringPart::Expr {
+                    source,
+                    source_start,
+                    span,
+                } => {
+                    let value = self.interpolation_expression_expr(&source, source_start, span);
+                    self.interpolated_value_to_string(value)
+                }
+            };
+
+            expr = Some(if let Some(left) = expr {
+                let span = left.span.join(part_expr.span);
+                Expr {
+                    kind: ExprKind::Binary {
+                        left: Box::new(left),
+                        op: BinaryOp::Add,
+                        right: Box::new(part_expr),
+                    },
+                    span,
+                }
+            } else {
+                part_expr
+            });
+        }
+
+        expr.unwrap_or(Expr {
+            kind: ExprKind::String(String::new()),
+            span,
+        })
+    }
+
+    fn interpolation_path_expr(
+        &mut self,
+        segments: Vec<InterpolatedPathSegment>,
+        span: Span,
+    ) -> Expr {
+        let mut segments = segments.into_iter();
+        let Some(first) = segments.next() else {
+            return self.missing_expr(span);
+        };
+        let mut expr = Expr {
+            kind: ExprKind::Identifier(first.name),
+            span: first.span,
+        };
+
+        for segment in segments {
+            expr = Expr {
+                span: expr.span.join(segment.span),
+                kind: ExprKind::Member {
+                    object: Box::new(expr),
+                    name: segment.name,
+                },
+            };
+        }
+
+        expr
+    }
+
+    fn interpolation_expression_expr(
+        &mut self,
+        source: &str,
+        source_start: usize,
+        span: Span,
+    ) -> Expr {
+        let (mut tokens, lexer_diagnostics) = Lexer::new(source).tokenize();
+        for diagnostic in lexer_diagnostics {
+            self.diagnostics.push(Diagnostic::error(
+                offset_span(diagnostic.span, source_start),
+                diagnostic.message,
+            ));
+        }
+        for token in &mut tokens {
+            token.span = offset_span(token.span, source_start);
+        }
+
+        let mut parser = Parser::new(tokens);
+        let expr = parser.parse_expression();
+        if !parser.at_eof() {
+            parser.error_here("expected end of interpolation expression");
+        }
+        self.diagnostics.extend(parser.diagnostics);
+
+        if matches!(expr.kind, ExprKind::Missing) {
+            Expr { span, ..expr }
+        } else {
+            expr
+        }
+    }
+
+    fn interpolated_value_to_string(&self, value: Expr) -> Expr {
+        let span = value.span;
+        Expr {
+            span,
+            kind: ExprKind::Call {
+                callee: Box::new(Expr {
+                    span,
+                    kind: ExprKind::Member {
+                        object: Box::new(value),
+                        name: "toString".to_string(),
+                    },
+                }),
+                args: Vec::new(),
+            },
         }
     }
 
@@ -383,4 +509,8 @@ impl Parser {
         }
     }
 
+}
+
+fn offset_span(span: Span, offset: usize) -> Span {
+    Span::new(span.start + offset, span.end + offset)
 }

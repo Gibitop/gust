@@ -229,6 +229,26 @@ impl Analyzer {
         }
 
         if object_type == Type::Basic(BasicType::String)
+            && source_name == "toString"
+            && requested_trait.is_none()
+        {
+            if !args.is_empty() {
+                self.diagnostics.push(Diagnostic::error(
+                    expr.span,
+                    format!(
+                        "method `string.toString` expects 0 arguments, got {}",
+                        args.len()
+                    ),
+                ));
+                for arg in args {
+                    self.validate_expr(arg);
+                }
+            }
+
+            return Type::Basic(BasicType::String);
+        }
+
+        if object_type == Type::Basic(BasicType::String)
             && matches!(source_name, "byteLen" | "len" | "isEmpty")
             && requested_trait.is_none()
         {

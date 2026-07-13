@@ -127,6 +127,15 @@ compiler-implemented declaration and API live in `std/internal/stringBuilder.gus
 
 The current C backend may temporarily leak heap-allocated string concat results. Keep allocation isolated behind Gust-shaped runtime helpers, so raw `malloc` usage can later be replaced by GC allocation.
 
+## String interpolation
+
+String interpolation follows Kotlin-style syntax. `$name` interpolates a simple identifier, and
+`$value.member` may continue through member access. `${expression}` interpolates an arbitrary Gust
+expression and is also used to disambiguate identifier boundaries. `\$` writes a literal dollar sign.
+
+The parser lowers interpolation to ordinary string concatenation. Interpolated values are converted
+through zero-argument `toString()` calls, with `string.toString()` treated as an intrinsic identity.
+
 ## Runtime development
 
 Generated C should route operations that will later be runtime-managed through Gust-shaped helpers instead of calling C primitives directly.

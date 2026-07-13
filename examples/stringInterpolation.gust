@@ -1,0 +1,12 @@
+struct Person {
+    name: string
+}
+
+fn main() {
+    let person = Person { name: "Gust" }
+    let count = 2
+
+    io.println("Hello, $person.name!")
+    io.println("Next count: ${count + 1}")
+    io.println("Literal dollar: \$count")
+}

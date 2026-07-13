@@ -53,6 +53,34 @@ fn string_concat_c_output_is_stable() {
 }
 
 #[test]
+fn string_interpolation_c_output_is_stable() {
+    let result = check_source(
+        r#"struct Person {
+    name: string
+}
+
+fn main() {
+    let person = Person { name: "Gust" }
+    let count = 2
+    io.println("Hello, $person.name ${count + 1}! \$literal")
+}"#,
+    );
+    assert!(
+        !result.has_errors(),
+        "expected string interpolation to validate, got {:?}",
+        result.diagnostics
+    );
+    let lowered = lower_program(&result.program).expect("string interpolation should lower");
+    let source = emit_c(&lowered);
+
+    assert!(source.contains("static gust_rt_string gust_rt_string_concat("));
+    assert!(source.contains("static gust_rt_string gust_rt_i32_to_string("));
+    assert!(source.contains("gust_rt_string_concat(gust_rt_string_concat("));
+    assert!(source.contains("gust_person->gust_name"));
+    assert!(source.contains("$literal"));
+}
+
+#[test]
 fn numeric_helper_call_c_output_is_stable() {
     let result = check_source(
         r#"fn answer(): u64 {
