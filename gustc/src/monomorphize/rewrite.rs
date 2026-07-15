@@ -192,10 +192,14 @@ impl Monomorphizer {
         match &mut function.body {
             FunctionBody::Block(block) => self.rewrite_block(block, substitutions),
             FunctionBody::Expr(expr) => {
-                if let Some(return_type) = self.return_types.last().cloned() {
-                    self.apply_expr_context(expr, &return_type);
+                let return_type = self.return_types.last().cloned();
+                if let Some(return_type) = &return_type {
+                    self.apply_expr_context(expr, return_type);
                 }
                 self.rewrite_expr(expr, substitutions);
+                if let Some(return_type) = &return_type {
+                    self.apply_expr_context(expr, return_type);
+                }
                 if infer_return
                     && let Some(type_ref) = self.infer_expr_type(expr)
                     && let Some(Some(return_types)) = self.inferred_returns.last_mut()
@@ -262,10 +266,14 @@ impl Monomorphizer {
             }
             StmtKind::Return { value } => {
                 if let Some(value) = value {
-                    if let Some(return_type) = self.return_types.last().cloned() {
-                        self.apply_expr_context(value, &return_type);
+                    let return_type = self.return_types.last().cloned();
+                    if let Some(return_type) = &return_type {
+                        self.apply_expr_context(value, return_type);
                     }
                     self.rewrite_expr(value, substitutions);
+                    if let Some(return_type) = &return_type {
+                        self.apply_expr_context(value, return_type);
+                    }
                     if let Some(type_ref) = self.infer_expr_type(value)
                         && let Some(Some(return_types)) = self.inferred_returns.last_mut()
                     {
@@ -295,6 +303,10 @@ impl Monomorphizer {
             }
             StmtKind::For { iterable, body, .. } => {
                 self.rewrite_expr(iterable, substitutions);
+                if let Some(iterable_type) = self.infer_expr_type(iterable) {
+                    self.request_source_trait_impl("Iterator", None, &iterable_type, statement.span);
+                    self.request_source_trait_impl("Iterable", None, &iterable_type, statement.span);
+                }
                 self.rewrite_block(body, substitutions);
             }
             StmtKind::Break | StmtKind::Continue => {}

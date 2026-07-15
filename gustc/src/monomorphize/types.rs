@@ -54,47 +54,31 @@ impl Monomorphizer {
             || self.concrete_enums.contains_key(name)
             || self.concrete_traits.contains(name)
     }
+
+    fn type_ref_is_fully_known(&self, type_ref: &TypeRef) -> bool {
+        if let Some(function) = &type_ref.function {
+            return function
+                .params
+                .iter()
+                .all(|param| self.type_ref_is_fully_known(&param.type_ref))
+                && self.type_ref_is_fully_known(&function.return_type);
+        }
+
+        (self.is_known_type_name(&type_ref.name)
+            || self.specializations.contains_key(&type_ref.name)
+            || self.trait_specializations.contains_key(&type_ref.name))
+            && type_ref
+                .args
+                .iter()
+                .all(|arg| self.type_ref_is_fully_known(arg))
+            && type_ref
+                .bindings
+                .iter()
+                .all(|binding| self.type_ref_is_fully_known(&binding.type_ref))
+    }
 }
 fn concrete_type_name(type_ref: &TypeRef) -> Option<String> {
     type_ref.args.is_empty().then(|| type_ref.name.clone())
-}
-
-fn concrete_type_refs(items: &[Item]) -> Vec<TypeRef> {
-    items
-        .iter()
-        .filter_map(|item| {
-            let (name, span) = match item {
-                Item::Struct(item) => (&item.name, item.span),
-                Item::Enum(item) => (&item.name, item.span),
-                _ => return None,
-            };
-            Some(TypeRef {
-                name: name.clone(),
-                args: Vec::new(),
-                bindings: Vec::new(),
-                function: None,
-                span,
-            })
-        })
-        .collect()
-}
-
-fn concrete_trait_refs(items: &[Item]) -> Vec<TypeRef> {
-    items
-        .iter()
-        .filter_map(|item| {
-            let Item::Trait(item) = item else {
-                return None;
-            };
-            Some(TypeRef {
-                name: item.name.clone(),
-                args: Vec::new(),
-                bindings: Vec::new(),
-                function: None,
-                span: item.span,
-            })
-        })
-        .collect()
 }
 
 fn concrete_impl_exists(items: &[Item], trait_ref: &TypeRef, type_ref: &TypeRef) -> bool {

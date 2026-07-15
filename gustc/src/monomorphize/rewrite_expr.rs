@@ -576,6 +576,16 @@ impl Monomorphizer {
                         &resolution.associated_type_bindings,
                         expr.span,
                     );
+                    self.request_impl(
+                        &TypeRef {
+                            name: resolution.trait_name.clone(),
+                            args: resolution.trait_args.clone(),
+                            bindings: resolution.associated_type_bindings.clone(),
+                            function: None,
+                            span: expr.span,
+                        },
+                        &receiver,
+                    );
 
                     let ExprKind::Call { callee, args } = &mut expr.kind else {
                         unreachable!("generic trait method call was matched above")
@@ -826,6 +836,12 @@ impl Monomorphizer {
             .get(&collection.name)
             .and_then(|(_, args)| args.first().cloned());
         if let Some(element_type) = element_type {
+            self.request_source_trait_impl(
+                "FromElements",
+                Some(("Item", element_type.clone())),
+                &collection,
+                expr.span,
+            );
             for item in items.iter_mut() {
                 self.apply_expr_context(item, &element_type);
                 self.rewrite_expr(item, substitutions);

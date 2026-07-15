@@ -6,6 +6,9 @@ impl Monomorphizer {
         static_: bool,
         args: &[TypeRef],
     ) {
+        if args.iter().any(|arg| !self.type_ref_is_fully_known(arg)) {
+            return;
+        }
         let specialized_method = specialized_name(method_name, args);
         let key = (receiver.to_string(), specialized_method.clone(), static_);
         let receiver_type = TypeRef {
@@ -131,6 +134,9 @@ impl Monomorphizer {
             ));
             return;
         }
+        if args.iter().any(|arg| !self.type_ref_is_fully_known(arg)) {
+            return;
+        }
 
         let template = self.struct_templates[name].clone();
         self.record_type_param_bound_checks(
@@ -161,6 +167,9 @@ impl Monomorphizer {
                     args.len()
                 ),
             ));
+            return;
+        }
+        if args.iter().any(|arg| !self.type_ref_is_fully_known(arg)) {
             return;
         }
 
@@ -203,6 +212,13 @@ impl Monomorphizer {
                     args.len()
                 ),
             ));
+            return;
+        }
+        if args.iter().any(|arg| !self.type_ref_is_fully_known(arg))
+            || bindings
+                .iter()
+                .any(|binding| !self.type_ref_is_fully_known(&binding.type_ref))
+        {
             return;
         }
 
@@ -258,6 +274,9 @@ impl Monomorphizer {
     }
 
     fn specialize_function(&mut self, name: &str, args: &[TypeRef]) {
+        if args.iter().any(|arg| !self.type_ref_is_fully_known(arg)) {
+            return;
+        }
         let specialized_name = specialized_name(name, args);
         let template = self.function_templates[name].clone();
         self.record_type_param_bound_checks(
@@ -348,6 +367,79 @@ impl Monomorphizer {
         });
     }
 
+    fn request_impl(&mut self, trait_ref: &TypeRef, type_ref: &TypeRef) {
+        let mut trait_ref = self.expanded_trait_type(trait_ref);
+        for arg in &mut trait_ref.args {
+            self.rewrite_type(arg, &HashMap::new());
+        }
+        for binding in &mut trait_ref.bindings {
+            self.rewrite_type(&mut binding.type_ref, &HashMap::new());
+        }
+        let mut type_ref = self.expanded_type(type_ref);
+        self.rewrite_type(&mut type_ref, &HashMap::new());
+        if !self.type_ref_is_fully_known(&trait_ref) || !self.type_ref_is_fully_known(&type_ref) {
+            return;
+        }
+        self.specialize_trait(
+            &trait_ref.name,
+            &trait_ref.args,
+            &trait_ref.bindings,
+            trait_ref.span,
+        );
+        self.pending.push_back(PendingSpecialization::Impl {
+            trait_ref,
+            type_ref,
+        });
+    }
+
+    fn request_impl_for_expected_trait(&mut self, expected: &TypeRef, actual: &TypeRef) {
+        let expected = self.expanded_trait_type(expected);
+        if !self.trait_declarations.contains_key(&expected.name) {
+            return;
+        }
+        let actual = self.expanded_trait_type(actual);
+        if self.trait_declarations.contains_key(&actual.name) {
+            return;
+        }
+        self.request_impl(&expected, &actual);
+    }
+
+    fn request_source_trait_impl(
+        &mut self,
+        source_trait_name: &str,
+        associated_type: Option<(&str, TypeRef)>,
+        type_ref: &TypeRef,
+        span: crate::span::Span,
+    ) {
+        let Some(trait_name) = self
+            .trait_declarations
+            .keys()
+            .find(|name| {
+                *name == source_trait_name || name.rsplit("::").next() == Some(source_trait_name)
+            })
+            .cloned()
+        else {
+            return;
+        };
+        let bindings = associated_type
+            .map(|(name, type_ref)| {
+                vec![crate::ast::AssociatedTypeBinding {
+                    name: name.to_string(),
+                    type_ref,
+                    span,
+                }]
+            })
+            .unwrap_or_default();
+        let trait_ref = TypeRef {
+            name: trait_name,
+            args: Vec::new(),
+            bindings,
+            function: None,
+            span,
+        };
+        self.request_impl(&trait_ref, type_ref);
+    }
+
     fn emit_extension_specialization(
         &mut self,
         items: &mut Vec<Item>,
@@ -380,7 +472,7 @@ impl Monomorphizer {
             .solve_type_arguments(
                 "extension",
                 &receiver_type_params,
-                vec![(template.type_ref.clone(), self.expanded_type(receiver))],
+                vec![(template.type_ref.clone(), self.expanded_trait_type(receiver))],
             )
             .unwrap_or_default();
         let mut substitutions = receiver_type_params

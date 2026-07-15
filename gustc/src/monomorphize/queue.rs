@@ -24,12 +24,7 @@ impl Monomorphizer {
             items.push(item);
         }
 
-        loop {
-            self.drain_pending(&mut items);
-            if !self.instantiate_generic_impl_templates(&mut items) {
-                break;
-            }
-        }
+        self.drain_pending(&mut items);
         self.validate_bound_checks(&items);
 
         prune_unused_generic_methods(&mut items, &self.emitted);
@@ -245,6 +240,12 @@ impl Monomorphizer {
                     self.rewrite_function(&mut specialized, &substitutions);
                     items.push(Item::Function(specialized));
                 }
+                PendingSpecialization::Impl {
+                    trait_ref,
+                    type_ref,
+                } => {
+                    self.instantiate_requested_impl(items, &trait_ref, &type_ref);
+                }
                 PendingSpecialization::Method {
                     receiver,
                     name,
@@ -274,123 +275,121 @@ impl Monomorphizer {
         }
     }
 
-    fn instantiate_generic_impl_templates(&mut self, items: &mut Vec<Item>) -> bool {
-        let mut concrete_types = concrete_type_refs(items);
-        concrete_types.extend(self.impl_receiver_types.clone());
-        let concrete_traits = concrete_trait_refs(items);
-        let mut changed = false;
-
+    fn instantiate_requested_impl(
+        &mut self,
+        items: &mut Vec<Item>,
+        requested_trait: &TypeRef,
+        requested_type: &TypeRef,
+    ) {
+        if concrete_impl_exists(items, requested_trait, requested_type) {
+            return;
+        }
         for template in self.impl_templates.clone() {
-            for concrete_type in &concrete_types {
-                let mut type_args = Vec::new();
-                if let Ok(args) = self.solve_type_arguments(
-                    "impl",
-                    &template.type_params,
-                    vec![(template.type_ref.clone(), concrete_type.clone())],
-                ) {
-                    type_args.push(args);
-                }
+            if !trait_name_matches_request(&template.trait_ref.name, &requested_trait.name) {
+                continue;
+            }
+            let mut constraints = vec![(template.type_ref.clone(), requested_type.clone())];
+            if !template.trait_ref.args.is_empty()
+                || !template.trait_ref.bindings.is_empty()
+                || !requested_trait.args.is_empty()
+                || !requested_trait.bindings.is_empty()
+            {
+                constraints.push((template.trait_ref.clone(), requested_trait.clone()));
+            }
+            let Ok(args) = self.solve_type_arguments(
+                "impl",
+                &template.type_params,
+                constraints,
+            ) else {
+                continue;
+            };
+            let substitutions = template
+                .type_params
+                .iter()
+                .cloned()
+                .zip(args)
+                .collect::<HashMap<_, _>>();
+            if !self.type_param_bounds_satisfied(
+                &template.type_param_bounds,
+                &substitutions,
+                items,
+            ) {
+                continue;
+            }
 
-                for concrete_trait in &concrete_traits {
-                    if let Ok(args) = self.solve_type_arguments(
-                        "impl",
-                        &template.type_params,
-                        vec![
-                            (template.type_ref.clone(), concrete_type.clone()),
-                            (template.trait_ref.clone(), concrete_trait.clone()),
-                        ],
-                    ) {
-                        type_args.push(args);
-                    }
-                }
-
-                for args in type_args {
-                    let substitutions = template
-                        .type_params
-                        .iter()
-                        .cloned()
-                        .zip(args)
-                        .collect::<HashMap<_, _>>();
-                    if !self.type_param_bounds_satisfied(
-                        &template.type_param_bounds,
-                        &substitutions,
-                        items,
-                    ) {
-                        continue;
-                    }
-
-                    let mut specialized = template.clone();
-                    specialized.type_params.clear();
-                    specialized.type_param_bounds.clear();
-                    specialized.trait_ref = substitute_type(&template.trait_ref, &substitutions);
-                    specialized.type_ref = substitute_type(&template.type_ref, &substitutions);
-                    self.apply_associated_type_defaults(&mut specialized);
-                    self.rewrite_type(&mut specialized.type_ref, &HashMap::new());
-                    for associated_type in &mut specialized.associated_types {
-                        associated_type.type_ref =
-                            substitute_type(&associated_type.type_ref, &substitutions);
-                        if associated_type.type_params.is_empty() {
-                            self.rewrite_type(&mut associated_type.type_ref, &HashMap::new());
-                        }
-                    }
-                    self.record_associated_type_bound_checks(&specialized);
-                    let required_associated_types = self
-                        .trait_declarations
-                        .get(&specialized.trait_ref.name)
-                        .map(trait_required_associated_type_names)
-                        .unwrap_or_default();
-                    specialized.trait_ref.bindings = specialized
-                        .associated_types
-                        .iter()
-                        .filter(|associated_type| {
-                            required_associated_types.contains(&associated_type.name)
-                        })
-                        .map(|associated_type| crate::ast::AssociatedTypeBinding {
-                            name: associated_type.name.clone(),
-                            type_ref: associated_type.type_ref.clone(),
-                            span: associated_type.span,
-                        })
-                        .collect();
-                    self.rewrite_type(&mut specialized.trait_ref, &HashMap::new());
-
-                    let key = format!(
-                        "impl {} for {}",
-                        type_name(&specialized.trait_ref),
-                        type_name(&specialized.type_ref)
-                    );
-                    if !self.emitted.insert(key) {
-                        continue;
-                    }
-                    if concrete_impl_exists(items, &specialized.trait_ref, &specialized.type_ref) {
-                        continue;
-                    }
-
-                    self.self_types.push(specialized.type_ref.clone());
-                    let mut impl_substitutions = substitutions.clone();
-                    impl_substitutions.extend(
-                        specialized
-                            .associated_types
-                            .iter()
-                            .filter(|associated_type| associated_type.type_params.is_empty())
-                            .map(|associated_type| {
-                                (
-                                    format!("Self.{}", associated_type.name),
-                                    associated_type.type_ref.clone(),
-                                )
-                            }),
-                    );
-                    for member in &mut specialized.methods {
-                        self.rewrite_function(&mut member.function, &impl_substitutions);
-                    }
-                    self.self_types.pop();
-
-                    items.push(Item::Impl(specialized));
-                    changed = true;
+            let mut specialized = template.clone();
+            specialized.type_params.clear();
+            specialized.type_param_bounds.clear();
+            specialized.trait_ref = substitute_type(&template.trait_ref, &substitutions);
+            specialized.type_ref = substitute_type(&template.type_ref, &substitutions);
+            self.apply_associated_type_defaults(&mut specialized);
+            self.rewrite_type(&mut specialized.type_ref, &HashMap::new());
+            for associated_type in &mut specialized.associated_types {
+                associated_type.type_ref =
+                    substitute_type(&associated_type.type_ref, &substitutions);
+                if associated_type.type_params.is_empty() {
+                    self.rewrite_type(&mut associated_type.type_ref, &HashMap::new());
                 }
             }
-        }
+            self.record_associated_type_bound_checks(&specialized);
+            let required_associated_types = self
+                .trait_declarations
+                .get(&specialized.trait_ref.name)
+                .map(trait_required_associated_type_names)
+                .unwrap_or_default();
+            specialized.trait_ref.bindings = specialized
+                .associated_types
+                .iter()
+                .filter(|associated_type| required_associated_types.contains(&associated_type.name))
+                .map(|associated_type| crate::ast::AssociatedTypeBinding {
+                    name: associated_type.name.clone(),
+                    type_ref: associated_type.type_ref.clone(),
+                    span: associated_type.span,
+                })
+                .collect();
+            self.rewrite_type(&mut specialized.trait_ref, &HashMap::new());
 
-        changed
+            if !impl_satisfies_request(&specialized, requested_trait, requested_type) {
+                continue;
+            }
+            let key = format!(
+                "impl {} for {}",
+                type_name(&specialized.trait_ref),
+                type_name(&specialized.type_ref)
+            );
+            if !self.emitted.insert(key) {
+                continue;
+            }
+            if concrete_impl_exists(items, &specialized.trait_ref, &specialized.type_ref) {
+                continue;
+            }
+
+            self.self_types.push(specialized.type_ref.clone());
+            let mut impl_substitutions = substitutions.clone();
+            impl_substitutions.extend(
+                specialized
+                    .associated_types
+                    .iter()
+                    .filter(|associated_type| associated_type.type_params.is_empty())
+                    .map(|associated_type| {
+                        (
+                            format!("Self.{}", associated_type.name),
+                            associated_type.type_ref.clone(),
+                        )
+                    }),
+            );
+            for member in &mut specialized.methods {
+                self.rewrite_function(&mut member.function, &impl_substitutions);
+            }
+            self.self_types.pop();
+
+            items.push(Item::Impl(specialized));
+        }
     }
 
+}
+
+fn impl_satisfies_request(impl_: &ImplDecl, trait_ref: &TypeRef, type_ref: &TypeRef) -> bool {
+    type_name(&impl_.type_ref) == type_name(type_ref)
+        && concrete_impl_exists(&[Item::Impl(impl_.clone())], trait_ref, type_ref)
 }

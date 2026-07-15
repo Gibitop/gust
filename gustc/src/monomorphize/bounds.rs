@@ -37,6 +37,7 @@ impl Monomorphizer {
             };
             let mut trait_ref = substitute_type(&bound.trait_ref, &substitutions);
             self.rewrite_type(&mut trait_ref, &HashMap::new());
+            self.request_impl(&trait_ref, &type_ref);
             self.bound_checks.push(BoundCheck {
                 owner: owner.clone(),
                 type_ref,

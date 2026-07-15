@@ -527,7 +527,16 @@ impl Monomorphizer {
         associated_type: &str,
         associated_args: &[TypeRef],
     ) -> Result<TypeRef, usize> {
-        let receiver = self.expanded_type(receiver);
+        let receiver = self.expanded_trait_type(receiver);
+        if associated_args.is_empty()
+            && self.trait_declarations.contains_key(&receiver.name)
+            && let Some(binding) = receiver
+                .bindings
+                .iter()
+                .find(|binding| binding.name == associated_type)
+        {
+            return Ok(binding.type_ref.clone());
+        }
         let mut candidates = Vec::new();
         for impl_ in &self.impl_declarations {
             let Some(trait_) = self.trait_declarations.get(&impl_.trait_ref.name) else {

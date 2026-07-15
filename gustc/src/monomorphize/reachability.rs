@@ -307,6 +307,13 @@ impl<'items> MethodReachability<'items> {
                     let type_ = type_annotation
                         .as_ref()
                         .and_then(|type_ref| self.type_name(type_ref))
+                        .map(|type_| {
+                            if type_ == "Self" {
+                                locals.get("Self").cloned().unwrap_or(type_)
+                            } else {
+                                type_
+                            }
+                        })
                         .or(value_type);
                     if let Some(type_) = type_ {
                         locals.insert(name.clone(), type_);
@@ -399,31 +406,38 @@ impl<'items> MethodReachability<'items> {
                 match &callee.kind {
                     ExprKind::Identifier(name) => self.functions.get(name).cloned().flatten(),
                     ExprKind::Member { object, name } => {
-                        if let ExprKind::Identifier(identifier) = &object.kind {
-                            let static_type_name = if identifier == "Self" {
-                                locals.get(identifier).map(String::as_str)
-                            } else if !locals.contains_key(identifier)
-                                && (self.structs.contains_key(identifier)
-                                    || self.enums.contains_key(identifier))
-                            {
-                                Some(identifier.as_str())
-                            } else {
-                                None
-                            };
-                            if let Some(type_name) = static_type_name {
-                                self.use_method(type_name, name, true);
-                                return self
-                                    .structs
-                                    .get(type_name)
-                                    .and_then(|shape| shape.static_methods.get(name))
-                                    .or_else(|| {
-                                        self.enums
-                                            .get(type_name)
-                                            .and_then(|shape| shape.static_methods.get(name))
-                                    })
-                                    .cloned()
-                                    .flatten();
+                        let static_type_name = match &object.kind {
+                            ExprKind::Identifier(identifier) if identifier == "Self" => {
+                                locals.get(identifier).cloned()
                             }
+                            ExprKind::Identifier(identifier)
+                                if !locals.contains_key(identifier)
+                                    && (self.structs.contains_key(identifier)
+                                        || self.enums.contains_key(identifier)) =>
+                            {
+                                Some(identifier.clone())
+                            }
+                            ExprKind::GenericType { name, args } => {
+                                let type_name = specialized_name(name, args);
+                                (self.structs.contains_key(&type_name)
+                                    || self.enums.contains_key(&type_name))
+                                .then_some(type_name)
+                            }
+                            _ => None,
+                        };
+                        if let Some(type_name) = static_type_name {
+                            self.use_method(&type_name, name, true);
+                            return self
+                                .structs
+                                .get(&type_name)
+                                .and_then(|shape| shape.static_methods.get(name))
+                                .or_else(|| {
+                                    self.enums
+                                        .get(&type_name)
+                                        .and_then(|shape| shape.static_methods.get(name))
+                                })
+                                .cloned()
+                                .flatten();
                         }
                         let object_type = self.visit_expr(object, locals);
                         if name == "clone" {

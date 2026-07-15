@@ -73,6 +73,10 @@ enum PendingSpecialization {
     Enum(String, Vec<TypeRef>),
     Trait(String, Vec<TypeRef>, Vec<crate::ast::AssociatedTypeBinding>),
     Function(String, Vec<TypeRef>),
+    Impl {
+        trait_ref: TypeRef,
+        type_ref: TypeRef,
+    },
     Method {
         receiver: String,
         name: String,

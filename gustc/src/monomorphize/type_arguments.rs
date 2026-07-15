@@ -1,6 +1,9 @@
 impl Monomorphizer {
     fn apply_expr_context(&mut self, expr: &mut Expr, expected: &TypeRef) {
         self.expected_expr_types.insert(expr.span, expected.clone());
+        if let Some(actual) = self.infer_expr_type(expr) {
+            self.request_impl_for_expected_trait(expected, &actual);
+        }
         let Some((generic_name, concrete_args)) = self.specializations.get(&expected.name) else {
             return;
         };
@@ -178,7 +181,7 @@ impl Monomorphizer {
             return true;
         }
 
-        let receiver = self.expanded_type(receiver);
+        let receiver = self.expanded_trait_type(receiver);
         self.extensions.iter().any(|extension| {
             if extension.static_ != static_
                 || extension.function.name.as_deref() != Some(method_name)
@@ -582,7 +585,7 @@ impl Monomorphizer {
         args: &[Expr],
         expected_return: Option<&TypeRef>,
     ) -> Result<Option<ExtensionResolution>, String> {
-        let receiver = self.expanded_type(receiver);
+        let receiver = self.expanded_trait_type(receiver);
         let mut candidates = Vec::new();
 
         for (template_index, extension) in self.extensions.clone().iter().enumerate() {
@@ -644,7 +647,10 @@ impl Monomorphizer {
                 if let (Some(return_type), Some(expected_return)) =
                     (&extension.function.return_type, expected_return)
                 {
-                    constraints.push((substitute_type(return_type, &substitutions), expected_return.clone()));
+                    constraints.push((
+                        substitute_type(return_type, &substitutions),
+                        expected_return.clone(),
+                    ));
                 }
                 let mut type_args = self.solve_type_arguments(
                     method_name,
