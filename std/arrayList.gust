@@ -5,7 +5,7 @@ from ./option import { Option }
 from ./result import { Result }
 from ./internal/rawBuffer import { RawBuffer }
 
-struct ArrayList<T> {
+export struct ArrayList<T> {
     internal storage: RawBuffer<T>
     internal count: usize
 

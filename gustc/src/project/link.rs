@@ -7,40 +7,48 @@ fn link_modules(modules: &[Module], diagnostics: &mut Vec<Diagnostic>) -> Progra
         let mut module_exports = HashMap::new();
         let mut module_names = HashMap::new();
         let mut module_extensions = HashMap::new();
+        let mut declared_names = HashMap::new();
 
         for item in &module.program.items {
-            let Some((name, extension, span)) = item_export(item) else {
+            let Some(declaration) = item_declaration(item) else {
                 continue;
             };
-            let internal_name = if extension {
-                qualified_extension_name(&module.key, name)
+            let internal_name = if declaration.extension {
+                qualified_extension_name(&module.key, declaration.name)
             } else if module.entry {
-                name.to_string()
+                declaration.name.to_string()
             } else {
-                qualified_name(&module.key, name)
+                qualified_name(&module.key, declaration.name)
             };
-            let export = Export {
-                internal_name: internal_name.clone(),
-                extension,
-            };
-            if let Some(previous) = module_exports.insert(name.to_string(), export)
-                && !(previous.extension && extension)
+            if declaration.exported {
+                let export = Export {
+                    internal_name: internal_name.clone(),
+                    extension: declaration.extension,
+                };
+                module_exports.insert(declaration.name.to_string(), export);
+            }
+            if let Some(previous_extension) =
+                declared_names.insert(declaration.name.to_string(), declaration.extension)
+                && !(previous_extension && declaration.extension)
             {
                 diagnostics.push(Diagnostic::error(
-                    span,
-                    format!("duplicate top-level name `{name}` in this module"),
+                    declaration.span,
+                    format!(
+                        "duplicate top-level name `{}` in this module",
+                        declaration.name
+                    ),
                 ));
             }
-            if extension {
-                if name == "clone" {
+            if declaration.extension {
+                if declaration.name == "clone" {
                     diagnostics.push(Diagnostic::error(
-                        span,
+                        declaration.span,
                         "extension function name `clone` is reserved for the built-in deep clone operation",
                     ));
                 }
-                module_extensions.insert(name.to_string(), internal_name);
+                module_extensions.insert(declaration.name.to_string(), internal_name);
             } else {
-                module_names.insert(name.to_string(), internal_name);
+                module_names.insert(declaration.name.to_string(), internal_name);
             }
         }
 
@@ -149,17 +157,49 @@ fn link_modules(modules: &[Module], diagnostics: &mut Vec<Diagnostic>) -> Progra
     Program { items }
 }
 
-fn item_export(item: &Item) -> Option<(&str, bool, Span)> {
+struct ModuleDeclaration<'item> {
+    name: &'item str,
+    exported: bool,
+    extension: bool,
+    span: Span,
+}
+
+fn item_declaration(item: &Item) -> Option<ModuleDeclaration<'_>> {
     match item {
-        Item::Enum(item) => Some((&item.name, false, item.span)),
-        Item::Struct(item) => Some((&item.name, false, item.span)),
-        Item::Trait(item) => Some((&item.name, false, item.span)),
-        Item::Function(item) => item.name.as_deref().map(|name| (name, false, item.span)),
+        Item::Enum(item) => Some(ModuleDeclaration {
+            name: &item.name,
+            exported: item.exported,
+            extension: false,
+            span: item.span,
+        }),
+        Item::Struct(item) => Some(ModuleDeclaration {
+            name: &item.name,
+            exported: item.exported,
+            extension: false,
+            span: item.span,
+        }),
+        Item::Trait(item) => Some(ModuleDeclaration {
+            name: &item.name,
+            exported: item.exported,
+            extension: false,
+            span: item.span,
+        }),
+        Item::Function(item) => item.name.as_deref().map(|name| ModuleDeclaration {
+            name,
+            exported: item.exported,
+            extension: false,
+            span: item.span,
+        }),
         Item::Extension(item) => item
             .function
             .name
             .as_deref()
-            .map(|name| (name, true, item.span)),
+            .map(|name| ModuleDeclaration {
+                name,
+                exported: item.exported,
+                extension: true,
+                span: item.span,
+            }),
         Item::Import(_) | Item::Impl(_) => None,
     }
 }

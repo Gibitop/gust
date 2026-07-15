@@ -256,6 +256,7 @@ fn collect_lambda_block_captures(
 ) {
     let function = FunctionDecl {
         name: None,
+        exported: false,
         type_params: Vec::new(),
         type_param_bounds: Vec::new(),
         params: Vec::new(),

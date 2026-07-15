@@ -1,6 +1,6 @@
 from ./option import { Option }
 
-enum Result<T, E> {
+export enum Result<T, E> {
     Ok(T)
     Err(E)
 

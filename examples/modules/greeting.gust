@@ -1,10 +1,10 @@
 from ../fib import { fib }
-struct Greeter {
+export struct Greeter {
     name: string
 }
 
 fn punctuation(): string => "!"
 
-fn greeting(greeter: Greeter): string {
+export fn greeting(greeter: Greeter): string {
     return "Hello, " + greeter.name + punctuation() + fib(10).toString()
 }

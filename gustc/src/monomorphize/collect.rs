@@ -260,6 +260,7 @@ fn trait_default_extension(
         .collect();
     let function = FunctionDecl {
         name: Some(method.name.clone()),
+        exported: false,
         type_params: method.type_params.clone(),
         type_param_bounds: method
             .type_param_bounds
@@ -308,6 +309,7 @@ fn trait_default_extension(
             function: None,
             span: trait_.span,
         },
+        exported: false,
         type_params,
         type_param_bounds: trait_.type_param_bounds.clone(),
         function,

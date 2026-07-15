@@ -11,8 +11,8 @@ Minimal gust project contains a single `.gust` file with a `main` function
 ## Modules
 
 Local modules use relative paths and named imports. A relative import without an extension resolves
-to a `.gust` file next to the importing module. Top-level declarations are available for named
-import; explicit export visibility will be introduced separately. Imported names can be bound to a
+to a `.gust` file next to the importing module. Only top-level declarations marked with `export`
+are available for named import or through a module namespace. Imported names can be bound to a
 different local name with `from ./module import { original as localName }`.
 
 An unbraced import binds the module as a namespace:
@@ -26,6 +26,10 @@ name in different modules do not collide. Only names listed by an importing modu
 that module's scope. Extension functions follow the same rule and retain real-member precedence.
 
 Package module resolution is not implemented yet. Import cycles are rejected.
+
+Unexported top-level declarations remain visible inside their declaring module and are still linked
+when an exported declaration uses them, but other modules cannot import them by name or access them
+through a namespace import.
 
 ## Standard library development
 

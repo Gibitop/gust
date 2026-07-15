@@ -11,7 +11,7 @@ fn main() {
     );
     project.write(
         "collection.gust",
-        r#"struct ArrayList<T> {
+        r#"export struct ArrayList<T> {
     marker: i32
 
     static fn empty(): Self => Self { marker: 0 }
@@ -47,7 +47,7 @@ fn main() {
     Gadget.missingStatic()
 }"#,
     );
-    project.write("model.gust", "struct Gadget {}");
+    project.write("model.gust", "export struct Gadget {}");
 
     let result = check_project(&project.path("main.gust")).expect("project should load");
     let method = result
@@ -88,11 +88,11 @@ fn main() {
     );
     bound_project.write(
         "model.gust",
-        r#"trait Named {
+        r#"export trait Named {
     fn name(): string
 }
 
-struct Person {}"#,
+export struct Person {}"#,
     );
 
     let bound_result =
@@ -131,11 +131,11 @@ fn main() {}"#,
     );
     coherence_project.write(
         "model.gust",
-        r#"trait Describe {
+        r#"export trait Describe {
     fn describe(): string
 }
 
-struct Person {}"#,
+export struct Person {}"#,
     );
 
     let coherence_result =
@@ -173,7 +173,7 @@ fn main() {
     for value in values {}
 }"#,
     );
-    project.write("collection.gust", "struct ArrayList<T> {}");
+    project.write("collection.gust", "export struct ArrayList<T> {}");
 
     let result = check_project(&project.path("main.gust")).expect("project should load");
     let semantic = result
@@ -195,4 +195,3 @@ fn main() {
     assert_gust_diagnostic_name(&lowering.message);
     assert_rendered_at(&result, lowering, &project.path("main.gust"), 5, 5);
 }
-

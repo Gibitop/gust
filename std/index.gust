@@ -1,9 +1,9 @@
-trait Index<Key> {
+export trait Index<Key> {
     type Output
     fn index(key: Key): Self.Output
 }
 
-trait IndexSet<Key> {
+export trait IndexSet<Key> {
     type Value
     fn indexSet(mut self, key: Key, value: Self.Value): void
 }

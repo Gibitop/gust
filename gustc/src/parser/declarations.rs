@@ -55,8 +55,39 @@ impl Parser {
         }
     }
 
-    fn parse_enum(&mut self) -> EnumDecl {
-        let start = self.expect_keyword(Keyword::Enum, "`enum`").span;
+    fn parse_export(&mut self) -> Item {
+        let start = self.expect_keyword(Keyword::Export, "`export`").span;
+        match self.current_keyword() {
+            Some(Keyword::Enum) => Item::Enum(self.parse_enum(true, Some(start))),
+            Some(Keyword::Struct) => Item::Struct(self.parse_struct(true, Some(start))),
+            Some(Keyword::Trait) => Item::Trait(self.parse_trait(true, Some(start))),
+            Some(Keyword::Fn) => self.parse_top_level_function(true, Some(start)),
+            Some(Keyword::Static) => self.parse_static_extension(true, Some(start)),
+            _ => {
+                self.error_here("expected exported enum, struct, trait, or function");
+                self.advance();
+                self.synchronize_top_level();
+                Item::Function(FunctionDecl {
+                    name: Some("<missing>".to_string()),
+                    exported: true,
+                    type_params: Vec::new(),
+                    type_param_bounds: Vec::new(),
+                    params: Vec::new(),
+                    return_type: None,
+                    body: FunctionBody::Expr(Box::new(self.missing_expr(start))),
+                    span: start,
+                })
+            }
+        }
+    }
+
+    fn parse_enum(&mut self, exported: bool, export_start: Option<Span>) -> EnumDecl {
+        let start = if let Some(start) = export_start {
+            self.expect_keyword(Keyword::Enum, "`enum`");
+            start
+        } else {
+            self.expect_keyword(Keyword::Enum, "`enum`").span
+        };
         let name = self.expect_identifier("expected enum name");
         let (type_params, type_param_bounds) = self.parse_type_params();
         self.expect_kind(&TokenKind::LeftBrace, "`{`");
@@ -108,6 +139,7 @@ impl Parser {
 
         EnumDecl {
             name,
+            exported,
             type_params,
             type_param_bounds,
             variants,
@@ -116,8 +148,13 @@ impl Parser {
         }
     }
 
-    fn parse_struct(&mut self) -> StructDecl {
-        let start = self.expect_keyword(Keyword::Struct, "`struct`").span;
+    fn parse_struct(&mut self, exported: bool, export_start: Option<Span>) -> StructDecl {
+        let start = if let Some(start) = export_start {
+            self.expect_keyword(Keyword::Struct, "`struct`");
+            start
+        } else {
+            self.expect_keyword(Keyword::Struct, "`struct`").span
+        };
         let name = self.expect_identifier("expected struct name");
         let (type_params, type_param_bounds) = self.parse_type_params();
         self.expect_kind(&TokenKind::LeftBrace, "`{`");
@@ -171,6 +208,7 @@ impl Parser {
 
         StructDecl {
             name,
+            exported,
             type_params,
             type_param_bounds,
             members,
@@ -178,8 +216,13 @@ impl Parser {
         }
     }
 
-    fn parse_trait(&mut self) -> TraitDecl {
-        let start = self.expect_keyword(Keyword::Trait, "`trait`").span;
+    fn parse_trait(&mut self, exported: bool, export_start: Option<Span>) -> TraitDecl {
+        let start = if let Some(start) = export_start {
+            self.expect_keyword(Keyword::Trait, "`trait`");
+            start
+        } else {
+            self.expect_keyword(Keyword::Trait, "`trait`").span
+        };
         let name = self.expect_identifier("expected trait name");
         let (type_params, type_param_bounds) = self.parse_type_params();
         self.expect_kind(&TokenKind::LeftBrace, "`{`");
@@ -232,6 +275,7 @@ impl Parser {
 
         TraitDecl {
             name,
+            exported,
             type_params,
             type_param_bounds,
             associated_types,
@@ -399,18 +443,28 @@ impl Parser {
         self.parse_function_tail(start, name, type_params, type_param_bounds)
     }
 
-    fn parse_top_level_function(&mut self) -> Item {
-        let start = self.expect_keyword(Keyword::Fn, "`fn`").span;
-        self.parse_top_level_function_tail(start, false)
+    fn parse_top_level_function(&mut self, exported: bool, export_start: Option<Span>) -> Item {
+        let start = if let Some(start) = export_start {
+            self.expect_keyword(Keyword::Fn, "`fn`");
+            start
+        } else {
+            self.expect_keyword(Keyword::Fn, "`fn`").span
+        };
+        self.parse_top_level_function_tail(start, false, exported)
     }
 
-    fn parse_static_extension(&mut self) -> Item {
-        let start = self.expect_keyword(Keyword::Static, "`static`").span;
+    fn parse_static_extension(&mut self, exported: bool, export_start: Option<Span>) -> Item {
+        let start = if let Some(start) = export_start {
+            self.expect_keyword(Keyword::Static, "`static`");
+            start
+        } else {
+            self.expect_keyword(Keyword::Static, "`static`").span
+        };
         self.expect_keyword(Keyword::Fn, "`fn`");
-        self.parse_top_level_function_tail(start, true)
+        self.parse_top_level_function_tail(start, true, exported)
     }
 
-    fn parse_top_level_function_tail(&mut self, start: Span, static_: bool) -> Item {
+    fn parse_top_level_function_tail(&mut self, start: Span, static_: bool, exported: bool) -> Item {
         let name_span = self.current().span;
         let first_name = self.expect_identifier("expected function or extension type name");
         let after_name = self.position;
@@ -421,16 +475,18 @@ impl Parser {
         if self.match_kind(&TokenKind::Dot) {
             let function_name = self.expect_callable_name("expected extension function name");
             let (function_type_params, function_type_param_bounds) = self.parse_type_params();
-            let function = self.parse_function_tail(
+            let mut function = self.parse_function_tail(
                 start,
                 Some(function_name),
                 function_type_params,
                 function_type_param_bounds,
             );
+            function.exported = exported;
 
             Item::Extension(ExtensionDecl {
                 span: start.join(function.span),
                 type_ref,
+                exported,
                 type_params: extension_type_params,
                 type_param_bounds: extension_type_param_bounds,
                 function,
@@ -443,12 +499,14 @@ impl Parser {
                 self.error_here("static functions must be declared on a type");
             }
             let (type_params, type_param_bounds) = self.parse_type_params();
-            Item::Function(self.parse_function_tail(
+            let mut function = self.parse_function_tail(
                 start,
                 Some(first_name),
                 type_params,
                 type_param_bounds,
-            ))
+            );
+            function.exported = exported;
+            Item::Function(function)
         }
     }
 
@@ -555,6 +613,7 @@ impl Parser {
 
         FunctionDecl {
             name,
+            exported: false,
             type_params,
             type_param_bounds,
             params,

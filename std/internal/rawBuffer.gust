@@ -2,7 +2,7 @@ from ../option import { Option }
 
 // RawBuffer is an internal storage primitive. Its methods are lowered by gustc,
 // while collection behaviour remains in the standard library.
-struct RawBuffer<T> {
+export struct RawBuffer<T> {
     // Allocate storage for up to capacity elements.
     static fn withCapacity(capacity: usize): Self => RawBuffer<T> {}
 

@@ -16,6 +16,7 @@ impl Parser {
                 Some(
                     Keyword::From
                         | Keyword::Enum
+                        | Keyword::Export
                         | Keyword::Struct
                         | Keyword::Trait
                         | Keyword::Impl

@@ -67,6 +67,34 @@ fn main() {
 }
 
 #[test]
+fn export_marks_top_level_declarations() {
+    let source = r#"export struct External {}
+
+export fn helper(): string => "ok"
+
+fn main() {
+    io.println(helper())
+}"#;
+    let result = check_source(source);
+
+    assert!(
+        !result.has_errors(),
+        "expected exported declarations to validate, got {:?}",
+        result.diagnostics
+    );
+
+    let Item::Struct(struct_) = &result.program.items[0] else {
+        panic!("expected struct declaration");
+    };
+    assert!(struct_.exported);
+
+    let Item::Function(function) = &result.program.items[1] else {
+        panic!("expected function declaration");
+    };
+    assert!(function.exported);
+}
+
+#[test]
 fn module_namespaces_parse_and_suppress_unknown_member_errors() {
     let source = r#"from package import package
 
