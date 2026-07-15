@@ -1,5 +1,5 @@
-from ../std/arrayList import { ArrayList }
-from ../std/iter import { Iterator }
+from ../std/src/arrayList import { ArrayList }
+from ../std/src/iter import { Iterator }
 
 fn main() {
     let mut values = [1, 2, 3]

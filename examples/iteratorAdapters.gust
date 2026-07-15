@@ -1,4 +1,4 @@
-from ../std/arrayList import { ArrayList }
+from ../std/src/arrayList import { ArrayList }
 
 fn main() {
     let values = [1, 2, 3, 4, 5]

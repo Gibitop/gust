@@ -8,6 +8,36 @@ First toolchain will be implemented in the rust programming language. Later the 
 
 Minimal gust project contains a single `.gust` file with a `main` function
 
+A full Gust project contains `project.yaml` and a `src` directory. `src/main.gust` is the
+executable entry point used when compiling a project directory. It must define the program's
+`main` function, and it is not special when the project is used only as a dependency.
+
+`src/lib.gust` is the package root module used by bare dependency imports. If another project
+declares `helper: fs:../helper`, then `from helper import { value }` loads
+`helper/src/lib.gust`. A dependency may also expose submodules directly:
+`from helper/path import { value }` loads `helper/src/path.gust`. A project can contain both
+`main.gust` and `lib.gust` when it is both executable and importable. Library-only projects do not
+need `main.gust`; executable-only projects do not need `lib.gust` unless consumers import the
+package root.
+
+Compiling a `.gust` file still works without a full project; if the file is inside a directory tree
+with `project.yaml`, dependency resolution uses that project as the package root.
+
+`project.yaml` may declare package dependencies:
+
+```yaml
+dependencies:
+  helper: fs:../helper
+```
+
+For now, only `fs:` dependencies are supported. The path may be absolute or relative to the
+declaring project's root, and it must point to another full Gust project. A package import resolves
+through the importing package's own dependency table.
+Dependencies keep their own dependency scopes, so an application and one of its dependencies may
+resolve the same dependency name to different packages. Internal module names include the package
+root and source-relative module path so package instances do not collide.
+Relative imports inside full projects must stay under that package's `src` directory.
+
 ## Modules
 
 Local modules use relative paths and named imports. A relative import without an extension resolves
@@ -25,7 +55,7 @@ deterministic internal names derived from their import path so declarations with
 name in different modules do not collide. Only names listed by an importing module are added to
 that module's scope. Extension functions follow the same rule and retain real-member precedence.
 
-Package module resolution is not implemented yet. Import cycles are rejected.
+Package module resolution supports direct `fs:` project dependencies. Import cycles are rejected.
 
 Unexported top-level declarations remain visible inside their declaring module and are still linked
 when an exported declaration uses them, but other modules cannot import them by name or access them
@@ -33,11 +63,12 @@ through a namespace import.
 
 ## Standard library development
 
-The source-level standard library lives in the repository-root `std` directory. Until package
-module resolution is introduced, Gust code in this repository imports standard-library modules
-through ordinary relative paths, such as `from ../std/iter import { Iterator }`. Import paths use
-`/` as their separator. Standard-library modules may import one another using relative paths.
-Gust source filenames use camelCase.
+The source-level standard library lives in the repository-root `std` project, with source files
+under `std/src`. Gust projects may depend on it with `std: fs:<path-to-repo>/std` and import modules
+such as `from std/iter import { Iterator }`. Non-project examples may still import standard-library
+modules through ordinary relative paths, such as `from ../std/src/iter import { Iterator }`.
+Import paths use `/` as their separator. Standard-library modules may import one another using
+relative paths. Gust source filenames use camelCase.
 
 Fully compiler-owned primitive types, such as numeric types, `char`, and `string`, do not have source-level
 standard-library declarations for their intrinsic members. This keeps operations that are always
@@ -54,7 +85,7 @@ evaluation. Collection behaviour therefore remains standard-library code.
 
 `FromIterator<type Item: T>` is a separate standard-library construction trait for iterators. `ArrayList<T>`
 implements both traits. The internal `RawBuffer<T>` storage type is the only collection-specific
-runtime primitive; its compiler-implemented declaration lives in `std/internal/rawBuffer.gust`.
+runtime primitive; its compiler-implemented declaration lives in `std/src/internal/rawBuffer.gust`.
 Its allocation and typed storage operations are lowered by the executable backend so future GC
 integration stays behind that boundary.
 
@@ -73,9 +104,9 @@ vtable entries. `Iterator.next` remains dynamically dispatched through the itera
 The adapter structs are named `MapIterator` and `FilterIterator` to distinguish them from
 map-like collections and filter values.
 
-`FromIterator` is declared alongside `Iterator` in `std/iter.gust`, avoiding an import cycle while
+`FromIterator` is declared alongside `Iterator` in `std/src/iter.gust`, avoiding an import cycle while
 allowing `collect` to be a provided iterator method. `FromElements` remains in
-`std/collection.gust`.
+`std/src/collection.gust`.
 
 ## Indexed access
 
@@ -127,7 +158,7 @@ the standard library as the necessary string and Unicode primitives become avail
 
 `StringBuilder` is a standard-library mutable construction type. The compiler supplies only its
 opaque growable UTF-8 byte storage and the bridge from `build()` to immutable `string`; its
-compiler-implemented declaration and API live in `std/internal/stringBuilder.gust`.
+compiler-implemented declaration and API live in `std/src/internal/stringBuilder.gust`.
 
 The current C backend may temporarily leak heap-allocated string concat results. Keep allocation isolated behind Gust-shaped runtime helpers, so raw `malloc` usage can later be replaced by GC allocation.
 
@@ -227,7 +258,7 @@ Bounded range literals use Rust-shaped syntax. `start..end` creates an exclusive
 `start..=end` creates an inclusive `RangeInclusive`. The first implementation supports `i32`
 endpoints and requires the corresponding standard-library range types to be imported. Both range
 types implement `Iterable<type Item: i32>` through standard-library code, so `for value in 0..10` works when
-`std/range.gust` is part of the loaded module graph. Open-ended and full ranges are not implemented
+`std/src/range.gust` is part of the loaded module graph. Open-ended and full ranges are not implemented
 yet.
 
 ## Literal match patterns

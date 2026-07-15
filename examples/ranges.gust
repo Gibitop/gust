@@ -1,4 +1,4 @@
-from ../std/range import { Range, RangeInclusive }
+from ../std/src/range import { Range, RangeInclusive }
 
 fn label(value: i32) {
     return match value {

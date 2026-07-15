@@ -73,6 +73,13 @@ struct SourceFile {
     offset: usize,
 }
 
+struct Package {
+    root: PathBuf,
+    src: PathBuf,
+    project: bool,
+    dependencies: HashMap<String, usize>,
+}
+
 struct Module {
     path: PathBuf,
     key: String,
@@ -96,23 +103,65 @@ struct Export {
 }
 
 pub fn check_project(path: &Path) -> Result<ProjectCompileResult, String> {
-    let entry_path = if path.is_dir() {
-        path.join("main.gust")
-    } else {
-        path.to_path_buf()
-    };
-    let entry_path = entry_path.canonicalize().map_err(|error| {
+    let requested_path = path;
+    let requested_path = requested_path.canonicalize().map_err(|error| {
         format!(
-            "failed to resolve entry module `{}`: {error}",
-            entry_path.display()
+            "failed to resolve entry path `{}`: {error}",
+            requested_path.display()
         )
     })?;
-    let root = entry_path
-        .parent()
-        .unwrap_or_else(|| Path::new("."))
-        .to_path_buf();
-    let mut loader = ProjectLoader::new();
-    loader.load_module(entry_path, "<entry>".to_string(), true, None);
+    let project_root = if requested_path.is_dir() && requested_path.join("project.yaml").is_file() {
+        Some(requested_path.clone())
+    } else if requested_path.is_file() {
+        find_project_root(requested_path.parent().unwrap_or_else(|| Path::new(".")))
+    } else {
+        None
+    };
+
+    let (root, entry_path, root_package) = if let Some(project_root) = project_root {
+        let mut packages = Vec::new();
+        let root_package = load_package(&project_root, &mut packages)?;
+        let entry_path = if path.is_dir() {
+            packages[root_package].src.join("main.gust")
+        } else {
+            requested_path
+        };
+        let entry_path = entry_path.canonicalize().map_err(|error| {
+            format!(
+                "failed to resolve entry module `{}`: {error}",
+                entry_path.display()
+            )
+        })?;
+        (project_root, entry_path, (root_package, packages))
+    } else {
+        let entry_path = if requested_path.is_dir() {
+            requested_path.join("main.gust")
+        } else {
+            requested_path
+        };
+        let entry_path = entry_path.canonicalize().map_err(|error| {
+            format!(
+                "failed to resolve entry module `{}`: {error}",
+                entry_path.display()
+            )
+        })?;
+        let root = entry_path
+            .parent()
+            .unwrap_or_else(|| Path::new("."))
+            .to_path_buf();
+        let packages = vec![Package {
+            root: root.clone(),
+            src: root.clone(),
+            project: false,
+            dependencies: HashMap::new(),
+        }];
+        (root, entry_path, (0, packages))
+    };
+
+    let (root_package, packages) = root_package;
+    let mut loader = ProjectLoader::new(packages);
+    let key = loader.module_key(root_package, &entry_path);
+    loader.load_module(entry_path, key, root_package, true, None);
     if let Some(error) = loader.load_error {
         return Err(error);
     }
@@ -142,6 +191,146 @@ pub fn check_project(path: &Path) -> Result<ProjectCompileResult, String> {
             root,
         },
     })
+}
+
+fn find_project_root(path: &Path) -> Option<PathBuf> {
+    for ancestor in path.ancestors() {
+        if ancestor.join("project.yaml").is_file() {
+            return ancestor.canonicalize().ok();
+        }
+    }
+
+    None
+}
+
+fn load_package(root: &Path, packages: &mut Vec<Package>) -> Result<usize, String> {
+    let root = root.canonicalize().map_err(|error| {
+        format!(
+            "failed to resolve Gust project `{}`: {error}",
+            root.display()
+        )
+    })?;
+    if let Some(index) = packages.iter().position(|package| package.root == root) {
+        return Ok(index);
+    }
+
+    let manifest_path = root.join("project.yaml");
+    if !manifest_path.is_file() {
+        return Err(format!(
+            "Gust project `{}` does not contain project.yaml",
+            root.display()
+        ));
+    }
+
+    let src = root.join("src");
+    if !src.is_dir() {
+        return Err(format!(
+            "Gust project `{}` does not contain a src directory",
+            root.display()
+        ));
+    }
+
+    let index = packages.len();
+    packages.push(Package {
+        root: root.clone(),
+        src: src.clone(),
+        project: true,
+        dependencies: HashMap::new(),
+    });
+
+    let dependency_specs = read_project_dependencies(&manifest_path)?;
+    let mut dependencies = HashMap::new();
+    for (name, spec) in dependency_specs {
+        let Some(path) = spec.strip_prefix("fs:") else {
+            return Err(format!(
+                "{}: dependency `{name}` uses unsupported source `{spec}`",
+                manifest_path.display()
+            ));
+        };
+        let dependency_root = if Path::new(path).is_absolute() {
+            PathBuf::from(path)
+        } else {
+            root.join(path)
+        };
+        let dependency_index = load_package(&dependency_root, packages)?;
+        dependencies.insert(name, dependency_index);
+    }
+    packages[index].dependencies = dependencies;
+
+    Ok(index)
+}
+
+fn read_project_dependencies(path: &Path) -> Result<Vec<(String, String)>, String> {
+    let source = fs::read_to_string(path)
+        .map_err(|error| format!("failed to read `{}`: {error}", path.display()))?;
+    let mut dependencies = Vec::new();
+    let mut in_dependencies = false;
+    let mut dependencies_indent = 0;
+
+    for (line_index, line) in source.lines().enumerate() {
+        let line_number = line_index + 1;
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            continue;
+        }
+
+        let indent = line.len() - line.trim_start().len();
+        if !in_dependencies {
+            if indent == 0 && trimmed == "dependencies:" {
+                in_dependencies = true;
+                dependencies_indent = indent;
+                continue;
+            }
+            if indent == 0 && trimmed == "dependencies: {}" {
+                continue;
+            }
+            continue;
+        }
+
+        if indent <= dependencies_indent {
+            in_dependencies = false;
+            if indent == 0 && trimmed == "dependencies:" {
+                in_dependencies = true;
+                dependencies_indent = indent;
+            }
+            continue;
+        }
+
+        let Some((name, value)) = trimmed.split_once(':') else {
+            return Err(format!(
+                "{}:{line_number}: expected `name: fs:path` dependency entry",
+                path.display()
+            ));
+        };
+        let name = name.trim();
+        let value = value.trim();
+        if name.is_empty() || value.is_empty() {
+            return Err(format!(
+                "{}:{line_number}: expected `name: fs:path` dependency entry",
+                path.display()
+            ));
+        }
+        if dependencies.iter().any(|(existing, _)| existing == name) {
+            return Err(format!(
+                "{}:{line_number}: duplicate dependency `{name}`",
+                path.display()
+            ));
+        }
+        dependencies.push((name.to_string(), unquote_yaml_scalar(value)));
+    }
+
+    Ok(dependencies)
+}
+
+fn unquote_yaml_scalar(value: &str) -> String {
+    if value.len() >= 2
+        && ((value.starts_with('"') && value.ends_with('"'))
+            || (value.starts_with('\'') && value.ends_with('\'')))
+    {
+        return value[1..value.len() - 1].to_string();
+    }
+
+    value.to_string()
 }
 
 fn relative_source_path(root: &Path, path: &Path) -> String {

@@ -1,6 +1,10 @@
 source=../examples/$1.gust
 if [ -d ../examples/$1 ]; then
-    source=../examples/$1/main.gust
+    if [ -f ../examples/$1/project.yaml ]; then
+        source=../examples/$1
+    else
+        source=../examples/$1/main.gust
+    fi
 fi
 
 mkdir -p ../examples/build/$1

@@ -1,7 +1,8 @@
 struct ProjectLoader {
     modules: Vec<Module>,
-    module_indexes: HashMap<PathBuf, usize>,
-    loading: HashSet<PathBuf>,
+    module_indexes: HashMap<(usize, PathBuf), usize>,
+    loading: HashSet<(usize, PathBuf)>,
+    packages: Vec<Package>,
     sources: Vec<SourceFile>,
     diagnostics: Vec<Diagnostic>,
     next_offset: usize,
@@ -9,11 +10,12 @@ struct ProjectLoader {
 }
 
 impl ProjectLoader {
-    fn new() -> Self {
+    fn new(packages: Vec<Package>) -> Self {
         Self {
             modules: Vec::new(),
             module_indexes: HashMap::new(),
             loading: HashSet::new(),
+            packages,
             sources: Vec::new(),
             diagnostics: Vec::new(),
             next_offset: 0,
@@ -25,20 +27,22 @@ impl ProjectLoader {
         &mut self,
         path: PathBuf,
         key: String,
+        package: usize,
         entry: bool,
         import_span: Option<Span>,
     ) -> Option<usize> {
-        if self.loading.contains(&path) {
+        let module_id = (package, path.clone());
+        if self.loading.contains(&module_id) {
             if let Some(span) = import_span {
                 self.diagnostics.push(Diagnostic::error(
                     span,
                     format!("module import cycle reaches `{}`", path.display()),
                 ));
             }
-            return self.module_indexes.get(&path).copied();
+            return self.module_indexes.get(&module_id).copied();
         }
 
-        if let Some(index) = self.module_indexes.get(&path) {
+        if let Some(index) = self.module_indexes.get(&module_id) {
             return Some(*index);
         }
 
@@ -79,8 +83,8 @@ impl ProjectLoader {
         shift_program(&mut program, offset);
 
         let index = self.modules.len();
-        self.module_indexes.insert(path.clone(), index);
-        self.loading.insert(path.clone());
+        self.module_indexes.insert(module_id.clone(), index);
+        self.loading.insert(module_id.clone());
         let imports = program
             .items
             .iter()
@@ -108,51 +112,105 @@ impl ProjectLoader {
         for import_index in 0..import_count {
             let import_path = self.modules[index].imports[import_index].path.clone();
             let span = self.modules[index].imports[import_index].span;
-            let Some(resolved_path) = resolve_import_path(parent, &import_path) else {
-                self.diagnostics.push(Diagnostic::error(
-                    span,
-                    format!(
-                        "package module `{import_path}` is not supported yet; use a relative module path"
-                    ),
-                ));
+            let Some((resolved_package, resolved_path)) =
+                self.resolve_import(package, parent, &import_path, span)
+            else {
                 continue;
             };
-            let resolved_path = match resolved_path.canonicalize() {
-                Ok(path) => path,
-                Err(error) => {
-                    self.diagnostics.push(Diagnostic::error(
-                        span,
-                        format!(
-                            "failed to resolve module `{}`: {error}",
-                            resolved_path.display()
-                        ),
-                    ));
-                    continue;
-                }
-            };
-            let target = self.load_module(
-                resolved_path,
-                format!("{key}/{import_path}"),
-                false,
-                Some(span),
-            );
+            let resolved_key = self.module_key(resolved_package, &resolved_path);
+            let target =
+                self.load_module(resolved_path, resolved_key, resolved_package, false, Some(span));
             self.modules[index].imports[import_index].target = target;
         }
 
-        self.loading.remove(&path);
+        self.loading.remove(&module_id);
         Some(index)
     }
-}
 
-fn resolve_import_path(parent: &Path, import_path: &str) -> Option<PathBuf> {
-    if !import_path.starts_with('.') {
-        return None;
+    fn resolve_import(
+        &mut self,
+        package: usize,
+        parent: &Path,
+        import_path: &str,
+        span: Span,
+    ) -> Option<(usize, PathBuf)> {
+        if import_path.starts_with('.') {
+            let mut path = parent.join(import_path);
+            if path.extension().is_none() {
+                path.set_extension("gust");
+            }
+            let path = self.canonicalize_import_path(path, span)?;
+            if self.packages[package].project && !path.starts_with(&self.packages[package].src) {
+                self.diagnostics.push(Diagnostic::error(
+                    span,
+                    format!(
+                        "relative import `{import_path}` escapes project source directory `{}`",
+                        self.packages[package].src.display()
+                    ),
+                ));
+                return None;
+            }
+            return Some((package, path));
+        }
+
+        let (dependency_name, module_path) = import_path
+            .split_once('/')
+            .map_or((import_path, ""), |(dependency_name, module_path)| {
+                (dependency_name, module_path)
+            });
+        let Some(&dependency_package) = self.packages[package].dependencies.get(dependency_name)
+        else {
+            self.diagnostics.push(Diagnostic::error(
+                span,
+                format!("unknown package dependency `{dependency_name}`"),
+            ));
+            return None;
+        };
+
+        let mut path = self.packages[dependency_package].src.clone();
+        if module_path.is_empty() {
+            path.push("lib");
+        } else {
+            path.push(module_path);
+        }
+        if path.extension().is_none() {
+            path.set_extension("gust");
+        }
+        let path = self.canonicalize_import_path(path, span)?;
+        if !path.starts_with(&self.packages[dependency_package].src) {
+            self.diagnostics.push(Diagnostic::error(
+                span,
+                format!(
+                    "package import `{import_path}` resolves outside dependency source directory `{}`",
+                    self.packages[dependency_package].src.display()
+                ),
+            ));
+            return None;
+        }
+
+        Some((dependency_package, path))
     }
 
-    let mut path = parent.join(import_path);
-    if path.extension().is_none() {
-        path.set_extension("gust");
+    fn canonicalize_import_path(&mut self, path: PathBuf, span: Span) -> Option<PathBuf> {
+        match path.canonicalize() {
+            Ok(path) => Some(path),
+            Err(error) => {
+                self.diagnostics.push(Diagnostic::error(
+                    span,
+                    format!("failed to resolve module `{}`: {error}", path.display()),
+                ));
+                None
+            }
+        }
     }
-    Some(path)
-}
 
+    fn module_key(&self, package: usize, path: &Path) -> String {
+        let package = &self.packages[package];
+        let module_path = path.strip_prefix(&package.src).unwrap_or(path);
+        format!(
+            "{}:{}",
+            package.root.to_string_lossy(),
+            module_path.to_string_lossy()
+        )
+    }
+}

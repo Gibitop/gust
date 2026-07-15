@@ -106,6 +106,113 @@ fn directory_entry_uses_main_gust() {
 }
 
 #[test]
+fn gust_project_directory_entry_uses_src_main_gust() {
+    let project = TempProject::new();
+    project.write("project.yaml", "dependencies: {}\n");
+    project.write("src/main.gust", "fn main() {}");
+
+    let result = check_project(&project.path).expect("Gust project directory should load");
+
+    assert!(result.diagnostics.is_empty());
+}
+
+#[test]
+fn gust_project_imports_fs_dependency_by_dependency_name() {
+    let app = TempProject::new();
+    let dependency = TempProject::new();
+    dependency.write("project.yaml", "dependencies: {}\n");
+    dependency.write(
+        "src/lib.gust",
+        r#"export fn message(): string => "from dependency""#,
+    );
+    app.write(
+        "project.yaml",
+        &format!(
+            "dependencies:\n  helper: fs:{}\n",
+            dependency.path.display()
+        ),
+    );
+    app.write(
+        "src/main.gust",
+        r#"from helper import { message }
+
+fn main() {
+    io.println(message())
+}"#,
+    );
+
+    let result = check_project(&app.path).expect("Gust project should load");
+    assert!(
+        result.diagnostics.is_empty(),
+        "expected dependency import to validate, got {:?}",
+        result.diagnostics
+    );
+
+    lower_program(&result.program).expect("dependency import should lower");
+}
+
+#[test]
+fn gust_project_dependencies_resolve_their_own_dependencies() {
+    let app = TempProject::new();
+    app.write("deps/shared/project.yaml", "dependencies: {}\n");
+    app.write(
+        "deps/shared/src/lib.gust",
+        r#"export fn label(): string => "shared""#,
+    );
+    app.write(
+        "deps/feature/project.yaml",
+        "dependencies:\n  shared: fs:../shared\n",
+    );
+    app.write(
+        "deps/feature/src/lib.gust",
+        r#"from shared import { label }
+
+export fn featureLabel(): string => label()"#,
+    );
+    app.write(
+        "project.yaml",
+        "dependencies:\n  feature: fs:deps/feature\n",
+    );
+    app.write(
+        "src/main.gust",
+        r#"from feature import { featureLabel }
+
+fn main() {
+    io.println(featureLabel())
+}"#,
+    );
+
+    let result = check_project(&app.path).expect("Gust project should load");
+    assert!(
+        result.diagnostics.is_empty(),
+        "expected nested dependency import to validate, got {:?}",
+        result.diagnostics
+    );
+
+    lower_program(&result.program).expect("nested dependency import should lower");
+}
+
+#[test]
+fn unknown_package_dependencies_are_reported_at_the_import() {
+    let project = TempProject::new();
+    project.write("project.yaml", "dependencies: {}\n");
+    project.write(
+        "src/main.gust",
+        r#"from missing import { value }
+
+fn main() {}"#,
+    );
+
+    let result = check_project(&project.path).expect("Gust project should load");
+
+    assert!(result.diagnostics.iter().any(|diagnostic| {
+        diagnostic
+            .message
+            .contains("unknown package dependency `missing`")
+    }));
+}
+
+#[test]
 fn panic_stack_locations_use_paths_relative_to_compilation_root() {
     let project = TempProject::new();
     project.write(

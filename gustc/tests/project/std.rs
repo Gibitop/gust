@@ -1,8 +1,8 @@
 #[test]
 fn root_standard_library_modules_link_through_relative_imports() {
     let project = TempProject::new();
-    project.write("std/option.gust", include_str!("../../../std/option.gust"));
-    project.write("std/iter.gust", include_str!("../../../std/iter.gust"));
+    project.write("std/option.gust", include_str!("../../../std/src/option.gust"));
+    project.write("std/iter.gust", include_str!("../../../std/src/iter.gust"));
     project.write(
         "examples/main.gust",
         r#"from ../std/iter import { Iterator }
@@ -44,8 +44,8 @@ fn main() {
 #[test]
 fn result_methods_link_and_run() {
     let project = TempProject::new();
-    project.write("std/option.gust", include_str!("../../../std/option.gust"));
-    project.write("std/result.gust", include_str!("../../../std/result.gust"));
+    project.write("std/option.gust", include_str!("../../../std/src/option.gust"));
+    project.write("std/result.gust", include_str!("../../../std/src/result.gust"));
     project.write(
         "main.gust",
         r#"from ./std/option import { Option }
@@ -106,8 +106,8 @@ fn main() {
 #[test]
 fn result_expect_panics_with_the_provided_message() {
     let project = TempProject::new();
-    project.write("std/option.gust", include_str!("../../../std/option.gust"));
-    project.write("std/result.gust", include_str!("../../../std/result.gust"));
+    project.write("std/option.gust", include_str!("../../../std/src/option.gust"));
+    project.write("std/result.gust", include_str!("../../../std/src/result.gust"));
     project.write(
         "main.gust",
         r#"from ./std/result import { Result }
@@ -182,7 +182,7 @@ fn string_builder_uses_growable_runtime_storage() {
     let project = TempProject::new();
     project.write(
         "std/internal/stringBuilder.gust",
-        include_str!("../../../std/internal/stringBuilder.gust"),
+        include_str!("../../../std/src/internal/stringBuilder.gust"),
     );
     project.write(
         "examples/main.gust",
@@ -213,14 +213,14 @@ fn main() {
 #[test]
 fn std_internal_declares_compiler_backed_storage_types() {
     let project = TempProject::new();
-    project.write("std/option.gust", include_str!("../../../std/option.gust"));
+    project.write("std/option.gust", include_str!("../../../std/src/option.gust"));
     project.write(
         "std/internal/rawBuffer.gust",
-        include_str!("../../../std/internal/rawBuffer.gust"),
+        include_str!("../../../std/src/internal/rawBuffer.gust"),
     );
     project.write(
         "std/internal/stringBuilder.gust",
-        include_str!("../../../std/internal/stringBuilder.gust"),
+        include_str!("../../../std/src/internal/stringBuilder.gust"),
     );
     project.write(
         "main.gust",
@@ -264,21 +264,21 @@ fn main() {
 #[test]
 fn collection_literals_lower_through_from_elements() {
     let project = TempProject::new();
-    project.write("std/option.gust", include_str!("../../../std/option.gust"));
-    project.write("std/result.gust", include_str!("../../../std/result.gust"));
-    project.write("std/iter.gust", include_str!("../../../std/iter.gust"));
-    project.write("std/index.gust", include_str!("../../../std/index.gust"));
+    project.write("std/option.gust", include_str!("../../../std/src/option.gust"));
+    project.write("std/result.gust", include_str!("../../../std/src/result.gust"));
+    project.write("std/iter.gust", include_str!("../../../std/src/iter.gust"));
+    project.write("std/index.gust", include_str!("../../../std/src/index.gust"));
     project.write(
         "std/collection.gust",
-        include_str!("../../../std/collection.gust"),
+        include_str!("../../../std/src/collection.gust"),
     );
     project.write(
         "std/internal/rawBuffer.gust",
-        include_str!("../../../std/internal/rawBuffer.gust"),
+        include_str!("../../../std/src/internal/rawBuffer.gust"),
     );
     project.write(
         "std/arrayList.gust",
-        include_str!("../../../std/arrayList.gust"),
+        include_str!("../../../std/src/arrayList.gust"),
     );
     project.write(
         "main.gust",
@@ -373,15 +373,15 @@ fn main() {
 #[test]
 fn gc_stress_traces_array_list_raw_buffer_elements() {
     let project = TempProject::new();
-    project.write("std/option.gust", include_str!("../../../std/option.gust"));
-    project.write("std/result.gust", include_str!("../../../std/result.gust"));
-    project.write("std/collection.gust", include_str!("../../../std/collection.gust"));
-    project.write("std/index.gust", include_str!("../../../std/index.gust"));
-    project.write("std/iter.gust", include_str!("../../../std/iter.gust"));
-    project.write("std/arrayList.gust", include_str!("../../../std/arrayList.gust"));
+    project.write("std/option.gust", include_str!("../../../std/src/option.gust"));
+    project.write("std/result.gust", include_str!("../../../std/src/result.gust"));
+    project.write("std/collection.gust", include_str!("../../../std/src/collection.gust"));
+    project.write("std/index.gust", include_str!("../../../std/src/index.gust"));
+    project.write("std/iter.gust", include_str!("../../../std/src/iter.gust"));
+    project.write("std/arrayList.gust", include_str!("../../../std/src/arrayList.gust"));
     project.write(
         "std/internal/rawBuffer.gust",
-        include_str!("../../../std/internal/rawBuffer.gust"),
+        include_str!("../../../std/src/internal/rawBuffer.gust"),
     );
     project.write(
         "main.gust",
@@ -461,21 +461,21 @@ fn main() {
 #[test]
 fn iterator_adapters_map_filter_and_collect() {
     let project = TempProject::new();
-    project.write("std/option.gust", include_str!("../../../std/option.gust"));
-    project.write("std/result.gust", include_str!("../../../std/result.gust"));
-    project.write("std/iter.gust", include_str!("../../../std/iter.gust"));
-    project.write("std/index.gust", include_str!("../../../std/index.gust"));
+    project.write("std/option.gust", include_str!("../../../std/src/option.gust"));
+    project.write("std/result.gust", include_str!("../../../std/src/result.gust"));
+    project.write("std/iter.gust", include_str!("../../../std/src/iter.gust"));
+    project.write("std/index.gust", include_str!("../../../std/src/index.gust"));
     project.write(
         "std/collection.gust",
-        include_str!("../../../std/collection.gust"),
+        include_str!("../../../std/src/collection.gust"),
     );
     project.write(
         "std/internal/rawBuffer.gust",
-        include_str!("../../../std/internal/rawBuffer.gust"),
+        include_str!("../../../std/src/internal/rawBuffer.gust"),
     );
     project.write(
         "std/arrayList.gust",
-        include_str!("../../../std/arrayList.gust"),
+        include_str!("../../../std/src/arrayList.gust"),
     );
     project.write(
         "main.gust",
@@ -544,21 +544,21 @@ fn main() {
 
 fn assert_array_list_index_panic(main: &str, name: &str) {
     let project = TempProject::new();
-    project.write("std/option.gust", include_str!("../../../std/option.gust"));
-    project.write("std/result.gust", include_str!("../../../std/result.gust"));
-    project.write("std/iter.gust", include_str!("../../../std/iter.gust"));
-    project.write("std/index.gust", include_str!("../../../std/index.gust"));
+    project.write("std/option.gust", include_str!("../../../std/src/option.gust"));
+    project.write("std/result.gust", include_str!("../../../std/src/result.gust"));
+    project.write("std/iter.gust", include_str!("../../../std/src/iter.gust"));
+    project.write("std/index.gust", include_str!("../../../std/src/index.gust"));
     project.write(
         "std/collection.gust",
-        include_str!("../../../std/collection.gust"),
+        include_str!("../../../std/src/collection.gust"),
     );
     project.write(
         "std/internal/rawBuffer.gust",
-        include_str!("../../../std/internal/rawBuffer.gust"),
+        include_str!("../../../std/src/internal/rawBuffer.gust"),
     );
     project.write(
         "std/arrayList.gust",
-        include_str!("../../../std/arrayList.gust"),
+        include_str!("../../../std/src/arrayList.gust"),
     );
     project.write("main.gust", main);
 
@@ -593,9 +593,9 @@ fn assert_array_list_index_panic(main: &str, name: &str) {
 #[test]
 fn range_literals_iterate_with_project_modules() {
     let project = TempProject::new();
-    project.write("std/option.gust", include_str!("../../../std/option.gust"));
-    project.write("std/iter.gust", include_str!("../../../std/iter.gust"));
-    project.write("std/range.gust", include_str!("../../../std/range.gust"));
+    project.write("std/option.gust", include_str!("../../../std/src/option.gust"));
+    project.write("std/iter.gust", include_str!("../../../std/src/iter.gust"));
+    project.write("std/range.gust", include_str!("../../../std/src/range.gust"));
     project.write(
         "main.gust",
         r#"from ./std/range import { Range, RangeInclusive }

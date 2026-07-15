@@ -35,9 +35,13 @@ fn main() -> ExitCode {
 
     let requested_path = PathBuf::from(&path);
     let source_path = if requested_path.is_dir() {
-        requested_path.join("main.gust")
+        if requested_path.join("project.yaml").is_file() {
+            requested_path.clone()
+        } else {
+            requested_path.join("main.gust")
+        }
     } else {
-        requested_path
+        requested_path.clone()
     };
     let mut output_path = None;
     let mut emit_c_path = None;
@@ -87,6 +91,14 @@ fn main() -> ExitCode {
     }
 
     let output_path = output_path.unwrap_or_else(|| {
+        if source_path.is_dir() {
+            return source_path.join(
+                source_path
+                    .file_name()
+                    .unwrap_or_else(|| std::ffi::OsStr::new("main")),
+            );
+        }
+
         if let Some(stem) = source_path.file_stem() {
             source_path.with_file_name(stem)
         } else {
