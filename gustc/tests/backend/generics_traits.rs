@@ -68,6 +68,149 @@ fn main() {
 }
 
 #[test]
+fn executable_codegen_prunes_unreachable_generic_impl_methods() {
+    let result = check_source(
+        r#"struct RawBuffer<T> {
+    static fn withCapacity(capacity: usize): Self => RawBuffer<T> {}
+
+    fn capacity(): usize => 0
+
+    fn grow(mut self, capacity: usize) {}
+
+    fn write(mut self, index: usize, value: T) {}
+
+    fn read(index: usize): Option<T> => Option<T>.None
+}
+
+enum Option<T> {
+    Some(T)
+    None
+
+    fn expect(message: string): T {
+        match self {
+            Option.Some(value) => {
+                return value
+            },
+            Option.None => {
+                panic(message)
+            },
+        }
+    }
+}
+
+enum Result<T, E> {
+    Ok(T)
+    Err(E)
+
+    fn expect(message: string): T {
+        match self {
+            Result.Ok(value) => {
+                return value
+            },
+            Result.Err(_) => {
+                panic(message)
+            },
+        }
+    }
+}
+
+trait FromElements {
+    type Item
+    static fn withElementCapacity(capacity: usize): Self
+    fn add(mut self, value: Self.Item): void
+}
+
+trait Index {
+    type Output
+    fn index(index: usize): Self.Output
+}
+
+trait IndexSet {
+    type Value
+    fn indexSet(mut self, index: usize, value: Self.Value): void
+}
+
+struct ArrayList<T> {
+    storage: RawBuffer<T>
+    count: usize
+
+    static fn withCapacity(capacity: usize): Self => ArrayList<T> {
+        storage: RawBuffer.withCapacity(capacity),
+        count: 0,
+    }
+
+    fn ensureCapacity(mut self, required: usize) {
+        let current = self.storage.capacity()
+        if required <= current {
+            return
+        }
+        self.storage.grow(required)
+    }
+
+    fn len(): usize => self.count
+
+    fn get(index: usize): Option<T> => self.storage.read(index)
+
+    fn set(mut self, index: usize, value: T): Result<T, string> {
+        self.storage.write(index, value)
+        return Result.Ok(value)
+    }
+
+    fn push(mut self, value: T) {
+        self.ensureCapacity(self.count + 1)
+        self.storage.write(self.count, value)
+        self.count += 1
+    }
+}
+
+impl<T> FromElements for ArrayList<T> {
+    type Item: T
+    static fn withElementCapacity(capacity: usize): Self => ArrayList<T>.withCapacity(capacity)
+
+    fn add(mut self, value: T) {
+        self.push(value)
+    }
+}
+
+impl<T> Index for ArrayList<T> {
+    type Output: T
+    fn index(index: usize): T => self.get(index).expect("index out of bounds")
+}
+
+impl<T> IndexSet for ArrayList<T> {
+    type Value: T
+    fn indexSet(mut self, index: usize, value: T) {
+        self.set(index, value).expect("index out of bounds")
+    }
+}
+
+fn main() {
+    let mut values: ArrayList<u8> = [1]
+    values.push(2)
+    io.println(values.len().toString())
+}"#,
+    );
+
+    assert!(
+        !result.has_errors(),
+        "expected no frontend errors, got {:?}",
+        result.diagnostics
+    );
+
+    let lowered = lower_program(&result.program).expect("array list example should lower");
+    let source = emit_c(&lowered);
+
+    assert!(source.contains("// Gust function: ArrayList<u8>.push"));
+    assert!(source.contains("// Gust function: ArrayList<u8>.len"));
+    assert!(source.contains("// Gust function: trait ArrayList<u8>.add"));
+    assert!(!source.contains("// Gust function: ArrayList<u8>.get"));
+    assert!(!source.contains("// Gust function: ArrayList<u8>.set"));
+    assert!(!source.contains(".index"));
+    assert!(!source.contains(".indexSet"));
+    assert!(!source.contains("gust_rt_panic"));
+}
+
+#[test]
 fn generic_enum_specializations_emit_distinct_c_types_and_match_payloads() {
     let result = check_source(
         r#"enum Option<T> {

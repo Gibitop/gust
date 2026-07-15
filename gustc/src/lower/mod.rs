@@ -1,5 +1,5 @@
 use std::cell::RefCell;
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 
 use crate::ast::{
     BasicType, BinaryOp, Block, ElseBranch, Expr, ExprKind, FunctionBody, FunctionDecl, Item,
@@ -576,7 +576,7 @@ fn lower_monomorphized_program(program: &Program) -> Result<LoweredProgram, Vec<
         let mut traits = traits.into_values().collect::<Vec<_>>();
         traits.sort_by(|left, right| left.name.cmp(&right.name));
 
-        Ok(LoweredProgram {
+        Ok(prune_dead_lowered_items(LoweredProgram {
             structs,
             enums,
             traits,
@@ -584,13 +584,14 @@ fn lower_monomorphized_program(program: &Program) -> Result<LoweredProgram, Vec<
             closure_functions,
             statements,
             main_location: lower_source_location(main.span),
-        })
+        }))
     } else {
         Err(diagnostics)
     }
 }
 
 include!("ir.rs");
+include!("dce.rs");
 include!("context.rs");
 include!("names.rs");
 include!("items.rs");

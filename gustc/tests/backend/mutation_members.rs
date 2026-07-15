@@ -525,7 +525,7 @@ fn main() {
         lowered
             .functions
             .iter()
-            .any(|function| function.name == "extension Greeter.label")
+            .all(|function| function.name != "extension Greeter.label")
     );
     assert!(
         lowered
@@ -550,6 +550,7 @@ fn main() {
     assert_eq!(name, "Greeter.label");
 
     let source = emit_c(&lowered);
+    assert!(!source.contains("// Gust function: extension Greeter.label"));
     assert!(source.contains("// Gust function: extension Greeter.greeting"));
     assert!(source.contains("// Gust function: extension string.withSuffix"));
 }
