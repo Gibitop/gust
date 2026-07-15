@@ -16,7 +16,7 @@ fn main() {
     );
     project.write(
         "lib/greeting.gust",
-        r#"struct Greeter {
+        r#"export struct Greeter {
     name: string
 
     static fn new(name: string): Self => Self { name: name }
@@ -24,15 +24,15 @@ fn main() {
 
 fn punctuation(): string => "!"
 
-fn greeting(value: Greeter): string {
+export fn greeting(value: Greeter): string {
     return "Hello, " + value.name + punctuation()
 }
 
-enum Mood {
+export enum Mood {
     Happy
 }
 
-fn mood(): Mood => Mood.Happy"#,
+export fn mood(): Mood => Mood.Happy"#,
     );
 
     let result = check_project(&project.path("main.gust")).expect("project should load");
@@ -63,7 +63,7 @@ fn main() {
     );
     project.write(
         "producer.gust",
-        r#"trait Producer {
+        r#"export trait Producer {
     type Item
     fn next(): Self.Item
 }"#,
@@ -72,7 +72,7 @@ fn main() {
         "counter.gust",
         r#"from ./producer import { Producer }
 
-struct Counter {
+export struct Counter {
     value: i32
 }
 
@@ -118,7 +118,7 @@ fn main() {
     );
     project.write(
         "lib/helper.gust",
-        r#"fn fail() {
+        r#"export fn fail() {
     panic("from helper")
 }"#,
     );
@@ -159,7 +159,7 @@ fn main() {
     );
     project.write(
         "helper.gust",
-        r#"fn visible(): string => "visible"
+        r#"export fn visible(): string => "visible"
 fn hidden(): string => "hidden""#,
     );
 
@@ -199,6 +199,26 @@ fn main() {}"#,
 }
 
 #[test]
+fn private_top_level_declarations_are_not_exports() {
+    let project = TempProject::new();
+    project.write(
+        "main.gust",
+        r#"from ./helper import { secret }
+
+fn main() {}"#,
+    );
+    project.write("helper.gust", "fn secret() {}");
+
+    let result = check_project(&project.path("main.gust")).expect("project should load");
+
+    assert!(result.diagnostics.iter().any(|diagnostic| {
+        diagnostic
+            .message
+            .contains("does not export `secret`")
+    }));
+}
+
+#[test]
 fn imported_module_diagnostics_use_the_imported_file() {
     let project = TempProject::new();
     project.write(
@@ -209,7 +229,7 @@ fn main() {}"#,
     );
     project.write(
         "helper.gust",
-        r#"fn broken(): string {
+        r#"export fn broken(): string {
     return 1
 }"#,
     );
@@ -281,14 +301,14 @@ fn main() {
     );
     project.write(
         "extensions.gust",
-        r#"struct Greeter {
+        r#"export struct Greeter {
     name: string
 
     fn label(): string => "member"
 }
 
 fn Greeter.label(): string => "extension"
-fn string.withSuffix(suffix: string): string => self + suffix"#,
+export fn string.withSuffix(suffix: string): string => self + suffix"#,
     );
 
     let result = check_project(&project.path("main.gust")).expect("project should load");
@@ -314,7 +334,7 @@ fn main() {
     );
     project.write(
         "extensions.gust",
-        r#"fn marker(): string => "marker"
+        r#"export fn marker(): string => "marker"
 fn string.withSuffix(suffix: string): string => self + suffix"#,
     );
 
@@ -340,8 +360,8 @@ fn main() {}"#,
     );
     project.write(
         "helper.gust",
-        r#"fn first(): string => "first"
-fn second(): string => "second""#,
+        r#"export fn first(): string => "first"
+export fn second(): string => "second""#,
     );
 
     let result = check_project(&project.path("main.gust")).expect("project should load");
@@ -364,7 +384,7 @@ fn main() {
     helper.missing()
 }"#,
     );
-    project.write("helper.gust", "fn available() {}");
+    project.write("helper.gust", "export fn available() {}");
 
     let result = check_project(&project.path("main.gust")).expect("project should load");
 

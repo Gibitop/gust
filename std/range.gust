@@ -1,12 +1,12 @@
 from ./iter import { Iterable, Iterator }
 from ./option import { Option }
 
-struct Range {
+export struct Range {
     start: i32
     end: i32
 }
 
-struct RangeInclusive {
+export struct RangeInclusive {
     start: i32
     end: i32
 }

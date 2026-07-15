@@ -12,7 +12,7 @@ fn main() {
     );
     project.write(
         "box.gust",
-        r#"struct Box<T> {
+        r#"export struct Box<T> {
     value: T
 
     static fn new(value: T): Self => Self { value: value }
@@ -56,12 +56,12 @@ fn main() {
     );
     project.write(
         "option.gust",
-        r#"enum Option<T> {
+        r#"export enum Option<T> {
     Some(T)
     None
 }
 
-fn none(): Option<string> => Option.None"#,
+export fn none(): Option<string> => Option.None"#,
     );
 
     let result = check_project(&project.path("main.gust")).expect("project should load");
@@ -85,7 +85,10 @@ fn main() {
     io.println(identity("from module"))
 }"#,
     );
-    project.write("identity.gust", r#"fn identity<T>(value: T): T => value"#);
+    project.write(
+        "identity.gust",
+        r#"export fn identity<T>(value: T): T => value"#,
+    );
 
     let result = check_project(&project.path("main.gust")).expect("project should load");
     assert!(
@@ -117,11 +120,11 @@ fn main() {
     );
     project.write(
         "named.gust",
-        r#"trait Named<T> {
+        r#"export trait Named<T> {
     fn name(): T
 }
 
-struct Person {
+export struct Person {
     name: string
 
     static fn new(name: string): Self => Self { name: name }
@@ -157,11 +160,11 @@ fn main() {
     );
     project.write(
         "named.gust",
-        r#"trait Named<T> {
+        r#"export trait Named<T> {
     fn name(): T
 }
 
-struct Box<T> {
+export struct Box<T> {
     value: T
 
     static fn new(value: T): Self => Self { value: value }
@@ -197,11 +200,11 @@ fn main() {
     );
     project.write(
         "model.gust",
-        r#"trait Describe {
+        r#"export trait Describe {
     fn describe(): string
 }
 
-struct Person {
+export struct Person {
     name: string
 }"#,
     );
@@ -213,7 +216,7 @@ impl<T> Describe for T {
     fn describe() => "value"
 }
 
-fn first() {}"#,
+export fn first() {}"#,
     );
     project.write(
         "second.gust",
@@ -223,7 +226,7 @@ impl Describe for Person {
     fn describe() => self.name
 }
 
-fn second() {}"#,
+export fn second() {}"#,
     );
 
     let result = check_project(&project.path("main.gust")).expect("project should load");
@@ -251,7 +254,7 @@ fn main() {
     );
     project.write(
         "extensions.gust",
-        r#"struct Box<T> {
+        r#"export struct Box<T> {
     value: T
 }
 
@@ -260,9 +263,9 @@ struct Pair<T, U> {
     second: U
 }
 
-fn Box<T>.get(): T => self.value
+export fn Box<T>.get(): T => self.value
 
-static fn Box<T>.pair<U>(value: T, other: U): Pair<T, U> => Pair {
+export static fn Box<T>.pair<U>(value: T, other: U): Pair<T, U> => Pair {
     first: value,
     second: other,
 }"#,

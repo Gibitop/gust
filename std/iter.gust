@@ -1,6 +1,6 @@
 from ./option import { Option }
 
-trait Iterator {
+export trait Iterator {
     type Item
     fn next(mut self): Option<Self.Item>
 
@@ -17,12 +17,12 @@ trait Iterator {
     fn collect<C: FromIterator<type Item: Self.Item>>(): C => C.fromIterator(self)
 }
 
-trait Iterable {
+export trait Iterable {
     type Item
     fn iterator(): Iterator<type Item: Self.Item>
 }
 
-trait FromIterator {
+export trait FromIterator {
     type Item
     static fn fromIterator(mut iterator: Iterator<type Item: Self.Item>): Self
 }

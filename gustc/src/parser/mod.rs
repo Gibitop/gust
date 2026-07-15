@@ -37,12 +37,13 @@ impl Parser {
 
             match self.current_keyword() {
                 Some(Keyword::From) => items.push(Item::Import(self.parse_import())),
-                Some(Keyword::Enum) => items.push(Item::Enum(self.parse_enum())),
-                Some(Keyword::Struct) => items.push(Item::Struct(self.parse_struct())),
-                Some(Keyword::Trait) => items.push(Item::Trait(self.parse_trait())),
+                Some(Keyword::Export) => items.push(self.parse_export()),
+                Some(Keyword::Enum) => items.push(Item::Enum(self.parse_enum(false, None))),
+                Some(Keyword::Struct) => items.push(Item::Struct(self.parse_struct(false, None))),
+                Some(Keyword::Trait) => items.push(Item::Trait(self.parse_trait(false, None))),
                 Some(Keyword::Impl) => items.push(Item::Impl(self.parse_impl())),
-                Some(Keyword::Fn) => items.push(self.parse_top_level_function()),
-                Some(Keyword::Static) => items.push(self.parse_static_extension()),
+                Some(Keyword::Fn) => items.push(self.parse_top_level_function(false, None)),
+                Some(Keyword::Static) => items.push(self.parse_static_extension(false, None)),
                 Some(Keyword::Type) => {
                     self.error_here(
                         "associated-type definitions are only allowed inside trait impls",

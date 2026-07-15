@@ -57,6 +57,7 @@ pub struct ImportName {
 #[derive(Debug, Clone)]
 pub struct EnumDecl {
     pub name: String,
+    pub exported: bool,
     pub type_params: Vec<String>,
     pub type_param_bounds: Vec<TypeParamBound>,
     pub variants: Vec<EnumVariant>,
@@ -74,6 +75,7 @@ pub struct EnumVariant {
 #[derive(Debug, Clone)]
 pub struct StructDecl {
     pub name: String,
+    pub exported: bool,
     pub type_params: Vec<String>,
     pub type_param_bounds: Vec<TypeParamBound>,
     pub members: Vec<StructMember>,
@@ -83,6 +85,7 @@ pub struct StructDecl {
 #[derive(Debug, Clone)]
 pub struct TraitDecl {
     pub name: String,
+    pub exported: bool,
     pub type_params: Vec<String>,
     pub type_param_bounds: Vec<TypeParamBound>,
     pub associated_types: Vec<AssociatedTypeDecl>,
@@ -157,6 +160,7 @@ pub struct FieldDecl {
 #[derive(Debug, Clone)]
 pub struct ExtensionDecl {
     pub type_ref: TypeRef,
+    pub exported: bool,
     pub type_params: Vec<String>,
     pub type_param_bounds: Vec<TypeParamBound>,
     pub function: FunctionDecl,
@@ -167,6 +171,7 @@ pub struct ExtensionDecl {
 #[derive(Debug, Clone)]
 pub struct FunctionDecl {
     pub name: Option<String>,
+    pub exported: bool,
     pub type_params: Vec<String>,
     pub type_param_bounds: Vec<TypeParamBound>,
     pub params: Vec<Param>,
