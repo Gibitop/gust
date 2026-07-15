@@ -3,9 +3,9 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::ast::{
-    Block, ElseBranch, Expr, ExprKind, FunctionBody, FunctionDecl, ImportName, ImportNamespace,
-    Item, MatchBranch, MatchBranchBody, Param, Pattern, Program, Stmt, StmtKind, StructMember,
-    TypeRef,
+    BasicType, Block, ElseBranch, Expr, ExprKind, FunctionBody, FunctionDecl, ImportName,
+    ImportNamespace, Item, MatchBranch, MatchBranchBody, Param, Pattern, Program, Stmt, StmtKind,
+    StructMember, TypeRef,
 };
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::lexer::Lexer;
@@ -83,6 +83,7 @@ struct Package {
 struct Module {
     path: PathBuf,
     key: String,
+    package: usize,
     program: Program,
     imports: Vec<ResolvedImport>,
     entry: bool,
@@ -99,6 +100,7 @@ struct ResolvedImport {
 #[derive(Clone)]
 struct Export {
     internal_name: String,
+    package: usize,
     extension: bool,
 }
 

@@ -1,0 +1,3 @@
+dependencies:
+  foreignTraits: fs:./foreignTraits
+  foreignTypes: fs:./foreignTypes

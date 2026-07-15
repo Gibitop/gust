@@ -102,6 +102,7 @@ impl ProjectLoader {
         self.modules.push(Module {
             path: path.clone(),
             key: key.clone(),
+            package,
             program,
             imports,
             entry,

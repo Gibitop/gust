@@ -1,11 +1,13 @@
 fn link_modules(modules: &[Module], diagnostics: &mut Vec<Diagnostic>) -> Program {
     let mut exports = Vec::with_capacity(modules.len());
     let mut local_names = Vec::with_capacity(modules.len());
+    let mut local_name_packages = Vec::with_capacity(modules.len());
     let mut local_extensions = Vec::with_capacity(modules.len());
 
     for module in modules {
         let mut module_exports = HashMap::new();
         let mut module_names = HashMap::new();
+        let mut module_name_packages = HashMap::new();
         let mut module_extensions = HashMap::new();
         let mut declared_names = HashMap::new();
 
@@ -23,6 +25,7 @@ fn link_modules(modules: &[Module], diagnostics: &mut Vec<Diagnostic>) -> Progra
             if declaration.exported {
                 let export = Export {
                     internal_name: internal_name.clone(),
+                    package: module.package,
                     extension: declaration.extension,
                 };
                 module_exports.insert(declaration.name.to_string(), export);
@@ -49,15 +52,18 @@ fn link_modules(modules: &[Module], diagnostics: &mut Vec<Diagnostic>) -> Progra
                 module_extensions.insert(declaration.name.to_string(), internal_name);
             } else {
                 module_names.insert(declaration.name.to_string(), internal_name);
+                module_name_packages.insert(declaration.name.to_string(), module.package);
             }
         }
 
         exports.push(module_exports);
         local_names.push(module_names);
+        local_name_packages.push(module_name_packages);
         local_extensions.push(module_extensions);
     }
 
     let mut visible_names = local_names.clone();
+    let mut visible_name_packages = local_name_packages.clone();
     let mut visible_extensions = local_extensions.clone();
     let mut visible_namespaces = vec![HashMap::new(); modules.len()];
     for (module_index, module) in modules.iter().enumerate() {
@@ -119,11 +125,21 @@ fn link_modules(modules: &[Module], diagnostics: &mut Vec<Diagnostic>) -> Progra
                             "imported name `{local_name}` conflicts with another name in this module"
                         ),
                     ));
+                } else {
+                    visible_name_packages[module_index].insert(local_name.clone(), export.package);
                 }
             }
         }
     }
 
+    if diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.severity == Severity::Error)
+    {
+        return Program { items: Vec::new() };
+    }
+
+    validate_foreign_impls(modules, &visible_name_packages, diagnostics);
     if diagnostics
         .iter()
         .any(|diagnostic| diagnostic.severity == Severity::Error)
@@ -224,4 +240,62 @@ fn stable_name_hash(name: &str) -> u32 {
     }
 
     hash
+}
+
+fn validate_foreign_impls(
+    modules: &[Module],
+    visible_name_packages: &[HashMap<String, usize>],
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    for (module_index, module) in modules.iter().enumerate() {
+        for item in &module.program.items {
+            let Item::Impl(item) = item else {
+                continue;
+            };
+            let Some(trait_package) = visible_name_packages[module_index].get(&item.trait_ref.name)
+            else {
+                continue;
+            };
+            if *trait_package == module.package {
+                continue;
+            }
+            let Some(type_local) = impl_self_type_is_local(
+                &item.type_ref,
+                module.package,
+                &visible_name_packages[module_index],
+                &item.type_params,
+            ) else {
+                continue;
+            };
+            if type_local {
+                continue;
+            }
+            diagnostics.push(Diagnostic::error(
+                item.span,
+                format!(
+                    "cannot implement foreign trait `{}` for foreign type `{}`",
+                    item.trait_ref.name, item.type_ref.name
+                ),
+            ));
+        }
+    }
+}
+
+fn impl_self_type_is_local(
+    type_ref: &TypeRef,
+    current_package: usize,
+    visible_name_packages: &HashMap<String, usize>,
+    impl_type_params: &[String],
+) -> Option<bool> {
+    if type_ref.function.is_some()
+        || BasicType::from_name(&type_ref.name).is_some()
+        || type_ref.name == "void"
+        || impl_type_params.iter().any(|param| param == &type_ref.name)
+    {
+        return Some(false);
+    }
+
+    visible_name_packages
+        .get(&type_ref.name)
+        .map(|package| *package == current_package)
 }

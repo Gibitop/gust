@@ -193,6 +193,115 @@ fn main() {
 }
 
 #[test]
+fn package_impls_must_own_the_trait_or_self_type() {
+    let traits = TempProject::new();
+    traits.write("project.yaml", "dependencies: {}\n");
+    traits.write(
+        "src/lib.gust",
+        r#"export trait Label {
+    fn label(): string
+}"#,
+    );
+
+    let types = TempProject::new();
+    types.write("project.yaml", "dependencies: {}\n");
+    types.write("src/lib.gust", "export struct External {}\n");
+
+    let app = TempProject::new();
+    app.write(
+        "project.yaml",
+        &format!(
+            "dependencies:\n  traits: fs:{}\n  types: fs:{}\n",
+            traits.path.display(),
+            types.path.display()
+        ),
+    );
+    app.write(
+        "src/main.gust",
+        r#"from traits import { Label }
+from types import { External }
+
+impl Label for External {
+    fn label(): string => "external"
+}
+
+fn main() {}"#,
+    );
+
+    let result = check_project(&app.path).expect("Gust project should load");
+    let diagnostic = result
+        .diagnostics
+        .iter()
+        .find(|diagnostic| diagnostic.message.contains("cannot implement foreign trait"))
+        .expect("foreign impl for foreign type should report a diagnostic");
+
+    assert!(
+        diagnostic
+            .message
+            .contains("cannot implement foreign trait `Label` for foreign type `External`")
+    );
+    assert_gust_diagnostic_name(&diagnostic.message);
+    assert_rendered_at(&result, diagnostic, &app.path("src/main.gust"), 4, 1);
+}
+
+#[test]
+fn package_impls_may_own_either_the_trait_or_self_type() {
+    let traits = TempProject::new();
+    traits.write("project.yaml", "dependencies: {}\n");
+    traits.write(
+        "src/lib.gust",
+        r#"export trait Label {
+    fn label(): string
+}"#,
+    );
+
+    let types = TempProject::new();
+    types.write("project.yaml", "dependencies: {}\n");
+    types.write("src/lib.gust", "export struct External {}\n");
+
+    let app = TempProject::new();
+    app.write(
+        "project.yaml",
+        &format!(
+            "dependencies:\n  traits: fs:{}\n  types: fs:{}\n",
+            traits.path.display(),
+            types.path.display()
+        ),
+    );
+    app.write(
+        "src/main.gust",
+        r#"from traits import { Label }
+from types import { External }
+
+struct Local {}
+
+trait LocalTrait {
+    fn name(): string
+}
+
+impl Label for Local {
+    fn label(): string => "local"
+}
+
+impl LocalTrait for External {
+    fn name(): string => "external"
+}
+
+fn main() {
+    let value: LocalTrait = External {}
+    io.println(value.name())
+}"#,
+    );
+
+    let result = check_project(&app.path).expect("Gust project should load");
+    assert!(
+        result.diagnostics.is_empty(),
+        "expected package-local trait or self type impls to validate, got {:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
 fn unknown_package_dependencies_are_reported_at_the_import() {
     let project = TempProject::new();
     project.write("project.yaml", "dependencies: {}\n");

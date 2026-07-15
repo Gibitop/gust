@@ -1,0 +1,26 @@
+from foreignTraits import { Label }
+from foreignTypes import { External }
+
+struct Local {
+    text: string
+}
+
+trait LocalTrait {
+    fn describe(): string
+}
+
+impl Label for Local {
+    fn label(): string => self.text
+}
+
+impl LocalTrait for External {
+    fn describe(): string => "external type"
+}
+
+fn main() {
+    let local = Local { text: "local type" }
+    io.println(local.label())
+
+    let external: LocalTrait = External {}
+    io.println(external.describe())
+}
