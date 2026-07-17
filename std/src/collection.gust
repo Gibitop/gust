@@ -3,3 +3,8 @@ export trait FromElements {
     static fn withElementCapacity(capacity: usize): Self
     fn add(mut self, value: Self.Item): void
 }
+
+export struct MapEntry<K, V> {
+    key: K
+    value: V
+}

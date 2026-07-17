@@ -83,6 +83,7 @@ fn concrete_type_name(type_ref: &TypeRef) -> Option<String> {
 
 fn concrete_impl_exists(items: &[Item], trait_ref: &TypeRef, type_ref: &TypeRef) -> bool {
     let trait_name = type_name(trait_ref);
+    let trait_identity_name = impl_trait_request_identity_name(trait_ref);
     let self_type_name = type_name(type_ref);
     items.iter().any(|item| {
         let Item::Impl(item) = item else {
@@ -90,10 +91,29 @@ fn concrete_impl_exists(items: &[Item], trait_ref: &TypeRef, type_ref: &TypeRef)
         };
         let candidate_trait_name = type_name(&item.trait_ref);
         let trait_matches = candidate_trait_name == trait_name
-            || (!trait_name.contains("<type ")
-                && !trait_name.contains(", type ")
-                && impl_trait_identity_name(item) == trait_name);
+            || impl_trait_identity_name(item) == trait_identity_name
+                && associated_type_bindings_match(item, &trait_ref.bindings);
         trait_matches && type_name(&item.type_ref) == self_type_name
+    })
+}
+
+fn impl_trait_request_identity_name(type_ref: &TypeRef) -> String {
+    if type_ref.args.is_empty() {
+        return type_ref.name.clone();
+    }
+
+    specialized_name(&type_ref.name, &type_ref.args)
+}
+
+fn associated_type_bindings_match(
+    item: &ImplDecl,
+    bindings: &[crate::ast::AssociatedTypeBinding],
+) -> bool {
+    bindings.iter().all(|binding| {
+        item.associated_types.iter().any(|associated_type| {
+            associated_type.name == binding.name
+                && type_name(&associated_type.type_ref) == type_name(&binding.type_ref)
+        })
     })
 }
 
@@ -260,5 +280,14 @@ fn requested_trait_method(name: &str) -> (Option<&str>, &str) {
 }
 
 fn trait_name_matches_request(actual: &str, requested: &str) -> bool {
-    actual == requested || actual.rsplit("::").next() == Some(requested)
+    actual == requested
+        || actual.rsplit("::").next() == Some(requested)
+        || requested
+            .strip_prefix(actual)
+            .is_some_and(|suffix| suffix.starts_with('<'))
+        || actual.rsplit("::").next().is_some_and(|source_actual| {
+            requested
+                .strip_prefix(source_actual)
+                .is_some_and(|suffix| suffix.starts_with('<'))
+        })
 }

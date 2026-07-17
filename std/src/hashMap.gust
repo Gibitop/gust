@@ -1,0 +1,313 @@
+from ./collection import { FromElements, MapEntry }
+from ./compare import { Eq }
+from ./hash import { Hash }
+from ./index import { Index, IndexSet }
+from ./iter import { FromIterator, Iterable, Iterator }
+from ./option import { Option }
+from ./internal/rawBuffer import { RawBuffer }
+
+export struct HashMap<K: Eq<type Other: K> + Hash, V> {
+    internal states: RawBuffer<u8>
+    internal keys: RawBuffer<K>
+    internal values: RawBuffer<V>
+    internal count: usize
+    internal deleted: usize
+
+    static fn withCapacity(capacity: usize): Self {
+        let mut result = HashMap<K, V> {
+            states: RawBuffer<u8>.withCapacity(0),
+            keys: RawBuffer<K>.withCapacity(0),
+            values: RawBuffer<V>.withCapacity(0),
+            count: 0,
+            deleted: 0,
+        }
+        result.resetBuckets(HashMap<K, V>.minimumCapacity(capacity))
+        return result
+    }
+
+    static fn fromIterator(mut iterator: Iterator<type Item: MapEntry<K, V>>): Self {
+        let mut result: Self = HashMap<K, V>.withCapacity(0)
+        for entry in iterator {
+            result.insert(entry.key, entry.value)
+        }
+        return result
+    }
+
+    static fn minimumCapacity(required: usize): usize {
+        let mut capacity: usize = 8
+        while capacity < required {
+            capacity *= 2
+        }
+        return capacity
+    }
+
+    fn len(): usize => self.count
+
+    fn isEmpty(): bool => self.count == 0
+
+    fn resetBuckets(mut self, capacity: usize) {
+        self.states = RawBuffer<u8>.withCapacity(capacity)
+        self.keys = RawBuffer<K>.withCapacity(capacity)
+        self.values = RawBuffer<V>.withCapacity(capacity)
+        self.count = 0
+        self.deleted = 0
+
+        let mut index: usize = 0
+        while index < capacity {
+            self.states.write(index, 0)
+            index += 1
+        }
+    }
+
+    fn stateAt(index: usize): u8 {
+        match self.states.read(index) {
+            Option.Some(state) => {
+                return state
+            },
+            Option.None => {
+                panic("HashMap storage invariant violated")
+            },
+        }
+    }
+
+    fn keyAt(index: usize): K {
+        match self.keys.read(index) {
+            Option.Some(key) => {
+                return key
+            },
+            Option.None => {
+                panic("HashMap storage invariant violated")
+            },
+        }
+    }
+
+    fn valueAt(index: usize): V {
+        match self.values.read(index) {
+            Option.Some(value) => {
+                return value
+            },
+            Option.None => {
+                panic("HashMap storage invariant violated")
+            },
+        }
+    }
+
+    fn indexFor(key: K): usize => (key.hash() as usize) % self.states.capacity()
+
+    fn ensureCapacity(mut self) {
+        let capacity = self.states.capacity()
+        if (self.count + self.deleted + 1) * 4 < capacity * 3 {
+            return
+        }
+
+        let oldStates = self.states
+        let oldKeys = self.keys
+        let oldValues = self.values
+        let oldCapacity = capacity
+        self.resetBuckets(capacity * 2)
+
+        let mut index: usize = 0
+        while index < oldCapacity {
+            let state = match oldStates.read(index) {
+                Option.Some(state) => state,
+                Option.None => 0 as u8,
+            }
+            if state == 1 {
+                let key = oldKeys.read(index).expect("HashMap storage invariant violated")
+                let value = oldValues.read(index).expect("HashMap storage invariant violated")
+                self.insert(key, value)
+            }
+            index += 1
+        }
+    }
+
+    fn insert(mut self, key: K, value: V): Option<V> {
+        self.ensureCapacity()
+        let mut index = self.indexFor(key)
+        let mut firstDeleted: Option<usize> = Option.None
+
+        while true {
+            let state = self.stateAt(index)
+            if state == 0 {
+                let target = firstDeleted.unwrapOr(index)
+                if firstDeleted.isSome() {
+                    self.deleted -= 1
+                }
+                self.keys.write(target, key)
+                self.values.write(target, value)
+                self.states.write(target, 1)
+                self.count += 1
+                return Option<V>.None
+            }
+
+            if state == 2 {
+                if firstDeleted.isNone() {
+                    firstDeleted = Option.Some(index)
+                }
+            }
+
+            if state == 1 {
+                let existingKey = self.keyAt(index)
+                if existingKey.equals(key) {
+                    let previous = self.valueAt(index)
+                    self.keys.write(index, key)
+                    self.values.write(index, value)
+                    return Option.Some(previous)
+                }
+            }
+
+            index = (index + 1) % self.states.capacity()
+        }
+
+        return Option<V>.None
+    }
+
+    fn get(key: K): Option<V> {
+        let mut index = self.indexFor(key)
+
+        while true {
+            let state = self.stateAt(index)
+            if state == 0 {
+                return Option<V>.None
+            }
+
+            if state == 1 {
+                let existingKey = self.keyAt(index)
+                if existingKey.equals(key) {
+                    return Option.Some(self.valueAt(index))
+                }
+            }
+
+            index = (index + 1) % self.states.capacity()
+        }
+
+        return Option<V>.None
+    }
+
+    fn containsKey(key: K): bool => self.get(key).isSome()
+
+    fn remove(mut self, key: K): Option<V> {
+        let mut index = self.indexFor(key)
+
+        while true {
+            let state = self.stateAt(index)
+            if state == 0 {
+                return Option<V>.None
+            }
+
+            if state == 1 {
+                let existingKey = self.keyAt(index)
+                if existingKey.equals(key) {
+                    let value = self.valueAt(index)
+                    self.states.write(index, 2)
+                    self.count -= 1
+                    self.deleted += 1
+                    return Option.Some(value)
+                }
+            }
+
+            index = (index + 1) % self.states.capacity()
+        }
+
+        return Option<V>.None
+    }
+
+    fn clear(mut self) {
+        self.resetBuckets(8)
+    }
+
+    fn iterator(): Iterator<type Item: MapEntry<K, V>> => HashMapIterator<K, V>.new(self)
+
+    fn keys(): Iterator<type Item: K> => HashMapKeyIterator<K, V>.new(self)
+}
+
+struct HashMapIterator<K: Eq<type Other: K> + Hash, V> {
+    internal map: HashMap<K, V>
+    internal index: usize
+    internal capacity: usize
+
+    static fn new(map: HashMap<K, V>): Self => HashMapIterator<K, V> {
+        map: map,
+        index: 0,
+        capacity: map.states.capacity(),
+    }
+
+    fn advance(mut self): Option<MapEntry<K, V>> {
+        while self.index < self.capacity {
+            let state = self.map.stateAt(self.index)
+            let index = self.index
+            self.index += 1
+            if state == 1 {
+                return Option.Some(MapEntry { key: self.map.keyAt(index), value: self.map.valueAt(index) })
+            }
+        }
+
+        return Option<MapEntry<K, V>>.None
+    }
+}
+
+struct HashMapKeyIterator<K: Eq<type Other: K> + Hash, V> {
+    internal map: HashMap<K, V>
+    internal index: usize
+    internal capacity: usize
+
+    static fn new(map: HashMap<K, V>): Self => HashMapKeyIterator<K, V> {
+        map: map,
+        index: 0,
+        capacity: map.states.capacity(),
+    }
+
+    fn advance(mut self): Option<K> {
+        while self.index < self.capacity {
+            let state = self.map.stateAt(self.index)
+            let index = self.index
+            self.index += 1
+            if state == 1 {
+                return Option.Some(self.map.keyAt(index))
+            }
+        }
+
+        return Option<K>.None
+    }
+}
+
+impl<K: Eq<type Other: K> + Hash, V> Iterable for HashMap<K, V> {
+    type Item: MapEntry<K, V>
+    fn iterator(): Iterator<type Item: MapEntry<K, V>> => self.iterator()
+}
+
+impl<K: Eq<type Other: K> + Hash, V> Iterator for HashMapIterator<K, V> {
+    type Item: MapEntry<K, V>
+    fn next(mut self): Option<MapEntry<K, V>> => self.advance()
+}
+
+impl<K: Eq<type Other: K> + Hash, V> Iterator for HashMapKeyIterator<K, V> {
+    type Item: K
+    fn next(mut self): Option<K> => self.advance()
+}
+
+impl<K: Eq<type Other: K> + Hash, V> FromElements for HashMap<K, V> {
+    type Item: MapEntry<K, V>
+    static fn withElementCapacity(capacity: usize): Self => HashMap<K, V>.withCapacity(capacity)
+
+    fn add(mut self, value: MapEntry<K, V>) {
+        self.insert(value.key, value.value)
+    }
+}
+
+impl<K: Eq<type Other: K> + Hash, V> FromIterator for HashMap<K, V> {
+    type Item: MapEntry<K, V>
+    static fn fromIterator(mut iterator: Iterator<type Item: MapEntry<K, V>>): Self => HashMap<K, V>.fromIterator(iterator)
+}
+
+impl<K: Eq<type Other: K> + Hash, V> Index<K> for HashMap<K, V> {
+    type Output: Option<V>
+    fn index(key: K): Option<V> => self.get(key)
+}
+
+impl<K: Eq<type Other: K> + Hash, V> IndexSet<K> for HashMap<K, V> {
+    type Value: V
+    fn indexSet(mut self, key: K, value: V) {
+        self.insert(key, value)
+    }
+}

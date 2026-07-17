@@ -1,0 +1,64 @@
+export trait Hash {
+    fn hash(): u64
+}
+
+impl Hash for bool {
+    fn hash(): u64 {
+        if self {
+            return 1
+        }
+        return 0
+    }
+}
+
+impl Hash for char {
+    fn hash(): u64 => (self as u32) as u64
+}
+
+impl Hash for string {
+    fn hash(): u64 => (self.byteLen() as u64) * 1099511628211 + (self.len() as u64)
+}
+
+impl Hash for i8 {
+    fn hash(): u64 => self as u64
+}
+
+impl Hash for i16 {
+    fn hash(): u64 => self as u64
+}
+
+impl Hash for i32 {
+    fn hash(): u64 => self as u64
+}
+
+impl Hash for i64 {
+    fn hash(): u64 => self as u64
+}
+
+impl Hash for i128 {
+    fn hash(): u64 => self as u64
+}
+
+impl Hash for u8 {
+    fn hash(): u64 => self as u64
+}
+
+impl Hash for u16 {
+    fn hash(): u64 => self as u64
+}
+
+impl Hash for u32 {
+    fn hash(): u64 => self as u64
+}
+
+impl Hash for u64 {
+    fn hash(): u64 => self
+}
+
+impl Hash for u128 {
+    fn hash(): u64 => self as u64
+}
+
+impl Hash for usize {
+    fn hash(): u64 => self as u64
+}

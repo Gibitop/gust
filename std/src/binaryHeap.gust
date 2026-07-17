@@ -1,0 +1,122 @@
+from ./arrayList import { ArrayList }
+from ./collection import { FromElements }
+from ./compare import { Ord }
+from ./iter import { FromIterator, Iterable, Iterator }
+from ./option import { Option }
+
+export struct BinaryHeap<T: Ord<type Other: T>> {
+    internal items: ArrayList<T>
+
+    static fn withCapacity(capacity: usize): Self => BinaryHeap<T> {
+        items: ArrayList<T>.withCapacity(capacity),
+    }
+
+    static fn fromIterator(mut iterator: Iterator<type Item: T>): Self {
+        let mut result: Self = BinaryHeap<T>.withCapacity(0)
+        for value in iterator {
+            result.push(value)
+        }
+        return result
+    }
+
+    fn len(): usize => self.items.len()
+
+    fn isEmpty(): bool => self.items.isEmpty()
+
+    fn peek(): Option<T> => self.items.get(0)
+
+    fn push(mut self, value: T) {
+        self.items.push(value)
+        self.siftUp(self.items.len() - 1)
+    }
+
+    fn pop(mut self): Option<T> {
+        if self.items.isEmpty() {
+            return Option<T>.None
+        }
+
+        if self.items.len() == 1 {
+            return self.items.pop()
+        }
+
+        let root = self.items.get(0).unwrap()
+        let last = self.items.pop().unwrap()
+        self.items.set(0, last).expect("BinaryHeap storage invariant violated")
+        self.siftDown(0)
+        return Option.Some(root)
+    }
+
+    fn swap(mut self, left: usize, right: usize) {
+        let leftValue = self.items.get(left).unwrap()
+        let rightValue = self.items.get(right).unwrap()
+        self.items.set(left, rightValue).expect("BinaryHeap storage invariant violated")
+        self.items.set(right, leftValue).expect("BinaryHeap storage invariant violated")
+    }
+
+    fn siftUp(mut self, index: usize) {
+        let mut child = index
+        while child > 0 {
+            let parent = (child - 1) / 2
+            let childValue = self.items.get(child).unwrap()
+            let parentValue = self.items.get(parent).unwrap()
+            if !childValue.compare(parentValue).isGreater() {
+                return
+            }
+            self.swap(child, parent)
+            child = parent
+        }
+    }
+
+    fn siftDown(mut self, index: usize) {
+        let mut parent = index
+        while true {
+            let left = parent * 2 + 1
+            let right = left + 1
+            let mut best = parent
+
+            if left < self.items.len() {
+                let leftValue = self.items.get(left).unwrap()
+                let bestValue = self.items.get(best).unwrap()
+                if leftValue.compare(bestValue).isGreater() {
+                    best = left
+                }
+            }
+
+            if right < self.items.len() {
+                let rightValue = self.items.get(right).unwrap()
+                let bestValue = self.items.get(best).unwrap()
+                if rightValue.compare(bestValue).isGreater() {
+                    best = right
+                }
+            }
+
+            if best == parent {
+                return
+            }
+
+            self.swap(parent, best)
+            parent = best
+        }
+    }
+
+    fn iterator(): Iterator<type Item: T> => self.items.iterator()
+}
+
+impl<T: Ord<type Other: T>> Iterable for BinaryHeap<T> {
+    type Item: T
+    fn iterator(): Iterator<type Item: T> => self.iterator()
+}
+
+impl<T: Ord<type Other: T>> FromElements for BinaryHeap<T> {
+    type Item: T
+    static fn withElementCapacity(capacity: usize): Self => BinaryHeap<T>.withCapacity(capacity)
+
+    fn add(mut self, value: T) {
+        self.push(value)
+    }
+}
+
+impl<T: Ord<type Other: T>> FromIterator for BinaryHeap<T> {
+    type Item: T
+    static fn fromIterator(mut iterator: Iterator<type Item: T>): Self => BinaryHeap<T>.fromIterator(iterator)
+}

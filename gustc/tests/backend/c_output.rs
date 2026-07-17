@@ -95,7 +95,7 @@ fn main() {
 
     assert_eq!(
         emit_c(&lowered),
-        "#include <stdint.h>\n\n// Gust function: answer\nstatic uint64_t gust_fn_848019df_answer() {\n    return 42;\n}\n\nint main(void) {\n    uint64_t gust_count = gust_fn_848019df_answer();\n    return 0;\n}\n"
+        "#include <stdint.h>\n\nstatic uint64_t gust_fn_848019df_answer();\n\n// Gust function: answer\nstatic uint64_t gust_fn_848019df_answer() {\n    return 42;\n}\n\nint main(void) {\n    uint64_t gust_count = gust_fn_848019df_answer();\n    return 0;\n}\n"
     );
 }
 

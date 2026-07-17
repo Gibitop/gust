@@ -1,0 +1,217 @@
+from ./collection import { FromElements }
+from ./index import { Index, IndexSet }
+from ./iter import { FromIterator, Iterable, Iterator }
+from ./option import { Option }
+from ./result import { Result }
+from ./internal/rawBuffer import { RawBuffer }
+
+export struct Deque<T> {
+    internal storage: RawBuffer<T>
+    internal head: usize
+    internal count: usize
+
+    static fn withCapacity(capacity: usize): Self => Deque<T> {
+        storage: RawBuffer.withCapacity(capacity),
+        head: 0,
+        count: 0,
+    }
+
+    static fn fromIterator(mut iterator: Iterator<type Item: T>): Self {
+        let mut result: Self = Deque<T>.withCapacity(0)
+        for value in iterator {
+            result.pushBack(value)
+        }
+        return result
+    }
+
+    fn len(): usize => self.count
+
+    fn isEmpty(): bool => self.count == 0
+
+    fn ensureCapacity(mut self, required: usize) {
+        let current = self.storage.capacity()
+        if required <= current {
+            return
+        }
+
+        let mut capacity = current * 2
+        if capacity == 0 {
+            capacity = 4
+        }
+        while capacity < required {
+            capacity *= 2
+        }
+
+        let mut nextStorage: RawBuffer<T> = RawBuffer.withCapacity(capacity)
+        let mut index: usize = 0
+        while index < self.count {
+            let value = self.readAt(index)
+            nextStorage.write(index, value)
+            index += 1
+        }
+
+        self.storage = nextStorage
+        self.head = 0
+    }
+
+    fn physicalIndex(index: usize): usize => (self.head + index) % self.storage.capacity()
+
+    fn readAt(index: usize): T {
+        match self.storage.read(self.physicalIndex(index)) {
+            Option.Some(value) => {
+                return value
+            },
+            Option.None => {
+                panic("Deque storage invariant violated")
+            },
+        }
+    }
+
+    fn get(index: usize): Option<T> {
+        if index >= self.count {
+            return Option<T>.None
+        }
+        return Option.Some(self.readAt(index))
+    }
+
+    fn set(mut self, index: usize, value: T): Result<T, string> {
+        if index >= self.count {
+            return Result.Err("index out of bounds")
+        }
+
+        let physical = self.physicalIndex(index)
+        let previous = self.storage.read(physical)
+        self.storage.write(physical, value)
+        match previous {
+            Option.Some(previous) => {
+                return Result.Ok(previous)
+            },
+            Option.None => {
+                panic("Deque storage invariant violated")
+            },
+        }
+    }
+
+    fn pushBack(mut self, value: T) {
+        self.ensureCapacity(self.count + 1)
+        let index = self.physicalIndex(self.count)
+        self.storage.write(index, value)
+        self.count += 1
+    }
+
+    fn pushFront(mut self, value: T) {
+        self.ensureCapacity(self.count + 1)
+        if self.count == 0 {
+            self.head = 0
+        } else if self.head == 0 {
+            self.head = self.storage.capacity() - 1
+        } else {
+            self.head -= 1
+        }
+        self.storage.write(self.head, value)
+        self.count += 1
+    }
+
+    fn popBack(mut self): Option<T> {
+        if self.count == 0 {
+            return Option<T>.None
+        }
+
+        self.count -= 1
+        let index = self.physicalIndex(self.count)
+        let value = self.storage.read(index)
+        self.storage.clear(index)
+        match value {
+            Option.Some(value) => {
+                return Option.Some(value)
+            },
+            Option.None => {
+                panic("Deque storage invariant violated")
+            },
+        }
+    }
+
+    fn popFront(mut self): Option<T> {
+        if self.count == 0 {
+            return Option<T>.None
+        }
+
+        let index = self.head
+        let value = self.storage.read(index)
+        self.storage.clear(index)
+        self.count -= 1
+        if self.count == 0 {
+            self.head = 0
+        } else {
+            self.head = (self.head + 1) % self.storage.capacity()
+        }
+        match value {
+            Option.Some(value) => {
+                return Option.Some(value)
+            },
+            Option.None => {
+                panic("Deque storage invariant violated")
+            },
+        }
+    }
+
+    fn iterator(): Iterator<type Item: T> => DequeIterator<T>.new(self, self.count)
+}
+
+struct DequeIterator<T> {
+    internal deque: Deque<T>
+    internal index: usize
+    internal end: usize
+
+    static fn new(deque: Deque<T>, end: usize): Self => DequeIterator<T> {
+        deque: deque,
+        index: 0,
+        end: end,
+    }
+
+    fn advance(mut self): Option<T> {
+        if self.index >= self.end {
+            return Option<T>.None
+        }
+
+        let value = self.deque.readAt(self.index)
+        self.index += 1
+        return Option.Some(value)
+    }
+}
+
+impl<T> Iterable for Deque<T> {
+    type Item: T
+    fn iterator(): Iterator<type Item: T> => self.iterator()
+}
+
+impl<T> Iterator for DequeIterator<T> {
+    type Item: T
+    fn next(mut self): Option<T> => self.advance()
+}
+
+impl<T> FromElements for Deque<T> {
+    type Item: T
+    static fn withElementCapacity(capacity: usize): Self => Deque<T>.withCapacity(capacity)
+
+    fn add(mut self, value: T) {
+        self.pushBack(value)
+    }
+}
+
+impl<T> FromIterator for Deque<T> {
+    type Item: T
+    static fn fromIterator(mut iterator: Iterator<type Item: T>): Self => Deque<T>.fromIterator(iterator)
+}
+
+impl<T> Index<usize> for Deque<T> {
+    type Output: T
+    fn index(index: usize): T => self.get(index).expect("index out of bounds")
+}
+
+impl<T> IndexSet<usize> for Deque<T> {
+    type Value: T
+    fn indexSet(mut self, index: usize, value: T) {
+        self.set(index, value).expect("index out of bounds")
+    }
+}

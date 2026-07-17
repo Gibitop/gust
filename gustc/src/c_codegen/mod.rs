@@ -163,19 +163,25 @@ pub fn emit_c_with_options(program: &LoweredProgram, options: CCodegenOptions) -
 
     push_c_struct_runtime_helpers(&mut source, program);
 
+    for function in ordered_functions(&program.functions) {
+        push_c_function_signature(&mut source, function);
+        source.push_str(";\n");
+    }
+    if !program.functions.is_empty() {
+        source.push('\n');
+    }
+
     for function in &program.closure_functions {
         push_c_closure_function_signature(&mut source, function);
-        source.push_str(";\n\n");
+        source.push_str(";\n");
+    }
+    if !program.closure_functions.is_empty() {
+        source.push('\n');
     }
 
     push_c_trait_dispatch_helpers(&mut source, program);
 
     for function in ordered_functions(&program.functions) {
-        if function_calls_name(function, &function.name) {
-            push_c_function_signature(&mut source, function);
-            source.push_str(";\n\n");
-        }
-
         push_c_function(
             &mut source,
             function,

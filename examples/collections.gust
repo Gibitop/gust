@@ -1,0 +1,63 @@
+from ../std/src/binaryHeap import { BinaryHeap }
+from ../std/src/collection import { MapEntry }
+from ../std/src/deque import { Deque }
+from ../std/src/hashMap import { HashMap }
+from ../std/src/hashSet import { HashSet }
+from ../std/src/linkedList import { LinkedList }
+from ../std/src/orderedMap import { OrderedMap }
+from ../std/src/orderedSet import { OrderedSet }
+
+fn main() {
+    let mut deque = Deque<i32>.withCapacity(0)
+    deque.pushBack(2)
+    deque.pushFront(1)
+    deque.pushBack(3)
+    io.println(deque.popFront().unwrap().toString())
+    io.println(deque.popBack().unwrap().toString())
+
+    let mut map = HashMap<string, i32>.withCapacity(0)
+    map.insert("two", 2)
+    map.insert("one", 1)
+    io.println(map.get("one").unwrap().toString())
+    io.println(map.remove("two").unwrap().toString())
+
+    let mut set = HashSet<i32>.withCapacity(0)
+    set.insert(7)
+    set.insert(7)
+    io.println(set.len().toString())
+
+    let mut heap = BinaryHeap<i32>.withCapacity(0)
+    heap.push(4)
+    heap.push(9)
+    heap.push(1)
+    io.println(heap.pop().unwrap().toString())
+    io.println(heap.pop().unwrap().toString())
+
+    let mut orderedMap = OrderedMap<i32, string>.withCapacity(0)
+    orderedMap.insert(3, "three")
+    orderedMap.insert(1, "one")
+    orderedMap.insert(2, "two")
+    for entry in orderedMap {
+        io.println(entry.value)
+    }
+
+    let mut orderedSet = OrderedSet<i32>.withCapacity(0)
+    orderedSet.insert(5)
+    orderedSet.insert(4)
+    orderedSet.insert(5)
+    for value in orderedSet {
+        io.println(value.toString())
+    }
+
+    let mut list = LinkedList<string>.new()
+    list.pushBack("middle")
+    list.pushFront("start")
+    list.pushBack("end")
+    for value in list {
+        io.println(value)
+    }
+
+    let mut entryMap = HashMap<i32, string>.withCapacity(0)
+    entryMap.add(MapEntry { key: 1, value: "one" })
+    io.println(entryMap.get(1).unwrap())
+}

@@ -126,6 +126,30 @@ Compound indexed assignments and indexed increments are not supported by the ini
 Indexing remains standard-library behaviour: the compiler owns the bracket syntax and trait dispatch
 but does not hard-code `ArrayList` storage, bounds policy, or key semantics.
 
+## Standard collection types
+
+The standard library provides `Deque<T>`, `HashMap<K, V>`, `HashSet<T>`, `BinaryHeap<T>`,
+`OrderedMap<K, V>`, `OrderedSet<T>`, and `LinkedList<T>` as source-level collection
+implementations. `Deque`, `BinaryHeap`, `LinkedList`, and the set types implement
+`FromElements` and `FromIterator`; map types use `MapEntry<K, V>` as their iterator and
+construction item. Associative map indexing returns `Option<V>` rather than panicking on absent
+keys.
+
+Generic equality and ordering use associated-type traits: `Eq<type Other: T>` provides
+`equals(other: T)`, and `Ord<type Other: T>` provides `compare(other: T): Ordering`. `Hash`
+provides `hash(): u64`. Primitive impls live in the standard library for bool, char, string, and
+integer types where the operation is supported. Floating-point types intentionally do not implement
+these first equality/hash/order traits because `NaN` and total ordering policy should be decided
+separately.
+
+`HashMap` is an open-addressed table implemented with standard-library code over `RawBuffer`.
+It stores bucket state in a `RawBuffer<u8>` plus parallel key and value buffers so sparse bucket
+state remains explicit and does not depend on `RawBuffer` tracking initialized holes.
+
+Generated C emits prototypes for all lowered functions before function bodies. This supports
+mutually recursive methods created by standard-library generics, such as `HashMap.insert` calling
+`ensureCapacity` while rehashing calls back into `insert`.
+
 ## Option and Result
 
 `Option<T>` represents expected absence, including collection lookup misses, empty collection

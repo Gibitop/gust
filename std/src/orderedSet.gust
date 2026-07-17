@@ -1,0 +1,59 @@
+from ./collection import { FromElements }
+from ./compare import { Ord }
+from ./iter import { FromIterator, Iterable, Iterator }
+from ./option import { Option }
+from ./orderedMap import { OrderedMap }
+
+export struct OrderedSet<T: Ord<type Other: T>> {
+    internal map: OrderedMap<T, bool>
+
+    static fn withCapacity(capacity: usize): Self => OrderedSet<T> {
+        map: OrderedMap<T, bool>.withCapacity(capacity),
+    }
+
+    static fn fromIterator(mut iterator: Iterator<type Item: T>): Self {
+        let mut result: Self = OrderedSet<T>.withCapacity(0)
+        for value in iterator {
+            result.insert(value)
+        }
+        return result
+    }
+
+    fn len(): usize => self.map.len()
+
+    fn isEmpty(): bool => self.map.isEmpty()
+
+    fn insert(mut self, value: T): bool {
+        let previous = self.map.insert(value, true)
+        return previous.isNone()
+    }
+
+    fn contains(value: T): bool => self.map.containsKey(value)
+
+    fn remove(mut self, value: T): bool => self.map.remove(value).isSome()
+
+    fn clear(mut self) {
+        self.map.clear()
+    }
+
+    fn iterator(): Iterator<type Item: T> => self.map.keys()
+}
+
+impl<T: Ord<type Other: T>> Iterable for OrderedSet<T> {
+    type Item: T
+    fn iterator(): Iterator<type Item: T> => self.iterator()
+}
+
+impl<T: Ord<type Other: T>> FromElements for OrderedSet<T> {
+    type Item: T
+    static fn withElementCapacity(capacity: usize): Self => OrderedSet<T>.withCapacity(capacity)
+
+    fn add(mut self, value: T) {
+        self.insert(value)
+    }
+}
+
+impl<T: Ord<type Other: T>> FromIterator for OrderedSet<T> {
+    type Item: T
+    static fn fromIterator(mut iterator: Iterator<type Item: T>): Self => OrderedSet<T>.fromIterator(iterator)
+}

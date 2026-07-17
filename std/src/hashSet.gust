@@ -1,0 +1,60 @@
+from ./collection import { FromElements }
+from ./compare import { Eq }
+from ./hash import { Hash }
+from ./hashMap import { HashMap }
+from ./iter import { FromIterator, Iterable, Iterator }
+from ./option import { Option }
+
+export struct HashSet<T: Eq<type Other: T> + Hash> {
+    internal map: HashMap<T, bool>
+
+    static fn withCapacity(capacity: usize): Self => HashSet<T> {
+        map: HashMap<T, bool>.withCapacity(capacity),
+    }
+
+    static fn fromIterator(mut iterator: Iterator<type Item: T>): Self {
+        let mut result: Self = HashSet<T>.withCapacity(0)
+        for value in iterator {
+            result.insert(value)
+        }
+        return result
+    }
+
+    fn len(): usize => self.map.len()
+
+    fn isEmpty(): bool => self.map.isEmpty()
+
+    fn insert(mut self, value: T): bool {
+        let previous = self.map.insert(value, true)
+        return previous.isNone()
+    }
+
+    fn contains(value: T): bool => self.map.containsKey(value)
+
+    fn remove(mut self, value: T): bool => self.map.remove(value).isSome()
+
+    fn clear(mut self) {
+        self.map.clear()
+    }
+
+    fn iterator(): Iterator<type Item: T> => self.map.keys()
+}
+
+impl<T: Eq<type Other: T> + Hash> Iterable for HashSet<T> {
+    type Item: T
+    fn iterator(): Iterator<type Item: T> => self.iterator()
+}
+
+impl<T: Eq<type Other: T> + Hash> FromElements for HashSet<T> {
+    type Item: T
+    static fn withElementCapacity(capacity: usize): Self => HashSet<T>.withCapacity(capacity)
+
+    fn add(mut self, value: T) {
+        self.insert(value)
+    }
+}
+
+impl<T: Eq<type Other: T> + Hash> FromIterator for HashSet<T> {
+    type Item: T
+    static fn fromIterator(mut iterator: Iterator<type Item: T>): Self => HashSet<T>.fromIterator(iterator)
+}

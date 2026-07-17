@@ -1,0 +1,182 @@
+from ./arrayList import { ArrayList }
+from ./collection import { FromElements, MapEntry }
+from ./compare import { Ord }
+from ./index import { Index, IndexSet }
+from ./iter import { FromIterator, Iterable, Iterator }
+from ./option import { Option }
+
+export struct OrderedMap<K: Ord<type Other: K>, V> {
+    internal entries: ArrayList<MapEntry<K, V>>
+
+    static fn withCapacity(capacity: usize): Self => OrderedMap<K, V> {
+        entries: ArrayList<MapEntry<K, V>>.withCapacity(capacity),
+    }
+
+    static fn fromIterator(mut iterator: Iterator<type Item: MapEntry<K, V>>): Self {
+        let mut result: Self = OrderedMap<K, V>.withCapacity(0)
+        for entry in iterator {
+            result.insert(entry.key, entry.value)
+        }
+        return result
+    }
+
+    fn len(): usize => self.entries.len()
+
+    fn isEmpty(): bool => self.entries.isEmpty()
+
+    fn findIndex(key: K): Option<usize> {
+        let mut index: usize = 0
+        while index < self.entries.len() {
+            let entry = self.entries.get(index).unwrap()
+            let order = entry.key.compare(key)
+            if order.isEqual() {
+                return Option.Some(index)
+            }
+            if order.isGreater() {
+                return Option<usize>.None
+            }
+            index += 1
+        }
+        return Option<usize>.None
+    }
+
+    fn insertionIndex(key: K): usize {
+        let mut index: usize = 0
+        while index < self.entries.len() {
+            let entry = self.entries.get(index).unwrap()
+            if entry.key.compare(key).isGreater() {
+                return index
+            }
+            index += 1
+        }
+        return index
+    }
+
+    fn insertAt(mut self, index: usize, entry: MapEntry<K, V>) {
+        self.entries.push(entry)
+        let mut current = self.entries.len() - 1
+        while current > index {
+            let previous = self.entries.get(current - 1).unwrap()
+            self.entries.set(current, previous).expect("OrderedMap storage invariant violated")
+            current -= 1
+        }
+        self.entries.set(index, entry).expect("OrderedMap storage invariant violated")
+    }
+
+    fn removeAt(mut self, index: usize): V {
+        let removed = self.entries.get(index).unwrap()
+        let mut current = index
+        while current + 1 < self.entries.len() {
+            let next = self.entries.get(current + 1).unwrap()
+            self.entries.set(current, next).expect("OrderedMap storage invariant violated")
+            current += 1
+        }
+        self.entries.pop().expect("OrderedMap storage invariant violated")
+        return removed.value
+    }
+
+    fn insert(mut self, key: K, value: V): Option<V> {
+        match self.findIndex(key) {
+            Option.Some(index) => {
+                let previous = self.entries.get(index).unwrap()
+                self.entries.set(index, MapEntry { key: key, value: value }).expect("OrderedMap storage invariant violated")
+                return Option.Some(previous.value)
+            },
+            Option.None => {
+                let index = self.insertionIndex(key)
+                self.insertAt(index, MapEntry { key: key, value: value })
+                return Option<V>.None
+            },
+        }
+    }
+
+    fn get(key: K): Option<V> {
+        match self.findIndex(key) {
+            Option.Some(index) => {
+                return Option.Some(self.entries.get(index).unwrap().value)
+            },
+            Option.None => {
+                return Option<V>.None
+            },
+        }
+    }
+
+    fn containsKey(key: K): bool => self.get(key).isSome()
+
+    fn remove(mut self, key: K): Option<V> {
+        match self.findIndex(key) {
+            Option.Some(index) => {
+                return Option.Some(self.removeAt(index))
+            },
+            Option.None => {
+                return Option<V>.None
+            },
+        }
+    }
+
+    fn clear(mut self) {
+        self.entries = ArrayList<MapEntry<K, V>>.withCapacity(0)
+    }
+
+    fn iterator(): Iterator<type Item: MapEntry<K, V>> => self.entries.iterator()
+
+    fn keys(): Iterator<type Item: K> => OrderedMapKeyIterator<K, V>.new(self)
+}
+
+struct OrderedMapKeyIterator<K: Ord<type Other: K>, V> {
+    internal map: OrderedMap<K, V>
+    internal index: usize
+    internal end: usize
+
+    static fn new(map: OrderedMap<K, V>): Self => OrderedMapKeyIterator<K, V> {
+        map: map,
+        index: 0,
+        end: map.entries.len(),
+    }
+
+    fn advance(mut self): Option<K> {
+        if self.index >= self.end {
+            return Option<K>.None
+        }
+
+        let entry = self.map.entries.get(self.index).unwrap()
+        self.index += 1
+        return Option.Some(entry.key)
+    }
+}
+
+impl<K: Ord<type Other: K>, V> Iterable for OrderedMap<K, V> {
+    type Item: MapEntry<K, V>
+    fn iterator(): Iterator<type Item: MapEntry<K, V>> => self.iterator()
+}
+
+impl<K: Ord<type Other: K>, V> FromElements for OrderedMap<K, V> {
+    type Item: MapEntry<K, V>
+    static fn withElementCapacity(capacity: usize): Self => OrderedMap<K, V>.withCapacity(capacity)
+
+    fn add(mut self, value: MapEntry<K, V>) {
+        self.insert(value.key, value.value)
+    }
+}
+
+impl<K: Ord<type Other: K>, V> Iterator for OrderedMapKeyIterator<K, V> {
+    type Item: K
+    fn next(mut self): Option<K> => self.advance()
+}
+
+impl<K: Ord<type Other: K>, V> FromIterator for OrderedMap<K, V> {
+    type Item: MapEntry<K, V>
+    static fn fromIterator(mut iterator: Iterator<type Item: MapEntry<K, V>>): Self => OrderedMap<K, V>.fromIterator(iterator)
+}
+
+impl<K: Ord<type Other: K>, V> Index<K> for OrderedMap<K, V> {
+    type Output: Option<V>
+    fn index(key: K): Option<V> => self.get(key)
+}
+
+impl<K: Ord<type Other: K>, V> IndexSet<K> for OrderedMap<K, V> {
+    type Value: V
+    fn indexSet(mut self, key: K, value: V) {
+        self.insert(key, value)
+    }
+}

@@ -1,0 +1,259 @@
+export enum Ordering {
+    Less
+    Equal
+    Greater
+
+    fn isLess(): bool => match self {
+        Ordering.Less => true,
+        Ordering.Equal => false,
+        Ordering.Greater => false,
+    }
+
+    fn isEqual(): bool => match self {
+        Ordering.Less => false,
+        Ordering.Equal => true,
+        Ordering.Greater => false,
+    }
+
+    fn isGreater(): bool => match self {
+        Ordering.Less => false,
+        Ordering.Equal => false,
+        Ordering.Greater => true,
+    }
+}
+
+export trait Eq {
+    type Other
+    fn equals(other: Self.Other): bool
+}
+
+export trait Ord {
+    type Other
+    fn compare(other: Self.Other): Ordering
+}
+
+impl Eq for bool {
+    type Other: bool
+    fn equals(other: bool): bool => self == other
+}
+
+impl Ord for bool {
+    type Other: bool
+    fn compare(other: bool): Ordering {
+        if self == other {
+            return Ordering.Equal
+        }
+        if !self && other {
+            return Ordering.Less
+        }
+        return Ordering.Greater
+    }
+}
+
+impl Eq for char {
+    type Other: char
+    fn equals(other: char): bool => self == other
+}
+
+impl Eq for string {
+    type Other: string
+    fn equals(other: string): bool => self == other
+}
+
+impl Eq for i8 {
+    type Other: i8
+    fn equals(other: i8): bool => self == other
+}
+
+impl Ord for i8 {
+    type Other: i8
+    fn compare(other: i8): Ordering {
+        if self < other {
+            return Ordering.Less
+        }
+        if self > other {
+            return Ordering.Greater
+        }
+        return Ordering.Equal
+    }
+}
+
+impl Eq for i16 {
+    type Other: i16
+    fn equals(other: i16): bool => self == other
+}
+
+impl Ord for i16 {
+    type Other: i16
+    fn compare(other: i16): Ordering {
+        if self < other {
+            return Ordering.Less
+        }
+        if self > other {
+            return Ordering.Greater
+        }
+        return Ordering.Equal
+    }
+}
+
+impl Eq for i32 {
+    type Other: i32
+    fn equals(other: i32): bool => self == other
+}
+
+impl Ord for i32 {
+    type Other: i32
+    fn compare(other: i32): Ordering {
+        if self < other {
+            return Ordering.Less
+        }
+        if self > other {
+            return Ordering.Greater
+        }
+        return Ordering.Equal
+    }
+}
+
+impl Eq for i64 {
+    type Other: i64
+    fn equals(other: i64): bool => self == other
+}
+
+impl Ord for i64 {
+    type Other: i64
+    fn compare(other: i64): Ordering {
+        if self < other {
+            return Ordering.Less
+        }
+        if self > other {
+            return Ordering.Greater
+        }
+        return Ordering.Equal
+    }
+}
+
+impl Eq for i128 {
+    type Other: i128
+    fn equals(other: i128): bool => self == other
+}
+
+impl Ord for i128 {
+    type Other: i128
+    fn compare(other: i128): Ordering {
+        if self < other {
+            return Ordering.Less
+        }
+        if self > other {
+            return Ordering.Greater
+        }
+        return Ordering.Equal
+    }
+}
+
+impl Eq for u8 {
+    type Other: u8
+    fn equals(other: u8): bool => self == other
+}
+
+impl Ord for u8 {
+    type Other: u8
+    fn compare(other: u8): Ordering {
+        if self < other {
+            return Ordering.Less
+        }
+        if self > other {
+            return Ordering.Greater
+        }
+        return Ordering.Equal
+    }
+}
+
+impl Eq for u16 {
+    type Other: u16
+    fn equals(other: u16): bool => self == other
+}
+
+impl Ord for u16 {
+    type Other: u16
+    fn compare(other: u16): Ordering {
+        if self < other {
+            return Ordering.Less
+        }
+        if self > other {
+            return Ordering.Greater
+        }
+        return Ordering.Equal
+    }
+}
+
+impl Eq for u32 {
+    type Other: u32
+    fn equals(other: u32): bool => self == other
+}
+
+impl Ord for u32 {
+    type Other: u32
+    fn compare(other: u32): Ordering {
+        if self < other {
+            return Ordering.Less
+        }
+        if self > other {
+            return Ordering.Greater
+        }
+        return Ordering.Equal
+    }
+}
+
+impl Eq for u64 {
+    type Other: u64
+    fn equals(other: u64): bool => self == other
+}
+
+impl Ord for u64 {
+    type Other: u64
+    fn compare(other: u64): Ordering {
+        if self < other {
+            return Ordering.Less
+        }
+        if self > other {
+            return Ordering.Greater
+        }
+        return Ordering.Equal
+    }
+}
+
+impl Eq for u128 {
+    type Other: u128
+    fn equals(other: u128): bool => self == other
+}
+
+impl Ord for u128 {
+    type Other: u128
+    fn compare(other: u128): Ordering {
+        if self < other {
+            return Ordering.Less
+        }
+        if self > other {
+            return Ordering.Greater
+        }
+        return Ordering.Equal
+    }
+}
+
+impl Eq for usize {
+    type Other: usize
+    fn equals(other: usize): bool => self == other
+}
+
+impl Ord for usize {
+    type Other: usize
+    fn compare(other: usize): Ordering {
+        if self < other {
+            return Ordering.Less
+        }
+        if self > other {
+            return Ordering.Greater
+        }
+        return Ordering.Equal
+    }
+}

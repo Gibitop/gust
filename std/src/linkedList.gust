@@ -1,0 +1,183 @@
+from ./collection import { FromElements }
+from ./iter import { FromIterator, Iterable, Iterator }
+from ./option import { Option }
+
+struct LinkedListNode<T> {
+    value: T
+    previous: Option<LinkedListNode<T>>
+    next: Option<LinkedListNode<T>>
+}
+
+export struct LinkedList<T> {
+    internal head: Option<LinkedListNode<T>>
+    internal tail: Option<LinkedListNode<T>>
+    internal count: usize
+
+    static fn new(): Self => LinkedList<T> {
+        head: Option.None,
+        tail: Option.None,
+        count: 0,
+    }
+
+    static fn withCapacity(capacity: usize): Self => LinkedList<T>.new()
+
+    static fn fromIterator(mut iterator: Iterator<type Item: T>): Self {
+        let mut result: Self = LinkedList<T>.new()
+        for value in iterator {
+            result.pushBack(value)
+        }
+        return result
+    }
+
+    fn len(): usize => self.count
+
+    fn isEmpty(): bool => self.count == 0
+
+    fn pushBack(mut self, value: T) {
+        let node = LinkedListNode<T> {
+            value: value,
+            previous: self.tail,
+            next: Option.None,
+        }
+
+        match self.tail {
+            Option.Some(mut tail) => {
+                tail.next = Option.Some(node)
+            },
+            Option.None => {
+                self.head = Option.Some(node)
+            },
+        }
+
+        self.tail = Option.Some(node)
+        self.count += 1
+    }
+
+    fn pushFront(mut self, value: T) {
+        let node = LinkedListNode<T> {
+            value: value,
+            previous: Option.None,
+            next: self.head,
+        }
+
+        match self.head {
+            Option.Some(mut head) => {
+                head.previous = Option.Some(node)
+            },
+            Option.None => {
+                self.tail = Option.Some(node)
+            },
+        }
+
+        self.head = Option.Some(node)
+        self.count += 1
+    }
+
+    fn front(): Option<T> {
+        return match self.head {
+            Option.Some(node) => Option.Some(node.value),
+            Option.None => Option<T>.None,
+        }
+    }
+
+    fn back(): Option<T> {
+        return match self.tail {
+            Option.Some(node) => Option.Some(node.value),
+            Option.None => Option<T>.None,
+        }
+    }
+
+    fn popFront(mut self): Option<T> {
+        match self.head {
+            Option.Some(mut node) => {
+                self.head = node.next
+                match node.next {
+                    Option.Some(mut next) => {
+                        next.previous = Option<LinkedListNode<T>>.None
+                    },
+                    Option.None => {
+                        self.tail = Option<LinkedListNode<T>>.None
+                    },
+                }
+                self.count -= 1
+                return Option.Some(node.value)
+            },
+            Option.None => {
+                return Option<T>.None
+            },
+        }
+    }
+
+    fn popBack(mut self): Option<T> {
+        match self.tail {
+            Option.Some(mut node) => {
+                self.tail = node.previous
+                match node.previous {
+                    Option.Some(mut previous) => {
+                        previous.next = Option<LinkedListNode<T>>.None
+                    },
+                    Option.None => {
+                        self.head = Option<LinkedListNode<T>>.None
+                    },
+                }
+                self.count -= 1
+                return Option.Some(node.value)
+            },
+            Option.None => {
+                return Option<T>.None
+            },
+        }
+    }
+
+    fn clear(mut self) {
+        self.head = Option<LinkedListNode<T>>.None
+        self.tail = Option<LinkedListNode<T>>.None
+        self.count = 0
+    }
+
+    fn iterator(): Iterator<type Item: T> => LinkedListIterator<T>.new(self.head)
+}
+
+struct LinkedListIterator<T> {
+    internal current: Option<LinkedListNode<T>>
+
+    static fn new(current: Option<LinkedListNode<T>>): Self => LinkedListIterator<T> {
+        current: current,
+    }
+
+    fn advance(mut self): Option<T> {
+        match self.current {
+            Option.Some(node) => {
+                self.current = node.next
+                return Option.Some(node.value)
+            },
+            Option.None => {
+                return Option<T>.None
+            },
+        }
+    }
+}
+
+impl<T> Iterable for LinkedList<T> {
+    type Item: T
+    fn iterator(): Iterator<type Item: T> => self.iterator()
+}
+
+impl<T> Iterator for LinkedListIterator<T> {
+    type Item: T
+    fn next(mut self): Option<T> => self.advance()
+}
+
+impl<T> FromElements for LinkedList<T> {
+    type Item: T
+    static fn withElementCapacity(capacity: usize): Self => LinkedList<T>.new()
+
+    fn add(mut self, value: T) {
+        self.pushBack(value)
+    }
+}
+
+impl<T> FromIterator for LinkedList<T> {
+    type Item: T
+    static fn fromIterator(mut iterator: Iterator<type Item: T>): Self => LinkedList<T>.fromIterator(iterator)
+}
