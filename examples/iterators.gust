@@ -1,5 +1,5 @@
-from ../std/src/iter import { Iterator }
-from ../std/src/option import { Option }
+from std/iter import { Iterator }
+from std/option import { Option }
 
 struct Counter {
     value: i32

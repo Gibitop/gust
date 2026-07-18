@@ -322,6 +322,190 @@ fn main() {}"#,
 }
 
 #[test]
+fn star_imports_make_exported_names_visible() {
+    let project = TempProject::new();
+    project.write(
+        "main.gust",
+        r#"from ./helper import *
+
+fn main() {
+    io.println(message())
+}"#,
+    );
+    project.write(
+        "helper.gust",
+        r#"export fn message(): string => "star"
+fn hidden(): string => "hidden""#,
+    );
+
+    let result = check_project_no_std(&project.path("main.gust")).expect("project should load");
+
+    assert!(
+        result.diagnostics.is_empty(),
+        "expected star import to validate, got {:?}",
+        result.diagnostics
+    );
+    lower_program(&result.program).expect("star import should lower");
+}
+
+#[test]
+fn star_import_conflicts_are_rejected() {
+    let project = TempProject::new();
+    project.write(
+        "main.gust",
+        r#"from ./helper import *
+
+fn message(): string => "local"
+
+fn main() {}"#,
+    );
+    project.write("helper.gust", r#"export fn message(): string => "imported""#);
+
+    let result = check_project_no_std(&project.path("main.gust")).expect("project should load");
+
+    assert!(result.diagnostics.iter().any(|diagnostic| {
+        diagnostic
+            .message
+            .contains("imported name `message` conflicts")
+    }));
+}
+
+#[test]
+fn modules_can_re_export_named_and_star_imports() {
+    let project = TempProject::new();
+    project.write(
+        "main.gust",
+        r#"from ./facade import { message, label }
+
+fn main() {
+    io.println(message() + label())
+}"#,
+    );
+    project.write(
+        "facade.gust",
+        r#"from ./message export { message }
+from ./middle export *"#,
+    );
+    project.write("middle.gust", "from ./labels export *");
+    project.write("message.gust", r#"export fn message(): string => "re""#);
+    project.write("labels.gust", r#"export fn label(): string => "export""#);
+
+    let result = check_project_no_std(&project.path("main.gust")).expect("project should load");
+
+    assert!(
+        result.diagnostics.is_empty(),
+        "expected re-exports to validate, got {:?}",
+        result.diagnostics
+    );
+    lower_program(&result.program).expect("re-exports should lower");
+}
+
+#[test]
+fn implicit_std_prelude_uses_configured_std_path() {
+    let std = TempProject::new();
+    std.write("project.yaml", "noStd: true\ndependencies: {}\n");
+    std.write("src/prelude.gust", "from ./marker export { Marker }");
+    std.write("src/marker.gust", "export struct Marker {}\n");
+
+    let app = TempProject::new();
+    app.write("project.yaml", "dependencies: {}\n");
+    app.write(
+        "src/main.gust",
+        r#"fn main() {
+    let value = Marker {}
+}"#,
+    );
+
+    let result = check_project_with_options(
+        &app.path,
+        ProjectOptions {
+            std_path: Some(std.path.clone()),
+            no_std: false,
+        },
+    )
+    .expect("project should load");
+
+    assert!(
+        result.diagnostics.is_empty(),
+        "expected configured std prelude to validate, got {:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
+fn implicit_std_prelude_is_weak() {
+    let std = TempProject::new();
+    std.write("project.yaml", "noStd: true\ndependencies: {}\n");
+    std.write("src/prelude.gust", "from ./marker export { Marker }");
+    std.write("src/marker.gust", "export struct Marker {}\n");
+
+    let app = TempProject::new();
+    app.write("project.yaml", "dependencies: {}\n");
+    app.write(
+        "src/main.gust",
+        r#"struct Marker {
+    value: string
+}
+
+fn main() {
+    let value = Marker { value: "local" }
+    io.println(value.value)
+}"#,
+    );
+
+    let result = check_project_with_options(
+        &app.path,
+        ProjectOptions {
+            std_path: Some(std.path.clone()),
+            no_std: false,
+        },
+    )
+    .expect("project should load");
+
+    assert!(
+        result.diagnostics.is_empty(),
+        "expected local declaration to shadow prelude, got {:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
+fn no_std_projects_do_not_receive_or_import_std() {
+    let project = TempProject::new();
+    project.write("project.yaml", "noStd: true\ndependencies: {}\n");
+    project.write(
+        "src/main.gust",
+        r#"from std/option import { Option }
+
+fn main() {
+    let value: Option<i32> = Option.Some(1)
+}"#,
+    );
+
+    let result = check_project(&project.path).expect("project should load");
+
+    assert!(result.diagnostics.iter().any(|diagnostic| {
+        diagnostic
+            .message
+            .contains("`std` is unavailable because this package has `noStd: true`")
+    }));
+}
+
+#[test]
+fn std_dependency_name_is_reserved() {
+    let project = TempProject::new();
+    project.write("project.yaml", "dependencies:\n  std: fs:./fake-std\n");
+    project.write("src/main.gust", "fn main() {}\n");
+
+    let error = match check_project(&project.path) {
+        Ok(_) => panic!("reserved std dependency should fail"),
+        Err(error) => error,
+    };
+
+    assert!(error.contains("dependency name `std` is reserved"));
+}
+
+#[test]
 fn panic_stack_locations_use_paths_relative_to_compilation_root() {
     let project = TempProject::new();
     project.write(

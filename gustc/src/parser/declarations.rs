@@ -1,17 +1,32 @@
 impl Parser {
-    fn parse_import(&mut self) -> ImportDecl {
+    fn parse_from_decl(&mut self) -> ImportDecl {
         let start = self.expect_keyword(Keyword::From, "`from`").span;
         let mut path = String::new();
 
-        while !self.at_eof() && self.current_keyword() != Some(Keyword::Import) {
+        while !self.at_eof()
+            && !matches!(
+                self.current_keyword(),
+                Some(Keyword::Import | Keyword::Export)
+            )
+        {
             path.push_str(&self.advance().lexeme);
         }
 
-        self.expect_keyword(Keyword::Import, "`import`");
+        let exported = if self.match_keyword(Keyword::Import) {
+            false
+        } else if self.match_keyword(Keyword::Export) {
+            true
+        } else {
+            self.error_here("expected `import` or `export`");
+            false
+        };
 
         let mut names = Vec::new();
-        let braced = self.match_kind(&TokenKind::LeftBrace);
-        let namespace = if braced {
+        let mut glob = false;
+        let namespace = if self.match_kind(&TokenKind::Star) {
+            glob = true;
+            None
+        } else if self.match_kind(&TokenKind::LeftBrace) {
             while !self.at_eof() && !self.check_kind(&TokenKind::RightBrace) {
                 let name_start = self.current().span;
                 if let Some(name) = self.consume_identifier() {
@@ -37,6 +52,9 @@ impl Parser {
             self.expect_kind(&TokenKind::RightBrace, "`}`");
             None
         } else {
+            if exported {
+                self.error_here("expected `*` or exported names in `{}`");
+            }
             let namespace_start = self.current().span;
             let name = self.expect_identifier("expected module namespace");
             Some(ImportNamespace {
@@ -51,6 +69,8 @@ impl Parser {
             path,
             names,
             namespace,
+            glob,
+            exported,
             span: start.join(end),
         }
     }

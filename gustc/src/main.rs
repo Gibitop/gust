@@ -6,7 +6,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use gustc::c_codegen::{CCodegenOptions, emit_c_with_options};
 use gustc::lower::lower_program_with_source_files;
-use gustc::project::check_project;
+use gustc::project::{ProjectOptions, check_project_with_options};
 
 const USAGE: &str = "usage: gustc <file.gust|directory> [options]";
 const HELP: &str = "\
@@ -18,6 +18,7 @@ Arguments:
 Options:
   -o <output>            Write the executable to <output>
   --emit-c <output.c>    Write generated C source to <output.c>
+  --std-path <path>      Use the standard library project at <path>
   --gc-stress            Emit a binary that collects at every safepoint
   --help                 Print this help message";
 
@@ -45,6 +46,7 @@ fn main() -> ExitCode {
     };
     let mut output_path = None;
     let mut emit_c_path = None;
+    let mut std_path = None;
     let mut gc_stress = false;
 
     while let Some(arg) = args.next() {
@@ -68,6 +70,17 @@ fn main() -> ExitCode {
 
                 if emit_c_path.replace(PathBuf::from(output)).is_some() {
                     eprintln!("duplicate `--emit-c` argument");
+                    return ExitCode::FAILURE;
+                }
+            }
+            "--std-path" => {
+                let Some(path) = args.next() else {
+                    eprintln!("{USAGE}");
+                    return ExitCode::FAILURE;
+                };
+
+                if std_path.replace(PathBuf::from(path)).is_some() {
+                    eprintln!("duplicate `--std-path` argument");
                     return ExitCode::FAILURE;
                 }
             }
@@ -106,7 +119,13 @@ fn main() -> ExitCode {
         }
     });
 
-    let result = match check_project(&source_path) {
+    let result = match check_project_with_options(
+        &source_path,
+        ProjectOptions {
+            std_path,
+            no_std: false,
+        },
+    ) {
         Ok(result) => result,
         Err(error) => {
             eprintln!("{path}: error: {error}");

@@ -1,5 +1,3 @@
-from std/arrayList import { ArrayList }
-
 fn main() {
     let mut values: ArrayList<u8> = [1]
     values.push(2)

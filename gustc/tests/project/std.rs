@@ -31,7 +31,7 @@ fn main() {
 }"#,
     );
 
-    let result = check_project(&project.path("examples/main.gust")).expect("project should load");
+    let result = check_project_no_std(&project.path("examples/main.gust")).expect("project should load");
     assert!(
         result.diagnostics.is_empty(),
         "expected root standard library modules to validate, got {:?}",
@@ -71,7 +71,7 @@ fn main() {
 }"#,
     );
 
-    let result = check_project(&project.path("main.gust")).expect("project should load");
+    let result = check_project_no_std(&project.path("main.gust")).expect("project should load");
     assert!(
         result.diagnostics.is_empty(),
         "expected Result project to validate, got {:?}",
@@ -118,7 +118,7 @@ fn main() {
 }"#,
     );
 
-    let result = check_project(&project.path("main.gust")).expect("project should load");
+    let result = check_project_no_std(&project.path("main.gust")).expect("project should load");
     assert!(
         result.diagnostics.is_empty(),
         "expected Result panic project to validate, got {:?}",
@@ -164,7 +164,7 @@ fn string_intrinsics_are_available_without_imports() {
 }"#,
     );
 
-    let result = check_project(&project.path("examples/main.gust")).expect("project should load");
+    let result = check_project_no_std(&project.path("examples/main.gust")).expect("project should load");
     assert!(
         result.diagnostics.is_empty(),
         "expected intrinsic string operations to validate, got {:?}",
@@ -196,7 +196,7 @@ fn main() {
 }"#,
     );
 
-    let result = check_project(&project.path("examples/main.gust")).expect("project should load");
+    let result = check_project_no_std(&project.path("examples/main.gust")).expect("project should load");
     assert!(
         result.diagnostics.is_empty(),
         "expected StringBuilder to validate, got {:?}",
@@ -247,7 +247,7 @@ fn main() {
 }"#,
     );
 
-    let result = check_project(&project.path("main.gust")).expect("project should load");
+    let result = check_project_no_std(&project.path("main.gust")).expect("project should load");
     assert!(
         result.diagnostics.is_empty(),
         "expected std/internal storage declarations to validate, got {:?}",
@@ -325,7 +325,7 @@ fn main() {
 }"#,
     );
 
-    let result = check_project(&project.path("main.gust")).expect("project should load");
+    let result = check_project_no_std(&project.path("main.gust")).expect("project should load");
     assert!(
         result.diagnostics.is_empty(),
         "expected collection project to validate, got {:?}",
@@ -418,7 +418,7 @@ fn main() {
 }"#,
     );
 
-    let result = check_project(&project.path("main.gust")).expect("project should load");
+    let result = check_project_no_std(&project.path("main.gust")).expect("project should load");
     assert!(
         result.diagnostics.is_empty(),
         "expected GC collection project to validate, got {:?}",
@@ -494,7 +494,7 @@ fn main() {
 }"#,
     );
 
-    let result = check_project(&project.path("main.gust")).expect("project should load");
+    let result = check_project_no_std(&project.path("main.gust")).expect("project should load");
     assert!(
         result.diagnostics.is_empty(),
         "expected iterator adapters to validate, got {:?}",
@@ -562,7 +562,7 @@ fn assert_array_list_index_panic(main: &str, name: &str) {
     );
     project.write("main.gust", main);
 
-    let result = check_project(&project.path("main.gust")).expect("project should load");
+    let result = check_project_no_std(&project.path("main.gust")).expect("project should load");
     assert!(
         result.diagnostics.is_empty(),
         "expected indexed {name} panic project to validate, got {:?}",
@@ -620,7 +620,7 @@ fn main() {
 }"#,
     );
 
-    let result = check_project(&project.path("main.gust")).expect("project should load");
+    let result = check_project_no_std(&project.path("main.gust")).expect("project should load");
     assert!(
         result.diagnostics.is_empty(),
         "expected range project to validate, got {:?}",
@@ -679,7 +679,7 @@ fn main() {
 "#,
     );
 
-    let result = check_project(&project.path("main.gust")).expect("project should load");
+    let result = check_project_no_std(&project.path("main.gust")).expect("project should load");
     assert!(
         result.diagnostics.is_empty(),
         "expected enum methods to validate after linking, got {:?}",

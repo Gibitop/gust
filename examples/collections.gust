@@ -1,11 +1,11 @@
-from ../std/src/binaryHeap import { BinaryHeap }
-from ../std/src/collection import { MapEntry }
-from ../std/src/deque import { Deque }
-from ../std/src/hashMap import { HashMap }
-from ../std/src/hashSet import { HashSet }
-from ../std/src/linkedList import { LinkedList }
-from ../std/src/orderedMap import { OrderedMap }
-from ../std/src/orderedSet import { OrderedSet }
+from std/binaryHeap import { BinaryHeap }
+from std/collection import { MapEntry }
+from std/deque import { Deque }
+from std/hashMap import { HashMap }
+from std/hashSet import { HashSet }
+from std/linkedList import { LinkedList }
+from std/orderedMap import { OrderedMap }
+from std/orderedSet import { OrderedSet }
 
 fn main() {
     let mut deque = Deque<i32>.withCapacity(0)

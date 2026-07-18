@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use gustc::c_codegen::{CCodegenOptions, emit_c, emit_c_with_options};
 use gustc::diagnostic::Severity;
 use gustc::lower::{lower_program, lower_program_with_source_files};
-use gustc::project::check_project;
+use gustc::project::{ProjectOptions, check_project, check_project_with_options};
 
 static NEXT_PROJECT: AtomicUsize = AtomicUsize::new(0);
 
@@ -39,6 +39,16 @@ impl Drop for TempProject {
     fn drop(&mut self) {
         let _ = fs::remove_dir_all(&self.path);
     }
+}
+
+fn check_project_no_std(path: &Path) -> Result<gustc::project::ProjectCompileResult, String> {
+    check_project_with_options(
+        path,
+        ProjectOptions {
+            std_path: None,
+            no_std: true,
+        },
+    )
 }
 
 include!("modules.rs");

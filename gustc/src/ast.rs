@@ -38,6 +38,8 @@ pub struct ImportDecl {
     pub path: String,
     pub names: Vec<ImportName>,
     pub namespace: Option<ImportNamespace>,
+    pub glob: bool,
+    pub exported: bool,
     pub span: Span,
 }
 

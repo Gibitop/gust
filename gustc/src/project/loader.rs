@@ -3,6 +3,7 @@ struct ProjectLoader {
     module_indexes: HashMap<(usize, PathBuf), usize>,
     loading: HashSet<(usize, PathBuf)>,
     packages: Vec<Package>,
+    std_package: Option<usize>,
     sources: Vec<SourceFile>,
     diagnostics: Vec<Diagnostic>,
     next_offset: usize,
@@ -10,17 +11,24 @@ struct ProjectLoader {
 }
 
 impl ProjectLoader {
-    fn new(packages: Vec<Package>) -> Self {
-        Self {
+    fn new(mut packages: Vec<Package>, std_path: Option<PathBuf>) -> Result<Self, String> {
+        let std_package = if packages.iter().any(|package| !package.no_std) {
+            Some(load_std_package(&mut packages, std_path)?)
+        } else {
+            None
+        };
+
+        Ok(Self {
             modules: Vec::new(),
             module_indexes: HashMap::new(),
             loading: HashSet::new(),
             packages,
+            std_package,
             sources: Vec::new(),
             diagnostics: Vec::new(),
             next_offset: 0,
             load_error: None,
-        }
+        })
     }
 
     fn load_module(
@@ -68,6 +76,7 @@ impl ProjectLoader {
         self.next_offset += source.len() + 1;
         self.sources.push(SourceFile {
             path: path.clone(),
+            display_path: self.source_display_path(package, &path),
             source: source.clone(),
             offset,
         });
@@ -93,12 +102,31 @@ impl ProjectLoader {
                     path: import.path.clone(),
                     names: import.names.clone(),
                     namespace: import.namespace.clone(),
+                    glob: import.glob,
+                    exported: import.exported,
+                    weak: false,
                     span: import.span,
                     target: None,
                 }),
                 _ => None,
             })
             .collect();
+        let mut imports: Vec<ResolvedImport> = imports;
+        if let Some(std_package) = self.std_package
+            && !self.packages[package].no_std
+            && package != std_package
+        {
+            imports.push(ResolvedImport {
+                path: "std/prelude".to_string(),
+                names: Vec::new(),
+                namespace: None,
+                glob: true,
+                exported: false,
+                weak: true,
+                span: Span::new(offset, offset),
+                target: None,
+            });
+        }
         self.modules.push(Module {
             path: path.clone(),
             key: key.clone(),
@@ -159,6 +187,43 @@ impl ProjectLoader {
             .map_or((import_path, ""), |(dependency_name, module_path)| {
                 (dependency_name, module_path)
             });
+        if dependency_name == "std" {
+            if self.packages[package].no_std {
+                self.diagnostics.push(Diagnostic::error(
+                    span,
+                    "`std` is unavailable because this package has `noStd: true`",
+                ));
+                return None;
+            }
+            let Some(std_package) = self.std_package else {
+                self.diagnostics.push(Diagnostic::error(
+                    span,
+                    "standard library package is not configured",
+                ));
+                return None;
+            };
+            let mut path = self.packages[std_package].src.clone();
+            if module_path.is_empty() {
+                path.push("lib");
+            } else {
+                path.push(module_path);
+            }
+            if path.extension().is_none() {
+                path.set_extension("gust");
+            }
+            let path = self.canonicalize_import_path(path, span)?;
+            if !path.starts_with(&self.packages[std_package].src) {
+                self.diagnostics.push(Diagnostic::error(
+                    span,
+                    format!(
+                        "standard-library import `{import_path}` resolves outside standard-library source directory `{}`",
+                        self.packages[std_package].src.display()
+                    ),
+                ));
+                return None;
+            }
+            return Some((std_package, path));
+        }
         let Some(&dependency_package) = self.packages[package].dependencies.get(dependency_name)
         else {
             self.diagnostics.push(Diagnostic::error(
@@ -214,4 +279,79 @@ impl ProjectLoader {
             module_path.to_string_lossy()
         )
     }
+
+    fn source_display_path(&self, package: usize, path: &Path) -> Option<String> {
+        let package = &self.packages[package];
+        if !package.std {
+            return None;
+        }
+
+        let module_path = path.strip_prefix(&package.src).unwrap_or(path);
+        Some(format!("std/{}", module_path.to_string_lossy()))
+    }
+}
+
+fn load_std_package(
+    packages: &mut Vec<Package>,
+    std_path: Option<PathBuf>,
+) -> Result<usize, String> {
+    let root = resolve_std_path(std_path)?;
+    if let Some(index) = packages.iter().position(|package| package.root == root) {
+        packages[index].std = true;
+        packages[index].no_std = true;
+        return Ok(index);
+    }
+
+    let manifest_path = root.join("project.yaml");
+    if !manifest_path.is_file() {
+        return Err(format!(
+            "standard library project `{}` does not contain project.yaml",
+            root.display()
+        ));
+    }
+
+    let src = root.join("src");
+    if !src.is_dir() {
+        return Err(format!(
+            "standard library project `{}` does not contain a src directory",
+            root.display()
+        ));
+    }
+
+    let index = packages.len();
+    packages.push(Package {
+        root,
+        src,
+        project: true,
+        std: true,
+        no_std: true,
+        dependencies: HashMap::new(),
+    });
+    Ok(index)
+}
+
+fn resolve_std_path(std_path: Option<PathBuf>) -> Result<PathBuf, String> {
+    let candidates = if let Some(path) = std_path {
+        vec![path]
+    } else {
+        let mut paths = Vec::new();
+        if let Ok(executable) = std::env::current_exe()
+            && let Some(executable_dir) = executable.parent()
+        {
+            paths.push(executable_dir.join("../std"));
+        }
+        paths.push(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../std"));
+        paths
+    };
+
+    for path in candidates {
+        if let Ok(path) = path.canonicalize()
+            && path.join("project.yaml").is_file()
+            && path.join("src").is_dir()
+        {
+            return Ok(path);
+        }
+    }
+
+    Err("failed to locate standard library; pass `--std-path <path>`".to_string())
 }

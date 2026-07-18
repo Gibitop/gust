@@ -36,7 +36,7 @@ impl Parser {
             let start = self.position;
 
             match self.current_keyword() {
-                Some(Keyword::From) => items.push(Item::Import(self.parse_import())),
+                Some(Keyword::From) => items.push(Item::Import(self.parse_from_decl())),
                 Some(Keyword::Export) => items.push(self.parse_export()),
                 Some(Keyword::Enum) => items.push(Item::Enum(self.parse_enum(false, None))),
                 Some(Keyword::Struct) => items.push(Item::Struct(self.parse_struct(false, None))),

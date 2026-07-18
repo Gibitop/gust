@@ -1,5 +1,5 @@
-from ../std/src/option import { Option }
-from ../std/src/result import { Result }
+from std/option import { Option }
+from std/result import { Result }
 
 fn divide(dividend: i32, divisor: i32): Result<i32, string> {
     if divisor == 0 {

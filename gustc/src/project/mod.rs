@@ -38,7 +38,10 @@ impl ProjectSources {
         self.files
             .iter()
             .map(|file| LoweringSourceFile {
-                path: relative_source_path(&self.root, &file.path),
+                path: file
+                    .display_path
+                    .clone()
+                    .unwrap_or_else(|| relative_source_path(&self.root, &file.path)),
                 source: file.source.clone(),
                 offset: file.offset,
             })
@@ -63,12 +66,17 @@ impl ProjectSources {
         };
         let source_map = SourceMap::new(&file.source);
 
-        local_diagnostic.render(&file.path.to_string_lossy(), &source_map)
+        let path = file
+            .display_path
+            .as_deref()
+            .unwrap_or_else(|| file.path.to_str().unwrap_or("<source>"));
+        local_diagnostic.render(path, &source_map)
     }
 }
 
 struct SourceFile {
     path: PathBuf,
+    display_path: Option<String>,
     source: String,
     offset: usize,
 }
@@ -77,6 +85,8 @@ struct Package {
     root: PathBuf,
     src: PathBuf,
     project: bool,
+    std: bool,
+    no_std: bool,
     dependencies: HashMap<String, usize>,
 }
 
@@ -93,6 +103,9 @@ struct ResolvedImport {
     path: String,
     names: Vec<ImportName>,
     namespace: Option<ImportNamespace>,
+    glob: bool,
+    exported: bool,
+    weak: bool,
     span: Span,
     target: Option<usize>,
 }
@@ -105,6 +118,19 @@ struct Export {
 }
 
 pub fn check_project(path: &Path) -> Result<ProjectCompileResult, String> {
+    check_project_with_options(path, ProjectOptions::default())
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct ProjectOptions {
+    pub std_path: Option<PathBuf>,
+    pub no_std: bool,
+}
+
+pub fn check_project_with_options(
+    path: &Path,
+    options: ProjectOptions,
+) -> Result<ProjectCompileResult, String> {
     let requested_path = path;
     let requested_path = requested_path.canonicalize().map_err(|error| {
         format!(
@@ -155,13 +181,15 @@ pub fn check_project(path: &Path) -> Result<ProjectCompileResult, String> {
             root: root.clone(),
             src: root.clone(),
             project: false,
+            std: false,
+            no_std: options.no_std,
             dependencies: HashMap::new(),
         }];
         (root, entry_path, (0, packages))
     };
 
     let (root_package, packages) = root_package;
-    let mut loader = ProjectLoader::new(packages);
+    let mut loader = ProjectLoader::new(packages, options.std_path)?;
     let key = loader.module_key(root_package, &entry_path);
     loader.load_module(entry_path, key, root_package, true, None);
     if let Some(error) = loader.load_error {
@@ -237,12 +265,21 @@ fn load_package(root: &Path, packages: &mut Vec<Package>) -> Result<usize, Strin
         root: root.clone(),
         src: src.clone(),
         project: true,
+        std: false,
+        no_std: false,
         dependencies: HashMap::new(),
     });
 
-    let dependency_specs = read_project_dependencies(&manifest_path)?;
+    let manifest = read_project_manifest(&manifest_path)?;
+    packages[index].no_std = manifest.no_std;
     let mut dependencies = HashMap::new();
-    for (name, spec) in dependency_specs {
+    for (name, spec) in manifest.dependencies {
+        if name == "std" {
+            return Err(format!(
+                "{}: dependency name `std` is reserved for the standard library",
+                manifest_path.display()
+            ));
+        }
         let Some(path) = spec.strip_prefix("fs:") else {
             return Err(format!(
                 "{}: dependency `{name}` uses unsupported source `{spec}`",
@@ -262,12 +299,18 @@ fn load_package(root: &Path, packages: &mut Vec<Package>) -> Result<usize, Strin
     Ok(index)
 }
 
-fn read_project_dependencies(path: &Path) -> Result<Vec<(String, String)>, String> {
+struct ProjectManifest {
+    dependencies: Vec<(String, String)>,
+    no_std: bool,
+}
+
+fn read_project_manifest(path: &Path) -> Result<ProjectManifest, String> {
     let source = fs::read_to_string(path)
         .map_err(|error| format!("failed to read `{}`: {error}", path.display()))?;
     let mut dependencies = Vec::new();
     let mut in_dependencies = false;
     let mut dependencies_indent = 0;
+    let mut no_std = false;
 
     for (line_index, line) in source.lines().enumerate() {
         let line_number = line_index + 1;
@@ -278,6 +321,23 @@ fn read_project_dependencies(path: &Path) -> Result<Vec<(String, String)>, Strin
 
         let indent = line.len() - line.trim_start().len();
         if !in_dependencies {
+            if indent == 0 && trimmed.starts_with("noStd:") {
+                let value = trimmed
+                    .strip_prefix("noStd:")
+                    .expect("prefix was checked")
+                    .trim();
+                no_std = match unquote_yaml_scalar(value).as_str() {
+                    "true" => true,
+                    "false" => false,
+                    _ => {
+                        return Err(format!(
+                            "{}:{line_number}: expected `noStd` to be `true` or `false`",
+                            path.display()
+                        ));
+                    }
+                };
+                continue;
+            }
             if indent == 0 && trimmed == "dependencies:" {
                 in_dependencies = true;
                 dependencies_indent = indent;
@@ -294,6 +354,29 @@ fn read_project_dependencies(path: &Path) -> Result<Vec<(String, String)>, Strin
             if indent == 0 && trimmed == "dependencies:" {
                 in_dependencies = true;
                 dependencies_indent = indent;
+                continue;
+            }
+            if indent == 0 && trimmed == "dependencies: {}" {
+                continue;
+            }
+        }
+
+        if !in_dependencies {
+            if indent == 0 && trimmed.starts_with("noStd:") {
+                let value = trimmed
+                    .strip_prefix("noStd:")
+                    .expect("prefix was checked")
+                    .trim();
+                no_std = match unquote_yaml_scalar(value).as_str() {
+                    "true" => true,
+                    "false" => false,
+                    _ => {
+                        return Err(format!(
+                            "{}:{line_number}: expected `noStd` to be `true` or `false`",
+                            path.display()
+                        ));
+                    }
+                };
             }
             continue;
         }
@@ -321,7 +404,10 @@ fn read_project_dependencies(path: &Path) -> Result<Vec<(String, String)>, Strin
         dependencies.push((name.to_string(), unquote_yaml_scalar(value)));
     }
 
-    Ok(dependencies)
+    Ok(ProjectManifest {
+        dependencies,
+        no_std,
+    })
 }
 
 fn unquote_yaml_scalar(value: &str) -> String {

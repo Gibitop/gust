@@ -62,71 +62,85 @@ fn link_modules(modules: &[Module], diagnostics: &mut Vec<Diagnostic>) -> Progra
         local_extensions.push(module_extensions);
     }
 
+    resolve_re_exports(modules, &mut exports, diagnostics);
+    if diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.severity == Severity::Error)
+    {
+        return Program { items: Vec::new() };
+    }
+
     let mut visible_names = local_names.clone();
     let mut visible_name_packages = local_name_packages.clone();
     let mut visible_extensions = local_extensions.clone();
     let mut visible_namespaces = vec![HashMap::new(); modules.len()];
-    for (module_index, module) in modules.iter().enumerate() {
-        for import in &module.imports {
-            let Some(target) = import.target else {
-                continue;
-            };
-
-            if let Some(namespace) = &import.namespace
-                && (visible_names[module_index].contains_key(&namespace.name)
-                    || visible_namespaces[module_index]
-                        .insert(namespace.name.clone(), target)
-                        .is_some())
-            {
-                diagnostics.push(Diagnostic::error(
-                    namespace.span,
-                    format!(
-                        "module namespace `{}` conflicts with another name in this module",
-                        namespace.name
-                    ),
-                ));
-            }
-
-            for imported_name in &import.names {
-                let name = &imported_name.name;
-                let local_name = imported_name.alias.as_ref().unwrap_or(name);
-                let Some(export) = exports[target].get(name) else {
-                    diagnostics.push(Diagnostic::error(
-                        imported_name.span,
-                        format!(
-                            "module `{}` does not export `{name}`",
-                            modules[target].path.display()
-                        ),
-                    ));
+    for weak in [false, true] {
+        for (module_index, module) in modules.iter().enumerate() {
+            for import in &module.imports {
+                if import.exported || import.weak != weak {
+                    continue;
+                }
+                let Some(target) = import.target else {
                     continue;
                 };
-                if export.extension {
-                    if visible_extensions[module_index]
-                        .insert(local_name.clone(), export.internal_name.clone())
-                        .is_some()
-                    {
+
+                if let Some(namespace) = &import.namespace
+                    && (visible_names[module_index].contains_key(&namespace.name)
+                        || visible_namespaces[module_index]
+                            .insert(namespace.name.clone(), target)
+                            .is_some())
+                {
+                    diagnostics.push(Diagnostic::error(
+                        namespace.span,
+                        format!(
+                            "module namespace `{}` conflicts with another name in this module",
+                            namespace.name
+                        ),
+                    ));
+                }
+
+                if import.glob {
+                    for (name, export) in &exports[target] {
+                        import_visible_export(
+                            module_index,
+                            name,
+                            export,
+                            import.span,
+                            import.weak,
+                            &mut visible_names,
+                            &mut visible_name_packages,
+                            &mut visible_extensions,
+                            &visible_namespaces,
+                            diagnostics,
+                        );
+                    }
+                }
+
+                for imported_name in &import.names {
+                    let name = &imported_name.name;
+                    let local_name = imported_name.alias.as_ref().unwrap_or(name);
+                    let Some(export) = exports[target].get(name) else {
                         diagnostics.push(Diagnostic::error(
                             imported_name.span,
                             format!(
-                                "imported extension `{local_name}` conflicts with another extension in this module"
+                                "module `{}` does not export `{name}`",
+                                modules[target].path.display()
                             ),
                         ));
-                    }
-                    continue;
-                }
-                if visible_names[module_index]
-                    .insert(local_name.clone(), export.internal_name.clone())
-                    .is_some()
-                    || visible_namespaces[module_index].contains_key(local_name)
-                {
-                    diagnostics.push(Diagnostic::error(
+                        continue;
+                    };
+                    import_visible_export(
+                        module_index,
+                        local_name,
+                        export,
                         imported_name.span,
-                        format!(
-                            "imported name `{local_name}` conflicts with another name in this module"
-                        ),
-                    ));
-                } else {
-                    visible_name_packages[module_index].insert(local_name.clone(), export.package);
+                        import.weak,
+                        &mut visible_names,
+                        &mut visible_name_packages,
+                        &mut visible_extensions,
+                        &visible_namespaces,
+                        diagnostics,
+                    );
                 }
             }
         }
@@ -171,6 +185,157 @@ fn link_modules(modules: &[Module], diagnostics: &mut Vec<Diagnostic>) -> Progra
     }
 
     Program { items }
+}
+
+fn resolve_re_exports(
+    modules: &[Module],
+    exports: &mut [HashMap<String, Export>],
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    let mut states = vec![ReExportState::Pending; modules.len()];
+    for module_index in 0..modules.len() {
+        resolve_module_re_exports(module_index, modules, exports, diagnostics, &mut states);
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ReExportState {
+    Pending,
+    Visiting,
+    Done,
+}
+
+fn resolve_module_re_exports(
+    module_index: usize,
+    modules: &[Module],
+    exports: &mut [HashMap<String, Export>],
+    diagnostics: &mut Vec<Diagnostic>,
+    states: &mut [ReExportState],
+) {
+    match states[module_index] {
+        ReExportState::Done => return,
+        ReExportState::Visiting => return,
+        ReExportState::Pending => {}
+    }
+    states[module_index] = ReExportState::Visiting;
+
+    for import in &modules[module_index].imports {
+        if !import.exported {
+            continue;
+        }
+        let Some(target) = import.target else {
+            continue;
+        };
+        resolve_module_re_exports(target, modules, exports, diagnostics, states);
+
+        if import.glob {
+            for (name, export) in exports[target].clone() {
+                export_visible_name(
+                    module_index,
+                    &name,
+                    export,
+                    import.span,
+                    exports,
+                    diagnostics,
+                );
+            }
+        }
+
+        for imported_name in &import.names {
+            let name = &imported_name.name;
+            let export_name = imported_name.alias.as_ref().unwrap_or(name);
+            let Some(export) = exports[target].get(name).cloned() else {
+                diagnostics.push(Diagnostic::error(
+                    imported_name.span,
+                    format!(
+                        "module `{}` does not export `{name}`",
+                        modules[target].path.display()
+                    ),
+                ));
+                continue;
+            };
+            export_visible_name(
+                module_index,
+                export_name,
+                export,
+                imported_name.span,
+                exports,
+                diagnostics,
+            );
+        }
+    }
+
+    states[module_index] = ReExportState::Done;
+}
+
+fn export_visible_name(
+    module_index: usize,
+    name: &str,
+    export: Export,
+    span: Span,
+    exports: &mut [HashMap<String, Export>],
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    if let Some(existing) = exports[module_index].get(name) {
+        if existing.internal_name == export.internal_name {
+            return;
+        }
+        diagnostics.push(Diagnostic::error(
+            span,
+            format!("re-exported name `{name}` conflicts with another export in this module"),
+        ));
+        return;
+    }
+
+    exports[module_index].insert(name.to_string(), export);
+}
+
+#[allow(clippy::too_many_arguments)]
+fn import_visible_export(
+    module_index: usize,
+    local_name: &str,
+    export: &Export,
+    span: Span,
+    weak: bool,
+    visible_names: &mut [HashMap<String, String>],
+    visible_name_packages: &mut [HashMap<String, usize>],
+    visible_extensions: &mut [HashMap<String, String>],
+    visible_namespaces: &[HashMap<String, usize>],
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    if export.extension {
+        if visible_extensions[module_index].contains_key(local_name) {
+            if !weak {
+                diagnostics.push(Diagnostic::error(
+                    span,
+                    format!(
+                        "imported extension `{local_name}` conflicts with another extension in this module"
+                    ),
+                ));
+            }
+            return;
+        }
+        visible_extensions[module_index].insert(
+            local_name.to_string(),
+            export.internal_name.clone(),
+        );
+        return;
+    }
+
+    if visible_names[module_index].contains_key(local_name)
+        || visible_namespaces[module_index].contains_key(local_name)
+    {
+        if !weak {
+            diagnostics.push(Diagnostic::error(
+                span,
+                format!("imported name `{local_name}` conflicts with another name in this module"),
+            ));
+        }
+        return;
+    }
+
+    visible_names[module_index].insert(local_name.to_string(), export.internal_name.clone());
+    visible_name_packages[module_index].insert(local_name.to_string(), export.package);
 }
 
 struct ModuleDeclaration<'item> {

@@ -1,0 +1,8 @@
+fn main() {
+    let value: Option<i32> = Option.Some(42)
+    io.println(value.unwrap().toString())
+
+    let mut values: ArrayList<i32> = [1, 2]
+    values.push(3)
+    io.println(values.len().toString())
+}

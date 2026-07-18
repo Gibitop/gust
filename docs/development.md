@@ -38,6 +38,13 @@ resolve the same dependency name to different packages. Internal module names in
 root and source-relative module path so package instances do not collide.
 Relative imports inside full projects must stay under that package's `src` directory.
 
+The dependency name `std` is reserved for the compiler-owned standard library and cannot be
+declared in `project.yaml`.
+
+`project.yaml` may set `noStd: true` to make the standard library unavailable to that package.
+`noStd` packages do not receive the implicit standard prelude and cannot import `std/...`. This is
+used by the standard-library project itself while it is being compiled from source.
+
 ## Modules
 
 Local modules use relative paths and named imports. A relative import without an extension resolves
@@ -55,6 +62,14 @@ deterministic internal names derived from their import path so declarations with
 name in different modules do not collide. Only names listed by an importing module are added to
 that module's scope. Extension functions follow the same rule and retain real-member precedence.
 
+`from ./module import *` imports all exported names from the target module into the current module.
+Explicit star imports use normal import conflict rules: a star-imported name that conflicts with a
+local declaration, namespace import, or another imported name is an error.
+
+Modules can re-export names from another module with `from ./module export { Name }`, and can
+re-export every exported name with `from ./module export *`. Re-exports do not bind the names for
+local use in the re-exporting module.
+
 Package module resolution supports direct `fs:` project dependencies. Import cycles are rejected.
 
 Unexported top-level declarations remain visible inside their declaring module and are still linked
@@ -64,11 +79,22 @@ through a namespace import.
 ## Standard library development
 
 The source-level standard library lives in the repository-root `std` project, with source files
-under `std/src`. Gust projects may depend on it with `std: fs:<path-to-repo>/std` and import modules
-such as `from std/iter import { Iterator }`. Non-project examples may still import standard-library
-modules through ordinary relative paths, such as `from ../std/src/iter import { Iterator }`.
+under `std/src`. The compiler treats `std` as a compiler-owned package, so Gust projects can import
+modules such as `from std/iter import { Iterator }` without declaring `std` in `project.yaml`.
+Non-project examples may still import standard-library modules through ordinary relative paths,
+such as `from ../std/src/iter import { Iterator }`.
 Import paths use `/` as their separator. Standard-library modules may import one another using
 relative paths. Gust source filenames use camelCase.
+
+`gustc --std-path <path>` points the compiler at the standard-library project to use. Without the
+flag, the CLI looks for `../std` relative to the compiler executable, with a repository-local
+fallback for development builds.
+
+For every package that does not set `noStd: true`, the compiler adds a weak implicit star import
+from `std/prelude`. Weak prelude names are used only when the module does not already define or
+explicitly import that name, so adding names to the standard prelude does not break existing local
+declarations. Dependencies receive the prelude according to their own package configuration, not
+according to the root package that caused them to be compiled.
 
 Fully compiler-owned primitive types, such as numeric types, `char`, and `string`, do not have source-level
 standard-library declarations for their intrinsic members. This keeps operations that are always
