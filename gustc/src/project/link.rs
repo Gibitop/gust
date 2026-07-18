@@ -375,6 +375,12 @@ fn item_declaration(item: &Item) -> Option<ModuleDeclaration<'_>> {
             extension: false,
             span: item.span,
         }),
+        Item::StaticVar(item) => Some(ModuleDeclaration {
+            name: &item.name,
+            exported: item.exported,
+            extension: false,
+            span: item.span,
+        }),
         Item::Extension(item) => item
             .function
             .name

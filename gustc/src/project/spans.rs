@@ -82,6 +82,13 @@ fn shift_program(program: &mut Program, offset: usize) {
                 shift_function(&mut item.function, offset);
             }
             Item::Function(function) => shift_function(function, offset),
+            Item::StaticVar(item) => {
+                shift_span(&mut item.span, offset);
+                if let Some(type_ref) = &mut item.type_annotation {
+                    shift_type(type_ref, offset);
+                }
+                shift_expr(&mut item.value, offset);
+            }
         }
     }
 }

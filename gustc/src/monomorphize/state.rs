@@ -30,6 +30,7 @@ struct Monomorphizer {
     member_returns: HashMap<(String, String, bool), TypeRef>,
     function_returns: HashMap<String, TypeRef>,
     function_params: HashMap<String, Vec<Option<TypeRef>>>,
+    static_types: HashMap<String, TypeRef>,
     generic_function_returns: HashMap<String, TypeRef>,
     generic_method_returns: HashMap<(String, String, bool), TypeRef>,
     trait_method_returns: HashMap<(String, String), TypeRef>,

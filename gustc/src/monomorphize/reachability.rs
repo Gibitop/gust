@@ -10,6 +10,7 @@ struct MethodReachability<'items> {
     structs: HashMap<String, StructShape>,
     enums: HashMap<String, StructShape>,
     functions: HashMap<String, Option<String>>,
+    statics: HashMap<String, String>,
     generic_structs: &'items HashSet<String>,
     generic_methods: HashMap<(String, String, bool), FunctionDecl>,
     used: HashSet<(String, String, bool)>,
@@ -21,6 +22,7 @@ impl<'items> MethodReachability<'items> {
         let mut structs = HashMap::new();
         let mut enums = HashMap::new();
         let mut functions = HashMap::new();
+        let mut statics = HashMap::new();
         let mut generic_methods = HashMap::new();
 
         for item in items {
@@ -194,6 +196,12 @@ impl<'items> MethodReachability<'items> {
                         );
                     }
                 }
+                Item::StaticVar(item) => {
+                    if let Some(type_) = item.type_annotation.as_ref().and_then(concrete_type_name)
+                    {
+                        statics.insert(item.name.clone(), type_);
+                    }
+                }
                 Item::Import(_) | Item::Trait(_) | Item::Impl(_) | Item::Extension(_) => {}
             }
         }
@@ -202,6 +210,7 @@ impl<'items> MethodReachability<'items> {
             structs,
             enums,
             functions,
+            statics,
             generic_structs,
             generic_methods,
             used: HashSet::new(),
@@ -239,6 +248,18 @@ impl<'items> MethodReachability<'items> {
                     }
                 }
                 Item::Function(function) => self.visit_function(function, None, false),
+                Item::StaticVar(item) => {
+                    let mut locals = self.statics.clone();
+                    let value_type = self.visit_expr(&item.value, &mut locals);
+                    if let Some(type_) = item
+                        .type_annotation
+                        .as_ref()
+                        .and_then(|type_ref| self.type_name(type_ref))
+                        .or(value_type)
+                    {
+                        self.statics.insert(item.name.clone(), type_);
+                    }
+                }
                 Item::Extension(item) => self.visit_function(&item.function, None, false),
                 Item::Impl(item) => {
                     for member in &item.methods {
@@ -269,7 +290,7 @@ impl<'items> MethodReachability<'items> {
         owner_type: Option<&str>,
         has_self: bool,
     ) {
-        let mut locals = HashMap::new();
+        let mut locals = self.statics.clone();
         if let Some(owner_type) = owner_type {
             locals.insert("Self".to_string(), owner_type.to_string());
             if has_self {

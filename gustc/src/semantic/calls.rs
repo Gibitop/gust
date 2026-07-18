@@ -372,6 +372,11 @@ impl Analyzer {
                                 "cannot call mutable function `{qualified_name}` through immutable binding `{binding_name}`; declare it with `let mut {binding_name}` or call the function on a mutable clone"
                             )
                         }
+                        BindingOrigin::Static => {
+                            format!(
+                                "cannot call mutable function `{qualified_name}` through immutable static binding `{binding_name}`; call the function on a mutable clone"
+                            )
+                        }
                     }
                 } else {
                     format!(

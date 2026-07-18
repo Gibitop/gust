@@ -17,6 +17,7 @@ pub enum Item {
     Impl(ImplDecl),
     Extension(ExtensionDecl),
     Function(FunctionDecl),
+    StaticVar(StaticVarDecl),
 }
 
 impl Item {
@@ -29,6 +30,7 @@ impl Item {
             Item::Impl(item) => item.span,
             Item::Extension(item) => item.span,
             Item::Function(item) => item.span,
+            Item::StaticVar(item) => item.span,
         }
     }
 }
@@ -179,6 +181,15 @@ pub struct FunctionDecl {
     pub params: Vec<Param>,
     pub return_type: Option<TypeRef>,
     pub body: FunctionBody,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone)]
+pub struct StaticVarDecl {
+    pub name: String,
+    pub exported: bool,
+    pub type_annotation: Option<TypeRef>,
+    pub value: Expr,
     pub span: Span,
 }
 

@@ -481,7 +481,11 @@ impl Analyzer {
             }
         }
 
-        None
+        self.statics.get(name).cloned().map(|type_| Binding {
+            mutable: false,
+            type_,
+            origin: BindingOrigin::Static,
+        })
     }
 
     fn push_scope(&mut self) {

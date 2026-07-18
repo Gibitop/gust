@@ -11,7 +11,9 @@ impl Monomorphizer {
             span: expr.span,
         };
         match &expr.kind {
-            ExprKind::Identifier(name) => self.lookup_local_type(name),
+            ExprKind::Identifier(name) => self
+                .lookup_local_type(name)
+                .or_else(|| self.static_types.get(name).cloned()),
             ExprKind::Number(value) => {
                 Some(inferred(if crate::ast::number_literal_is_float(value) {
                     "f64"

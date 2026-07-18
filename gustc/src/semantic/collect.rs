@@ -11,6 +11,7 @@ impl Analyzer {
             enums: HashMap::new(),
             traits: HashMap::new(),
             functions: HashMap::new(),
+            statics: HashMap::new(),
             extensions: HashMap::new(),
             static_extensions: HashMap::new(),
             trait_methods: HashMap::new(),
@@ -93,6 +94,10 @@ impl Analyzer {
                         self.insert_top_level(&mut names, name, item.span);
                     }
                 }
+                Item::StaticVar(item) => {
+                    self.values.insert(item.name.clone());
+                    self.insert_top_level(&mut names, &item.name, item.span);
+                }
                 Item::Impl(_) => {}
                 Item::Extension(_) => {}
             }
@@ -123,6 +128,12 @@ impl Analyzer {
                             },
                         );
                     }
+                }
+                Item::StaticVar(item) => {
+                    self.statics.insert(
+                        item.name.clone(),
+                        self.type_ref_without_diagnostics(item.type_annotation.as_ref()),
+                    );
                 }
                 Item::Impl(_) => {}
                 Item::Extension(item) => self.collect_extension_definition(item),

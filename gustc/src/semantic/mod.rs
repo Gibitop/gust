@@ -2,8 +2,9 @@ use std::collections::{HashMap, HashSet};
 
 use crate::ast::{
     BasicType, BinaryOp, Block, ElseBranch, Expr, ExprKind, FunctionBody, FunctionDecl, ImplDecl,
-    Item, MatchBranchBody, Pattern, Program, Stmt, StmtKind, StructDecl, StructInitField,
-    StructMember, TraitDecl, TraitMethodDecl, TypeRef, UnaryOp, number_literal_is_float,
+    Item, MatchBranchBody, Pattern, Program, StaticVarDecl, Stmt, StmtKind, StructDecl,
+    StructInitField, StructMember, TraitDecl, TraitMethodDecl, TypeRef, UnaryOp,
+    number_literal_is_float,
 };
 use crate::diagnostic::Diagnostic;
 use crate::span::Span;

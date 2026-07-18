@@ -6,6 +6,7 @@ struct Analyzer {
     enums: HashMap<String, EnumDefinition>,
     traits: HashMap<String, TraitDefinition>,
     functions: HashMap<String, FunctionSignature>,
+    statics: HashMap<String, Type>,
     extensions: HashMap<String, FunctionSignature>,
     static_extensions: HashMap<String, FunctionSignature>,
     trait_methods: HashMap<String, FunctionSignature>,
@@ -71,6 +72,7 @@ struct Binding {
 #[derive(Debug, Clone)]
 enum BindingOrigin {
     Local,
+    Static,
     MatchPayload {
         enum_name: String,
         variant: String,

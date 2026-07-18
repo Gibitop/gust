@@ -81,6 +81,12 @@ Unexported top-level declarations remain visible inside their declaring module a
 when an exported declaration uses them, but other modules cannot import them by name or access them
 through a namespace import.
 
+Top-level `let` declarations are immutable runtime static bindings. Their initializers run once
+during program startup before `main`, in dependency order with source order as the tie-breaker for
+independent bindings. Cyclic top-level initialization dependencies are compile-time errors,
+including direct dependencies and dependencies through function and method calls scanned from
+initializers by callable source name.
+
 ## Standard library development
 
 The source-level standard library lives in the repository-root `std` project, with source files

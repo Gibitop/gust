@@ -402,6 +402,9 @@ impl<'program> LoweredTypeReachability<'program> {
     }
 
     fn find(mut self, reachable: &LoweredReachableItems) -> LoweredReachableTypes {
+        for static_ in &self.program.statics {
+            self.mark_type(&static_.type_);
+        }
         for statement in &self.program.statements {
             self.visit_statement(statement);
         }

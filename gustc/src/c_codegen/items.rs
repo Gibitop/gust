@@ -182,6 +182,40 @@ fn push_c_function_signature(source: &mut String, function: &LoweredFunction) {
     source.push(')');
 }
 
+fn push_c_static_declarations(source: &mut String, statics: &[LoweredStaticVar]) {
+    for static_ in statics {
+        source.push_str("static ");
+        push_c_type(source, &static_.type_);
+        source.push(' ');
+        push_c_local_name(source, &static_.name);
+        source.push_str(";\n");
+    }
+    if !statics.is_empty() {
+        source.push('\n');
+    }
+}
+
+fn push_c_static_roots(source: &mut String, statics: &[LoweredStaticVar], indent: usize) {
+    for static_ in statics {
+        if matches!(static_.type_, LoweredType::Void) {
+            continue;
+        }
+
+        push_c_indent(source, indent);
+        source.push_str("gust_rt_root_slot ");
+        push_c_root_name(source, &static_.name);
+        source.push_str(" = { &");
+        push_c_local_name(source, &static_.name);
+        source.push_str(", ");
+        push_c_cell_trace_name(source, &static_.type_);
+        source.push_str(", NULL };\n");
+        push_c_indent(source, indent);
+        source.push_str("gust_rt_root_push(&");
+        push_c_root_name(source, &static_.name);
+        source.push_str(");\n");
+    }
+}
+
 fn push_c_stack_push(
     source: &mut String,
     name: &str,

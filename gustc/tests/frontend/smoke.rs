@@ -68,12 +68,14 @@ fn main() {
 
 #[test]
 fn export_marks_top_level_declarations() {
-    let source = r#"export struct External {}
+    let source = r#"export let greeting = "hi"
+
+export struct External {}
 
 export fn helper(): string => "ok"
 
 fn main() {
-    io.println(helper())
+    io.println(greeting + helper())
 }"#;
     let result = check_source(source);
 
@@ -83,15 +85,119 @@ fn main() {
         result.diagnostics
     );
 
-    let Item::Struct(struct_) = &result.program.items[0] else {
+    let Item::StaticVar(static_) = &result.program.items[0] else {
+        panic!("expected static var declaration");
+    };
+    assert!(static_.exported);
+
+    let Item::Struct(struct_) = &result.program.items[1] else {
         panic!("expected struct declaration");
     };
     assert!(struct_.exported);
 
-    let Item::Function(function) = &result.program.items[1] else {
+    let Item::Function(function) = &result.program.items[2] else {
         panic!("expected function declaration");
     };
     assert!(function.exported);
+}
+
+#[test]
+fn top_level_lets_are_immutable_static_bindings() {
+    let source = r#"let base = 40
+let answer: i32 = base + 2
+
+fn main() {
+    io.println(answer.toString())
+}"#;
+    let result = check_source(source);
+
+    assert!(
+        !result.has_errors(),
+        "expected top-level lets to validate, got {:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
+fn top_level_let_mut_is_rejected() {
+    let source = r#"let mut count = 1
+
+fn main() {}"#;
+    let result = check_source(source);
+
+    assert!(
+        result
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic
+                .message
+                .contains("top-level static bindings cannot be mutable")),
+        "expected top-level let mut diagnostic, got {:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
+fn cyclic_top_level_let_initializers_are_rejected() {
+    let direct = check_source(
+        r#"let a = b + 1
+let b = a + 1
+
+fn main() {}"#,
+    );
+
+    assert!(
+        direct
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic
+                .message
+                .contains("cyclic top-level let initialization")),
+        "expected direct static cycle diagnostic, got {:?}",
+        direct.diagnostics
+    );
+
+    let through_function = check_source(
+        r#"let a = readB()
+let b = a + 1
+
+fn readB(): i32 => b
+
+fn main() {}"#,
+    );
+
+    assert!(
+        through_function
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic
+                .message
+                .contains("cyclic top-level let initialization")),
+        "expected function-hidden static cycle diagnostic, got {:?}",
+        through_function.diagnostics
+    );
+
+    let through_method = check_source(
+        r#"struct Reader {
+    static fn read(): i32 => b
+}
+
+let a = Reader.read()
+let b = a + 1
+
+fn main() {}"#,
+    );
+
+    assert!(
+        through_method
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic
+                .message
+                .contains("cyclic top-level let initialization")),
+        "expected method-hidden static cycle diagnostic, got {:?}",
+        through_method.diagnostics
+    );
 }
 
 #[test]

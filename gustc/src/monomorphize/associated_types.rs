@@ -154,6 +154,12 @@ impl Monomorphizer {
                 Item::Function(function) => {
                     self.validate_function_associated_types(function)
                 }
+                Item::StaticVar(item) => {
+                    if let Some(type_ref) = &item.type_annotation {
+                        self.validate_trait_object_type(type_ref);
+                    }
+                    self.validate_expr_trait_objects(&item.value);
+                }
                 Item::Import(_) => {}
             }
         }

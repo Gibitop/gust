@@ -4,7 +4,7 @@ use crate::ast::{BasicType, BinaryOp};
 use crate::lower::{
     LoweredClosureFunction, LoweredEnum, LoweredExpr, LoweredExprKind, LoweredFunction,
     LoweredMatchBindSource, LoweredMatchDecision, LoweredMatchTest, LoweredProgram,
-    LoweredSourceLocation, LoweredStatement, LoweredStruct, LoweredType,
+    LoweredSourceLocation, LoweredStatement, LoweredStaticVar, LoweredStruct, LoweredType,
 };
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -163,6 +163,8 @@ pub fn emit_c_with_options(program: &LoweredProgram, options: CCodegenOptions) -
 
     push_c_struct_runtime_helpers(&mut source, program);
 
+    push_c_static_declarations(&mut source, &program.statics);
+
     for function in ordered_functions(&program.functions) {
         push_c_function_signature(&mut source, function);
         source.push_str(";\n");
@@ -209,6 +211,7 @@ pub fn emit_c_with_options(program: &LoweredProgram, options: CCodegenOptions) -
         push_c_stack_push(&mut source, "main", &program.main_location, 1);
     }
     if uses_alloc {
+        push_c_static_roots(&mut source, &program.statics, 1);
         source.push_str("    gust_rt_root_slot* gust_rt_function_roots = gust_rt_roots;\n");
     }
 

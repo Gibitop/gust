@@ -3,8 +3,8 @@ use crate::ast::{
     EnumDecl, EnumVariant, Expr, ExprKind, ExtensionDecl, FieldDecl, FunctionBody, FunctionDecl,
     FunctionTypeParam, FunctionTypeRef, INDEX_METHOD, INDEX_SET_METHOD, ImplDecl, ImplMember,
     ImportDecl, ImportName, ImportNamespace, Item, MatchBranch, MatchBranchBody, Param, Pattern,
-    Program, Stmt, StmtKind, StructDecl, StructInitField, StructMember, TraitDecl, TraitMethodDecl,
-    TypeParamBound, TypeRef, UnaryOp,
+    Program, StaticVarDecl, Stmt, StmtKind, StructDecl, StructInitField, StructMember, TraitDecl,
+    TraitMethodDecl, TypeParamBound, TypeRef, UnaryOp,
 };
 use crate::diagnostic::Diagnostic;
 use crate::lexer::{
@@ -44,6 +44,9 @@ impl Parser {
                 Some(Keyword::Impl) => items.push(Item::Impl(self.parse_impl())),
                 Some(Keyword::Fn) => items.push(self.parse_top_level_function(false, None)),
                 Some(Keyword::Static) => items.push(self.parse_static_extension(false, None)),
+                Some(Keyword::Let) => {
+                    items.push(Item::StaticVar(self.parse_static_var(false, None)))
+                }
                 Some(Keyword::Type) => {
                     self.error_here(
                         "associated-type definitions are only allowed inside trait impls",

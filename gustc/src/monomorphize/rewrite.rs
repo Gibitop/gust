@@ -144,6 +144,21 @@ impl Monomorphizer {
                     );
                 }
             }
+            Item::StaticVar(item) => {
+                if let Some(type_ref) = &mut item.type_annotation {
+                    self.rewrite_type(type_ref, substitutions);
+                    self.expected_expr_types
+                        .insert(item.value.span, type_ref.clone());
+                }
+                self.rewrite_expr(&mut item.value, substitutions);
+                if let Some(type_ref) = &item.type_annotation {
+                    self.apply_expr_context(&mut item.value, type_ref);
+                    self.static_types
+                        .insert(item.name.clone(), type_ref.clone());
+                } else if let Some(type_ref) = self.infer_expr_type(&item.value) {
+                    self.static_types.insert(item.name.clone(), type_ref);
+                }
+            }
         }
     }
 

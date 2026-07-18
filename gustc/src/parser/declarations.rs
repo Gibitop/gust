@@ -83,8 +83,9 @@ impl Parser {
             Some(Keyword::Trait) => Item::Trait(self.parse_trait(true, Some(start))),
             Some(Keyword::Fn) => self.parse_top_level_function(true, Some(start)),
             Some(Keyword::Static) => self.parse_static_extension(true, Some(start)),
+            Some(Keyword::Let) => Item::StaticVar(self.parse_static_var(true, Some(start))),
             _ => {
-                self.error_here("expected exported enum, struct, trait, or function");
+                self.error_here("expected exported enum, struct, trait, function, or let binding");
                 self.advance();
                 self.synchronize_top_level();
                 Item::Function(FunctionDecl {
@@ -98,6 +99,45 @@ impl Parser {
                     span: start,
                 })
             }
+        }
+    }
+
+    fn parse_static_var(&mut self, exported: bool, export_start: Option<Span>) -> StaticVarDecl {
+        let start = if let Some(start) = export_start {
+            self.expect_keyword(Keyword::Let, "`let`");
+            start
+        } else {
+            self.expect_keyword(Keyword::Let, "`let`").span
+        };
+
+        if self.match_keyword(Keyword::Mut) {
+            self.diagnostics.push(Diagnostic::error(
+                self.previous_span(),
+                "top-level static bindings cannot be mutable",
+            ));
+        }
+
+        let name = self.expect_identifier("expected static binding name");
+        let type_annotation = if self.match_kind(&TokenKind::Colon) {
+            self.parse_type()
+        } else {
+            None
+        };
+
+        let value = if self.match_kind(&TokenKind::Equal) {
+            self.parse_expression()
+        } else {
+            self.error_here("top-level let bindings must include an initializer");
+            self.missing_expr(self.previous_span())
+        };
+        let span = start.join(value.span);
+
+        StaticVarDecl {
+            name,
+            exported,
+            type_annotation,
+            value,
+            span,
         }
     }
 

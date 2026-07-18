@@ -3,8 +3,8 @@ use std::collections::{HashMap, HashSet, VecDeque};
 
 use crate::ast::{
     BasicType, BinaryOp, Block, ElseBranch, Expr, ExprKind, FunctionBody, FunctionDecl, Item,
-    MatchBranchBody, Pattern, Program, Stmt, StmtKind, StructDecl, StructInitField, StructMember,
-    TraitDecl, TraitMethodDecl, TypeRef, UnaryOp, number_literal_is_float,
+    MatchBranchBody, Pattern, Program, StaticVarDecl, Stmt, StmtKind, StructDecl, StructInitField,
+    StructMember, TraitDecl, TraitMethodDecl, TypeRef, UnaryOp, number_literal_is_float,
 };
 use crate::diagnostic::Diagnostic;
 use crate::span::{SourceMap, Span};
@@ -108,7 +108,11 @@ fn lower_monomorphized_program(program: &Program) -> Result<LoweredProgram, Vec<
                     },
                 );
             }
-            Item::Import(_) | Item::Impl(_) | Item::Extension(_) | Item::Function(_) => {}
+            Item::Import(_)
+            | Item::Impl(_)
+            | Item::Extension(_)
+            | Item::Function(_)
+            | Item::StaticVar(_) => {}
         }
     }
 
@@ -140,6 +144,7 @@ fn lower_monomorphized_program(program: &Program) -> Result<LoweredProgram, Vec<
                 "imports are not supported in executable builds",
             )),
             Item::Enum(_) => {}
+            Item::StaticVar(_) => {}
         }
     }
 
@@ -431,7 +436,7 @@ fn lower_monomorphized_program(program: &Program) -> Result<LoweredProgram, Vec<
                     functions_to_lower.push((name.clone(), function, None, false));
                 }
             }
-            Item::Import(_) | Item::Trait(_) => {}
+            Item::Import(_) | Item::Trait(_) | Item::StaticVar(_) => {}
         }
     }
 
@@ -533,6 +538,14 @@ fn lower_monomorphized_program(program: &Program) -> Result<LoweredProgram, Vec<
     }
 
     let mut functions = Vec::new();
+    let (statics, mut statements, static_locals) = lower_static_vars(
+        program,
+        &signatures,
+        &structs,
+        &enums,
+        &traits,
+        &mut diagnostics,
+    );
 
     for (name, function, self_type, has_self) in &functions_to_lower {
         if let Some(function) = lower_function(
@@ -540,6 +553,7 @@ fn lower_monomorphized_program(program: &Program) -> Result<LoweredProgram, Vec<
             name,
             self_type.as_ref(),
             *has_self,
+            &static_locals,
             &signatures,
             &structs,
             &enums,
@@ -550,14 +564,15 @@ fn lower_monomorphized_program(program: &Program) -> Result<LoweredProgram, Vec<
         }
     }
 
-    let statements = lower_main(
+    statements.extend(lower_main(
         main,
+        &static_locals,
         &signatures,
         &structs,
         &enums,
         &traits,
         &mut diagnostics,
-    );
+    ));
     let (closure_functions, closure_diagnostics) = CLOSURE_LOWERING.with(|state| {
         let mut state = state.borrow_mut();
         (
@@ -580,6 +595,7 @@ fn lower_monomorphized_program(program: &Program) -> Result<LoweredProgram, Vec<
             structs,
             enums,
             traits,
+            statics,
             functions,
             closure_functions,
             statements,

@@ -122,6 +122,37 @@ fn main() {
 }
 
 #[test]
+fn top_level_static_initializers_emit_c_startup_assignments_and_roots() {
+    let result = check_source(
+        r#"let base = "Hello, "
+let message = greet("Gust")
+
+fn greet(name: string): string {
+    return base + name
+}
+
+fn main() {
+    io.println(message)
+}"#,
+    );
+    assert!(
+        !result.has_errors(),
+        "expected top-level static initializers to validate, got {:?}",
+        result.diagnostics
+    );
+    let lowered = lower_program(&result.program).expect("top-level statics should lower");
+
+    let source = emit_c(&lowered);
+    assert!(source.contains("static gust_rt_string gust_base;"));
+    assert!(source.contains("static gust_rt_string gust_message;"));
+    assert!(source.contains("gust_rt_root_slot gust_rt_root_base"));
+    assert!(source.contains("gust_rt_root_slot gust_rt_root_message"));
+    assert!(source.contains("gust_base = (gust_rt_string){"));
+    assert!(source.contains("gust_message = gust_fn_fb1de34a_greet((gust_rt_string){"));
+    assert!(source.contains("gust_rt_io_println(gust_message);"));
+}
+
+#[test]
 fn basic_struct_c_output_contains_typedef_literal_and_field_access() {
     let result = check_source(
         r#"struct Person {

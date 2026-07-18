@@ -366,6 +366,9 @@ fn push_c_trace_value(source: &mut String, type_: &LoweredType, value: &str) {
 
 fn gc_cell_types(program: &LoweredProgram) -> Vec<LoweredType> {
     let mut types = Vec::new();
+    for static_ in &program.statics {
+        types.push(static_.type_.clone());
+    }
     for function in &program.functions {
         for param in &function.params {
             types.push(param.type_.clone());

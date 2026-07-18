@@ -160,6 +160,16 @@ impl Monomorphizer {
                 ))
             })
             .collect();
+        let static_types = program
+            .items
+            .iter()
+            .filter_map(|item| {
+                let Item::StaticVar(item) = item else {
+                    return None;
+                };
+                Some((item.name.clone(), item.type_annotation.as_ref()?.clone()))
+            })
+            .collect();
         let generic_function_returns = function_templates
             .iter()
             .filter_map(|(name, function)| {
@@ -195,6 +205,7 @@ impl Monomorphizer {
             member_returns: HashMap::new(),
             function_returns,
             function_params,
+            static_types,
             generic_function_returns,
             generic_method_returns: HashMap::new(),
             trait_method_returns: HashMap::new(),

@@ -4,6 +4,7 @@ pub struct LoweredProgram {
     pub structs: Vec<LoweredStruct>,
     pub enums: Vec<LoweredEnum>,
     pub traits: Vec<LoweredTrait>,
+    pub statics: Vec<LoweredStaticVar>,
     pub functions: Vec<LoweredFunction>,
     pub closure_functions: Vec<LoweredClosureFunction>,
     pub statements: Vec<LoweredStatement>,
@@ -15,6 +16,12 @@ pub struct LoweredSourceLocation {
     pub path: String,
     pub line: usize,
     pub column: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LoweredStaticVar {
+    pub name: String,
+    pub type_: LoweredType,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

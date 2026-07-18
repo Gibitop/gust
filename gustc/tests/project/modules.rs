@@ -423,6 +423,68 @@ from ./middle export *"#,
 }
 
 #[test]
+fn modules_can_import_exported_top_level_lets() {
+    let project = TempProject::new();
+    project.write(
+        "main.gust",
+        r#"from ./message import { message }
+
+fn main() {
+    io.println(message)
+}"#,
+    );
+    project.write(
+        "message.gust",
+        r#"let prefix = "module"
+export let message = prefix + " static""#,
+    );
+
+    let result = check_project_no_std(&project.path("main.gust")).expect("project should load");
+
+    assert!(
+        !result.has_errors(),
+        "expected exported top-level lets to validate, got {:?}",
+        result.diagnostics
+    );
+    lower_program(&result.program).expect("exported top-level lets should lower");
+}
+
+#[test]
+fn cyclic_top_level_let_initializers_are_rejected_across_modules() {
+    let project = TempProject::new();
+    project.write(
+        "main.gust",
+        r#"from ./a import { a }
+
+fn main() {
+    io.println(a.toString())
+}"#,
+    );
+    project.write(
+        "a.gust",
+        r#"from ./b import { b }
+
+export let a = b + 1"#,
+    );
+    project.write(
+        "b.gust",
+        r#"from ./a import { a }
+
+export let b = a + 1"#,
+    );
+
+    let result = check_project_no_std(&project.path("main.gust")).expect("project should load");
+
+    assert!(
+        result.diagnostics.iter().any(|diagnostic| diagnostic
+            .message
+            .contains("cyclic top-level let initialization")),
+        "expected cross-module static cycle diagnostic, got {:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
 fn implicit_std_prelude_uses_configured_std_path() {
     let std = TempProject::new();
     std.write("project.yaml", "noStd: true\ndependencies: {}\n");

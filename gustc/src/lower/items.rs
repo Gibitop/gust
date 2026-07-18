@@ -362,6 +362,7 @@ fn lower_function(
     name: &str,
     self_type: Option<&LoweredType>,
     has_self: bool,
+    static_locals: &HashMap<String, LoweringLocal>,
     signatures: &HashMap<String, FunctionSignature>,
     structs: &HashMap<String, LoweredStruct>,
     enums: &HashMap<String, LoweredEnum>,
@@ -372,7 +373,7 @@ fn lower_function(
     let captured_names = captured_let_names(function);
     CAPTURED_NAMES.with(|names| *names.borrow_mut() = captured_names);
 
-    let mut locals = HashMap::new();
+    let mut locals = static_locals.clone();
     let mut params = Vec::new();
     let mut statements = Vec::new();
     let mut return_value = None;
@@ -591,6 +592,7 @@ fn lower_function(
 
 fn lower_main(
     main: &FunctionDecl,
+    static_locals: &HashMap<String, LoweringLocal>,
     signatures: &HashMap<String, FunctionSignature>,
     structs: &HashMap<String, LoweredStruct>,
     enums: &HashMap<String, LoweredEnum>,
@@ -598,7 +600,7 @@ fn lower_main(
     diagnostics: &mut Vec<Diagnostic>,
 ) -> Vec<LoweredStatement> {
     let mut statements = Vec::new();
-    let mut locals = HashMap::new();
+    let mut locals = static_locals.clone();
     let captured_names = captured_let_names(main);
     CAPTURED_NAMES.with(|names| *names.borrow_mut() = captured_names);
 
@@ -716,6 +718,510 @@ fn lower_main(
     }
 
     statements
+}
+
+fn lower_static_vars(
+    program: &Program,
+    signatures: &HashMap<String, FunctionSignature>,
+    structs: &HashMap<String, LoweredStruct>,
+    enums: &HashMap<String, LoweredEnum>,
+    traits: &HashMap<String, LoweredTrait>,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> (
+    Vec<LoweredStaticVar>,
+    Vec<LoweredStatement>,
+    HashMap<String, LoweringLocal>,
+) {
+    let mut statics = Vec::new();
+    let mut statements = Vec::new();
+    let mut static_locals = HashMap::new();
+
+    for item in ordered_static_vars(program) {
+        let expected_type = item.type_annotation.as_ref().and_then(|type_ref| {
+            lower_value_type_ref(
+                type_ref,
+                structs,
+                enums,
+                traits,
+                diagnostics,
+                "top-level let annotations only support basic, known struct, enum, trait, and function types in executable builds",
+            )
+        });
+        let Some(value) = lower_expr(
+            &item.value,
+            &static_locals,
+            signatures,
+            structs,
+            enums,
+            traits,
+            diagnostics,
+            expected_type.clone(),
+            "expected supported top-level let initializer in executable builds",
+        ) else {
+            continue;
+        };
+        let type_ = expected_type.unwrap_or_else(|| value.type_.clone());
+
+        statics.push(LoweredStaticVar {
+            name: item.name.clone(),
+            type_: type_.clone(),
+        });
+        statements.push(LoweredStatement::Assignment {
+            target: LoweredExpr {
+                type_: type_.clone(),
+                kind: LoweredExprKind::Local(item.name.clone()),
+            },
+            value,
+        });
+        static_locals.insert(
+            item.name.clone(),
+            LoweringLocal {
+                type_,
+                mutable: false,
+                replacement: None,
+                captured: false,
+            },
+        );
+    }
+
+    (statics, statements, static_locals)
+}
+
+fn ordered_static_vars(program: &Program) -> Vec<&StaticVarDecl> {
+    let statics = program
+        .items
+        .iter()
+        .filter_map(|item| {
+            let Item::StaticVar(item) = item else {
+                return None;
+            };
+            Some(item)
+        })
+        .collect::<Vec<_>>();
+    let static_names = statics
+        .iter()
+        .map(|item| item.name.clone())
+        .collect::<HashSet<_>>();
+    let mut functions: HashMap<String, Vec<&FunctionDecl>> = HashMap::new();
+    for item in &program.items {
+        collect_item_static_dependency_functions(item, &mut functions);
+    }
+    let dependencies = statics
+        .iter()
+        .map(|item| {
+            let mut deps = HashSet::new();
+            collect_expr_static_dependencies(
+                &item.value,
+                &static_names,
+                &functions,
+                &mut HashSet::new(),
+                &mut deps,
+            );
+            (item.name.clone(), deps)
+        })
+        .collect::<HashMap<_, _>>();
+
+    let mut remaining = static_names;
+    let mut ordered = Vec::new();
+
+    while !remaining.is_empty() {
+        let Some(item) = statics.iter().find(|item| {
+            remaining.contains(&item.name)
+                && dependencies[&item.name]
+                    .iter()
+                    .all(|dependency| !remaining.contains(dependency))
+        }) else {
+            ordered.extend(statics.iter().filter(|item| remaining.remove(&item.name)).copied());
+            break;
+        };
+
+        remaining.remove(&item.name);
+        ordered.push(*item);
+    }
+
+    ordered
+}
+
+fn collect_item_static_dependency_functions<'program>(
+    item: &'program Item,
+    functions: &mut HashMap<String, Vec<&'program FunctionDecl>>,
+) {
+    match item {
+        Item::Function(function) => {
+            if let Some(name) = &function.name {
+                functions.entry(name.clone()).or_default().push(function);
+            }
+        }
+        Item::Struct(item) => {
+            for member in &item.members {
+                if let StructMember::Method(function) | StructMember::StaticMethod(function) =
+                    member
+                    && let Some(name) = &function.name
+                {
+                    functions.entry(name.clone()).or_default().push(function);
+                }
+            }
+        }
+        Item::Enum(item) => {
+            for member in &item.members {
+                if let StructMember::Method(function) | StructMember::StaticMethod(function) =
+                    member
+                    && let Some(name) = &function.name
+                {
+                    functions.entry(name.clone()).or_default().push(function);
+                }
+            }
+        }
+        Item::Extension(item) => {
+            if let Some(name) = &item.function.name {
+                functions
+                    .entry(name.clone())
+                    .or_default()
+                    .push(&item.function);
+            }
+        }
+        Item::Impl(item) => {
+            for member in &item.methods {
+                if let Some(name) = &member.function.name {
+                    functions
+                        .entry(name.clone())
+                        .or_default()
+                        .push(&member.function);
+                }
+            }
+        }
+        Item::Import(_) | Item::Trait(_) | Item::StaticVar(_) => {}
+    }
+}
+
+fn collect_expr_static_dependencies(
+    expr: &Expr,
+    static_names: &HashSet<String>,
+    functions: &HashMap<String, Vec<&FunctionDecl>>,
+    visiting_functions: &mut HashSet<String>,
+    dependencies: &mut HashSet<String>,
+) {
+    match &expr.kind {
+        ExprKind::Identifier(name) => {
+            if static_names.contains(name) {
+                dependencies.insert(name.clone());
+            }
+        }
+        ExprKind::Array(items) | ExprKind::CollectionLiteral { items, .. } => {
+            for item in items {
+                collect_expr_static_dependencies(
+                    item,
+                    static_names,
+                    functions,
+                    visiting_functions,
+                    dependencies,
+                );
+            }
+        }
+        ExprKind::Call { callee, args } => {
+            let called_name = match &callee.kind {
+                ExprKind::Identifier(name)
+                | ExprKind::Member { name, .. }
+                | ExprKind::GenericMember { name, .. } => Some(name),
+                _ => None,
+            };
+            if let Some(name) = called_name
+                && let Some(called_functions) = functions.get(name)
+            {
+                for function in called_functions {
+                    if visiting_functions.insert(name.clone()) {
+                        collect_function_static_dependencies(
+                            function,
+                            static_names,
+                            functions,
+                            visiting_functions,
+                            dependencies,
+                        );
+                        visiting_functions.remove(name);
+                    }
+                }
+            }
+            collect_expr_static_dependencies(
+                callee,
+                static_names,
+                functions,
+                visiting_functions,
+                dependencies,
+            );
+            for arg in args {
+                collect_expr_static_dependencies(
+                    arg,
+                    static_names,
+                    functions,
+                    visiting_functions,
+                    dependencies,
+                );
+            }
+        }
+        ExprKind::Member { object, .. } | ExprKind::GenericMember { object, .. } => {
+            collect_expr_static_dependencies(
+                object,
+                static_names,
+                functions,
+                visiting_functions,
+                dependencies,
+            );
+        }
+        ExprKind::StructInit { fields, .. } => {
+            for field in fields {
+                collect_expr_static_dependencies(
+                    &field.value,
+                    static_names,
+                    functions,
+                    visiting_functions,
+                    dependencies,
+                );
+            }
+        }
+        ExprKind::Range { start, end, .. } | ExprKind::Binary { left: start, right: end, .. } => {
+            collect_expr_static_dependencies(
+                start,
+                static_names,
+                functions,
+                visiting_functions,
+                dependencies,
+            );
+            collect_expr_static_dependencies(
+                end,
+                static_names,
+                functions,
+                visiting_functions,
+                dependencies,
+            );
+        }
+        ExprKind::Unary { operand, .. }
+        | ExprKind::PostfixIncrement(operand)
+        | ExprKind::Cast { value: operand, .. } => {
+            collect_expr_static_dependencies(
+                operand,
+                static_names,
+                functions,
+                visiting_functions,
+                dependencies,
+            );
+        }
+        ExprKind::Match { value, branches } => {
+            collect_expr_static_dependencies(
+                value,
+                static_names,
+                functions,
+                visiting_functions,
+                dependencies,
+            );
+            for branch in branches {
+                if let Some(guard) = &branch.guard {
+                    collect_expr_static_dependencies(
+                        guard,
+                        static_names,
+                        functions,
+                        visiting_functions,
+                        dependencies,
+                    );
+                }
+                match &branch.body {
+                    MatchBranchBody::Expr(expr) => collect_expr_static_dependencies(
+                        expr,
+                        static_names,
+                        functions,
+                        visiting_functions,
+                        dependencies,
+                    ),
+                    MatchBranchBody::Block(block) => collect_block_static_dependencies(
+                        block,
+                        static_names,
+                        functions,
+                        visiting_functions,
+                        dependencies,
+                    ),
+                }
+            }
+        }
+        ExprKind::Lambda(_) => {}
+        ExprKind::GenericType { .. }
+        | ExprKind::Number(_)
+        | ExprKind::String(_)
+        | ExprKind::Char(_)
+        | ExprKind::Bool(_)
+        | ExprKind::Missing => {}
+    }
+}
+
+fn collect_function_static_dependencies(
+    function: &FunctionDecl,
+    static_names: &HashSet<String>,
+    functions: &HashMap<String, Vec<&FunctionDecl>>,
+    visiting_functions: &mut HashSet<String>,
+    dependencies: &mut HashSet<String>,
+) {
+    match &function.body {
+        FunctionBody::Block(block) => collect_block_static_dependencies(
+            block,
+            static_names,
+            functions,
+            visiting_functions,
+            dependencies,
+        ),
+        FunctionBody::Expr(expr) => collect_expr_static_dependencies(
+            expr,
+            static_names,
+            functions,
+            visiting_functions,
+            dependencies,
+        ),
+    }
+}
+
+fn collect_block_static_dependencies(
+    block: &Block,
+    static_names: &HashSet<String>,
+    functions: &HashMap<String, Vec<&FunctionDecl>>,
+    visiting_functions: &mut HashSet<String>,
+    dependencies: &mut HashSet<String>,
+) {
+    for statement in &block.statements {
+        match &statement.kind {
+            StmtKind::Let { value, .. } | StmtKind::Return { value } => {
+                if let Some(value) = value {
+                    collect_expr_static_dependencies(
+                        value,
+                        static_names,
+                        functions,
+                        visiting_functions,
+                        dependencies,
+                    );
+                }
+            }
+            StmtKind::Assign { target, value, .. } => {
+                collect_expr_static_dependencies(
+                    target,
+                    static_names,
+                    functions,
+                    visiting_functions,
+                    dependencies,
+                );
+                collect_expr_static_dependencies(
+                    value,
+                    static_names,
+                    functions,
+                    visiting_functions,
+                    dependencies,
+                );
+            }
+            StmtKind::If {
+                condition,
+                then_branch,
+                else_branch,
+            } => {
+                collect_expr_static_dependencies(
+                    condition,
+                    static_names,
+                    functions,
+                    visiting_functions,
+                    dependencies,
+                );
+                collect_block_static_dependencies(
+                    then_branch,
+                    static_names,
+                    functions,
+                    visiting_functions,
+                    dependencies,
+                );
+                if let Some(else_branch) = else_branch {
+                    match else_branch {
+                        ElseBranch::Block(block) => collect_block_static_dependencies(
+                            block,
+                            static_names,
+                            functions,
+                            visiting_functions,
+                            dependencies,
+                        ),
+                        ElseBranch::If(statement) => {
+                            collect_statement_static_dependencies(
+                                statement,
+                                static_names,
+                                functions,
+                                visiting_functions,
+                                dependencies,
+                            );
+                        }
+                    }
+                }
+            }
+            StmtKind::While { condition, body } => {
+                collect_expr_static_dependencies(
+                    condition,
+                    static_names,
+                    functions,
+                    visiting_functions,
+                    dependencies,
+                );
+                collect_block_static_dependencies(
+                    body,
+                    static_names,
+                    functions,
+                    visiting_functions,
+                    dependencies,
+                );
+            }
+            StmtKind::For { iterable, body, .. } => {
+                collect_expr_static_dependencies(
+                    iterable,
+                    static_names,
+                    functions,
+                    visiting_functions,
+                    dependencies,
+                );
+                collect_block_static_dependencies(
+                    body,
+                    static_names,
+                    functions,
+                    visiting_functions,
+                    dependencies,
+                );
+            }
+            StmtKind::Expr(expr) => collect_expr_static_dependencies(
+                expr,
+                static_names,
+                functions,
+                visiting_functions,
+                dependencies,
+            ),
+            StmtKind::Break | StmtKind::Continue => {}
+        }
+    }
+}
+
+fn collect_statement_static_dependencies(
+    statement: &Stmt,
+    static_names: &HashSet<String>,
+    functions: &HashMap<String, Vec<&FunctionDecl>>,
+    visiting_functions: &mut HashSet<String>,
+    dependencies: &mut HashSet<String>,
+) {
+    match &statement.kind {
+        StmtKind::If { .. }
+        | StmtKind::While { .. }
+        | StmtKind::For { .. }
+        | StmtKind::Let { .. }
+        | StmtKind::Assign { .. }
+        | StmtKind::Return { .. }
+        | StmtKind::Expr(_) => collect_block_static_dependencies(
+            &Block {
+                statements: vec![statement.clone()],
+                span: statement.span,
+            },
+            static_names,
+            functions,
+            visiting_functions,
+            dependencies,
+        ),
+        StmtKind::Break | StmtKind::Continue => {}
+    }
 }
 
 fn lower_function_value_expr(

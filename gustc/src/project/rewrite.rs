@@ -153,6 +153,13 @@ impl<'names, 'diagnostics> ModuleRewriter<'names, 'diagnostics> {
                 }
                 self.rewrite_function(function);
             }
+            Item::StaticVar(item) => {
+                self.rewrite_declared_name(&mut item.name);
+                if let Some(type_ref) = &mut item.type_annotation {
+                    self.rewrite_type(type_ref);
+                }
+                self.rewrite_expr(&mut item.value);
+            }
             Item::Extension(extension) => {
                 self.scopes
                     .push(extension.type_params.iter().cloned().collect());

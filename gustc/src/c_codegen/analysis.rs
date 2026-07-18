@@ -14,6 +14,10 @@ fn program_uses_type(program: &LoweredProgram, type_: BasicType) -> bool {
             .iter()
             .any(|function| function_uses_type(function, type_))
         || program
+            .statics
+            .iter()
+            .any(|static_| static_.type_ == LoweredType::Basic(type_))
+        || program
             .closure_functions
             .iter()
             .any(|function| closure_function_uses_type(function, type_))

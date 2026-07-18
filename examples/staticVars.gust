@@ -1,0 +1,14 @@
+from std/arrayList import { ArrayList }
+
+let greeting = "Hello"
+let target = "static vars"
+let message = greeting + ", " + target + "!"
+
+let arr: ArrayList<i32> = [1, 2, 3].iterator().map(fn (x) => x * 2).collect()
+
+fn main() {
+    io.println(message)
+    for item in arr {
+        io.println(item.toString())
+    }
+}

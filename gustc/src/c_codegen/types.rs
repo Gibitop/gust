@@ -139,6 +139,9 @@ fn collect_program_function_types(program: &LoweredProgram, types: &mut Vec<Lowe
             }
         }
     }
+    for static_ in &program.statics {
+        collect_function_type(&static_.type_, types);
+    }
     for function in &program.functions {
         collect_function_type(&function.return_type, types);
         for param in &function.params {
