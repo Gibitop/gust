@@ -192,59 +192,70 @@ fn resolve_re_exports(
     exports: &mut [HashMap<String, Export>],
     diagnostics: &mut Vec<Diagnostic>,
 ) {
-    let mut states = vec![ReExportState::Pending; modules.len()];
-    for module_index in 0..modules.len() {
-        resolve_module_re_exports(module_index, modules, exports, diagnostics, &mut states);
-    }
-}
+    let mut reported_conflicts = HashSet::new();
+    loop {
+        let mut changed = false;
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum ReExportState {
-    Pending,
-    Visiting,
-    Done,
-}
+        for module_index in 0..modules.len() {
+            for import in &modules[module_index].imports {
+                if !import.exported {
+                    continue;
+                }
+                let Some(target) = import.target else {
+                    continue;
+                };
 
-fn resolve_module_re_exports(
-    module_index: usize,
-    modules: &[Module],
-    exports: &mut [HashMap<String, Export>],
-    diagnostics: &mut Vec<Diagnostic>,
-    states: &mut [ReExportState],
-) {
-    match states[module_index] {
-        ReExportState::Done => return,
-        ReExportState::Visiting => return,
-        ReExportState::Pending => {}
-    }
-    states[module_index] = ReExportState::Visiting;
+                if import.glob {
+                    for (name, export) in exports[target].clone() {
+                        changed |= export_visible_name(
+                            module_index,
+                            &name,
+                            export,
+                            import.span,
+                            exports,
+                            &mut reported_conflicts,
+                            diagnostics,
+                        );
+                    }
+                }
 
-    for import in &modules[module_index].imports {
-        if !import.exported {
-            continue;
-        }
-        let Some(target) = import.target else {
-            continue;
-        };
-        resolve_module_re_exports(target, modules, exports, diagnostics, states);
-
-        if import.glob {
-            for (name, export) in exports[target].clone() {
-                export_visible_name(
-                    module_index,
-                    &name,
-                    export,
-                    import.span,
-                    exports,
-                    diagnostics,
-                );
+                for imported_name in &import.names {
+                    let name = &imported_name.name;
+                    let export_name = imported_name.alias.as_ref().unwrap_or(name);
+                    let Some(export) = exports[target].get(name).cloned() else {
+                        continue;
+                    };
+                    changed |= export_visible_name(
+                        module_index,
+                        export_name,
+                        export,
+                        imported_name.span,
+                        exports,
+                        &mut reported_conflicts,
+                        diagnostics,
+                    );
+                }
             }
         }
 
-        for imported_name in &import.names {
-            let name = &imported_name.name;
-            let export_name = imported_name.alias.as_ref().unwrap_or(name);
-            let Some(export) = exports[target].get(name).cloned() else {
+        if !changed {
+            break;
+        }
+    }
+
+    for module in modules {
+        for import in &module.imports {
+            if !import.exported {
+                continue;
+            }
+            let Some(target) = import.target else {
+                continue;
+            };
+            for imported_name in &import.names {
+                let name = &imported_name.name;
+                if exports[target].contains_key(name) {
+                    continue;
+                }
                 diagnostics.push(Diagnostic::error(
                     imported_name.span,
                     format!(
@@ -252,20 +263,9 @@ fn resolve_module_re_exports(
                         modules[target].path.display()
                     ),
                 ));
-                continue;
-            };
-            export_visible_name(
-                module_index,
-                export_name,
-                export,
-                imported_name.span,
-                exports,
-                diagnostics,
-            );
+            }
         }
     }
-
-    states[module_index] = ReExportState::Done;
 }
 
 fn export_visible_name(
@@ -274,20 +274,24 @@ fn export_visible_name(
     export: Export,
     span: Span,
     exports: &mut [HashMap<String, Export>],
+    reported_conflicts: &mut HashSet<(usize, String)>,
     diagnostics: &mut Vec<Diagnostic>,
-) {
+) -> bool {
     if let Some(existing) = exports[module_index].get(name) {
         if existing.internal_name == export.internal_name {
-            return;
+            return false;
         }
-        diagnostics.push(Diagnostic::error(
-            span,
-            format!("re-exported name `{name}` conflicts with another export in this module"),
-        ));
-        return;
+        if reported_conflicts.insert((module_index, name.to_string())) {
+            diagnostics.push(Diagnostic::error(
+                span,
+                format!("re-exported name `{name}` conflicts with another export in this module"),
+            ));
+        }
+        return false;
     }
 
     exports[module_index].insert(name.to_string(), export);
+    true
 }
 
 #[allow(clippy::too_many_arguments)]

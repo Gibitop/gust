@@ -148,7 +148,7 @@ pub fn check_project_with_options(
 
     let (root, entry_path, root_package) = if let Some(project_root) = project_root {
         let mut packages = Vec::new();
-        let root_package = load_package(&project_root, &mut packages)?;
+        let root_package = load_package(&project_root, &mut packages, &mut Vec::new())?;
         let entry_path = if path.is_dir() {
             packages[root_package].src.join("main.gust")
         } else {
@@ -233,13 +233,23 @@ fn find_project_root(path: &Path) -> Option<PathBuf> {
     None
 }
 
-fn load_package(root: &Path, packages: &mut Vec<Package>) -> Result<usize, String> {
+fn load_package(
+    root: &Path,
+    packages: &mut Vec<Package>,
+    loading: &mut Vec<PathBuf>,
+) -> Result<usize, String> {
     let root = root.canonicalize().map_err(|error| {
         format!(
             "failed to resolve Gust project `{}`: {error}",
             root.display()
         )
     })?;
+    if loading.contains(&root) {
+        return Err(format!(
+            "cyclic package dependency reaches `{}`",
+            root.display()
+        ));
+    }
     if let Some(index) = packages.iter().position(|package| package.root == root) {
         return Ok(index);
     }
@@ -259,6 +269,8 @@ fn load_package(root: &Path, packages: &mut Vec<Package>) -> Result<usize, Strin
             root.display()
         ));
     }
+
+    loading.push(root.clone());
 
     let index = packages.len();
     packages.push(Package {
@@ -291,10 +303,11 @@ fn load_package(root: &Path, packages: &mut Vec<Package>) -> Result<usize, Strin
         } else {
             root.join(path)
         };
-        let dependency_index = load_package(&dependency_root, packages)?;
+        let dependency_index = load_package(&dependency_root, packages, loading)?;
         dependencies.insert(name, dependency_index);
     }
     packages[index].dependencies = dependencies;
+    loading.pop();
 
     Ok(index)
 }

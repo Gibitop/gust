@@ -70,7 +70,12 @@ Modules can re-export names from another module with `from ./module export { Nam
 re-export every exported name with `from ./module export *`. Re-exports do not bind the names for
 local use in the re-exporting module.
 
-Package module resolution supports direct `fs:` project dependencies. Import cycles are rejected.
+Package module resolution supports direct `fs:` project dependencies. Module import cycles are
+supported because imports bind to top-level declarations, not to import-time execution. Re-export
+cycles are resolved to a fixed point; if star re-exports expose the same name from different
+underlying declarations, that ambiguous re-export is a compile error. Cyclic package dependencies
+are rejected in `project.yaml`, while shared non-cyclic dependencies still resolve through each
+package's own dependency scope.
 
 Unexported top-level declarations remain visible inside their declaring module and are still linked
 when an exported declaration uses them, but other modules cannot import them by name or access them

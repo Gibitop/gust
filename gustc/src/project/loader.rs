@@ -1,7 +1,6 @@
 struct ProjectLoader {
     modules: Vec<Module>,
     module_indexes: HashMap<(usize, PathBuf), usize>,
-    loading: HashSet<(usize, PathBuf)>,
     packages: Vec<Package>,
     std_package: Option<usize>,
     sources: Vec<SourceFile>,
@@ -21,7 +20,6 @@ impl ProjectLoader {
         Ok(Self {
             modules: Vec::new(),
             module_indexes: HashMap::new(),
-            loading: HashSet::new(),
             packages,
             std_package,
             sources: Vec::new(),
@@ -40,16 +38,6 @@ impl ProjectLoader {
         import_span: Option<Span>,
     ) -> Option<usize> {
         let module_id = (package, path.clone());
-        if self.loading.contains(&module_id) {
-            if let Some(span) = import_span {
-                self.diagnostics.push(Diagnostic::error(
-                    span,
-                    format!("module import cycle reaches `{}`", path.display()),
-                ));
-            }
-            return self.module_indexes.get(&module_id).copied();
-        }
-
         if let Some(index) = self.module_indexes.get(&module_id) {
             return Some(*index);
         }
@@ -93,7 +81,6 @@ impl ProjectLoader {
 
         let index = self.modules.len();
         self.module_indexes.insert(module_id.clone(), index);
-        self.loading.insert(module_id.clone());
         let imports = program
             .items
             .iter()
@@ -152,7 +139,6 @@ impl ProjectLoader {
             self.modules[index].imports[import_index].target = target;
         }
 
-        self.loading.remove(&module_id);
         Some(index)
     }
 

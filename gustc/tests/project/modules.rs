@@ -193,6 +193,28 @@ fn main() {
 }
 
 #[test]
+fn cyclic_package_dependencies_are_rejected() {
+    let app = TempProject::new();
+    app.write(
+        "project.yaml",
+        "dependencies:\n  feature: fs:deps/feature\n",
+    );
+    app.write("src/main.gust", "fn main() {}");
+    app.write(
+        "deps/feature/project.yaml",
+        "dependencies:\n  app: fs:../..\n",
+    );
+    app.write("deps/feature/src/lib.gust", "export fn value(): i32 => 1");
+
+    let error = match check_project(&app.path) {
+        Ok(_) => panic!("cyclic package dependency should fail"),
+        Err(error) => error,
+    };
+
+    assert!(error.contains("cyclic package dependency"));
+}
+
+#[test]
 fn package_impls_must_own_the_trait_or_self_type() {
     let traits = TempProject::new();
     traits.write("project.yaml", "dependencies: {}\n");
@@ -655,34 +677,133 @@ fn main() {}"#,
 }
 
 #[test]
-fn import_cycles_are_rejected() {
+fn cyclic_named_imports_are_supported() {
     let project = TempProject::new();
     project.write(
         "main.gust",
         r#"from ./a import { value }
 
-fn main() {}"#,
+fn main() {
+    io.println(value())
+}"#,
     );
     project.write(
         "a.gust",
         r#"from ./b import { other }
 
-fn value(): string => other()"#,
+export fn value(): string => other()"#,
     );
     project.write(
         "b.gust",
         r#"from ./a import { value }
 
-fn other(): string => value()"#,
+export fn other(): string => value()"#,
     );
 
     let result = check_project(&project.path("main.gust")).expect("project should load");
 
     assert!(
-        result
-            .diagnostics
-            .iter()
-            .any(|diagnostic| diagnostic.message.contains("module import cycle"))
+        result.diagnostics.is_empty(),
+        "expected cyclic imports to validate, got {:?}",
+        result.diagnostics
+    );
+    lower_program(&result.program).expect("cyclic imports should lower");
+}
+
+#[test]
+fn cyclic_namespace_imports_are_supported() {
+    let project = TempProject::new();
+    project.write(
+        "main.gust",
+        r#"from ./a import a
+
+fn main() {
+    io.println(a.value())
+}"#,
+    );
+    project.write(
+        "a.gust",
+        r#"from ./b import b
+
+export fn value(): string => b.other()
+export fn suffix(): string => "!""#,
+    );
+    project.write(
+        "b.gust",
+        r#"from ./a import a
+
+export fn other(): string => "cycle" + a.suffix()"#,
+    );
+
+    let result = check_project(&project.path("main.gust")).expect("project should load");
+
+    assert!(
+        result.diagnostics.is_empty(),
+        "expected cyclic namespace imports to validate, got {:?}",
+        result.diagnostics
+    );
+    lower_program(&result.program).expect("cyclic namespace imports should lower");
+}
+
+#[test]
+fn cyclic_star_re_exports_resolve_to_a_fixed_point() {
+    let project = TempProject::new();
+    project.write(
+        "main.gust",
+        r#"from ./a import { aValue, bValue }
+
+fn main() {
+    io.println(aValue() + bValue())
+}"#,
+    );
+    project.write(
+        "a.gust",
+        r#"from ./b export *
+
+export fn aValue(): string => "a""#,
+    );
+    project.write(
+        "b.gust",
+        r#"from ./a export *
+
+export fn bValue(): string => "b""#,
+    );
+
+    let result = check_project(&project.path("main.gust")).expect("project should load");
+
+    assert!(
+        result.diagnostics.is_empty(),
+        "expected cyclic star re-exports to validate, got {:?}",
+        result.diagnostics
+    );
+    lower_program(&result.program).expect("cyclic star re-exports should lower");
+}
+
+#[test]
+fn ambiguous_star_re_exports_are_rejected() {
+    let project = TempProject::new();
+    project.write(
+        "main.gust",
+        r#"from ./facade import { value }
+
+fn main() {}"#,
+    );
+    project.write(
+        "facade.gust",
+        r#"from ./a export *
+from ./b export *"#,
+    );
+    project.write("a.gust", r#"export fn value(): string => "a""#);
+    project.write("b.gust", r#"export fn value(): string => "b""#);
+
+    let result = check_project(&project.path("main.gust")).expect("project should load");
+
+    assert!(
+        result.diagnostics.iter().any(|diagnostic| diagnostic
+            .message
+            .contains("re-exported name `value` conflicts")),
+        "expected ambiguous re-export diagnostic, got {:?}",
+        result.diagnostics
     );
 }
 
