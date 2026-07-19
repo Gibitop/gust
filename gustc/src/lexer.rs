@@ -87,6 +87,7 @@ pub struct InterpolatedPathSegment {
 pub enum Keyword {
     As,
     Break,
+    Comptime,
     Continue,
     Else,
     Enum,
@@ -564,6 +565,7 @@ impl<'source> Lexer<'source> {
         let kind = match lexeme.as_str() {
             "as" => TokenKind::Keyword(Keyword::As),
             "break" => TokenKind::Keyword(Keyword::Break),
+            "comptime" => TokenKind::Keyword(Keyword::Comptime),
             "continue" => TokenKind::Keyword(Keyword::Continue),
             "else" => TokenKind::Keyword(Keyword::Else),
             "enum" => TokenKind::Keyword(Keyword::Enum),

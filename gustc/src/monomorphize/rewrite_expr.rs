@@ -1007,6 +1007,8 @@ impl Monomorphizer {
                 }
             }
             ExprKind::Lambda(function) => self.rewrite_function(function, substitutions),
+            ExprKind::Block(block) => self.rewrite_block(block, substitutions),
+            ExprKind::Comptime(expr) => self.rewrite_expr(expr, substitutions),
             ExprKind::Identifier(_)
             | ExprKind::GenericType { .. }
             | ExprKind::Number(_)

@@ -197,10 +197,46 @@ fn lower_conditional_block(
                     statements.push(statement);
                 }
             }
+            StmtKind::Block(block) => {
+                statements.push(lower_scoped_block_statement(
+                    block,
+                    locals,
+                    signatures,
+                    structs,
+                    enums,
+                    traits,
+                    diagnostics,
+                    return_type,
+                ));
+            }
         }
     }
 
     statements
+}
+
+#[allow(clippy::too_many_arguments)]
+fn lower_scoped_block_statement(
+    block: &Block,
+    locals: &HashMap<String, LoweringLocal>,
+    signatures: &HashMap<String, FunctionSignature>,
+    structs: &HashMap<String, LoweredStruct>,
+    enums: &HashMap<String, LoweredEnum>,
+    traits: &HashMap<String, LoweredTrait>,
+    diagnostics: &mut Vec<Diagnostic>,
+    return_type: Option<&LoweredType>,
+) -> LoweredStatement {
+    let mut block_locals = locals.clone();
+    LoweredStatement::Block(lower_conditional_block(
+        block,
+        &mut block_locals,
+        signatures,
+        structs,
+        enums,
+        traits,
+        diagnostics,
+        return_type,
+    ))
 }
 
 // Expression statements share the statement-lowering environment so calls, matches, increments,
@@ -621,6 +657,18 @@ fn lower_match_expression_branch_block(
                 diagnostics,
                 None,
             )),
+            StmtKind::Block(block) => {
+                statements.push(lower_scoped_block_statement(
+                    block,
+                    locals,
+                    signatures,
+                    structs,
+                    enums,
+                    traits,
+                    diagnostics,
+                    None,
+                ));
+            }
         }
     }
 

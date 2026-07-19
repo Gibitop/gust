@@ -379,6 +379,7 @@ impl<'items> MethodReachability<'items> {
                     self.visit_expr(iterable, locals);
                     self.visit_block(body, &mut locals.clone());
                 }
+                StmtKind::Block(block) => self.visit_block(block, &mut locals.clone()),
                 StmtKind::Break | StmtKind::Continue => {}
                 StmtKind::Expr(expr) => {
                     self.visit_expr(expr, locals);
@@ -535,6 +536,11 @@ impl<'items> MethodReachability<'items> {
                 self.visit_function(function, None, false);
                 None
             }
+            ExprKind::Block(block) => {
+                self.visit_block(block, &mut locals.clone());
+                None
+            }
+            ExprKind::Comptime(expr) => self.visit_expr(expr, locals),
             ExprKind::String(_) => Some("string".to_string()),
             ExprKind::Char(_) => Some("char".to_string()),
             ExprKind::Number(value) => Some(

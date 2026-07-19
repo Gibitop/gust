@@ -1,0 +1,29 @@
+fn buildAnswer(): i32 {
+    let base = 40
+    return base + 2
+}
+
+let answer = comptime buildAnswer()
+
+let permissionStatus = comptime {
+    if comptime.permissions.fs.canRead("./project.yaml") {
+        return "this package has comptime fs read permission"
+    }
+
+    return "this package does not have comptime fs read permission"
+}
+
+fn main() {
+    let message = comptime {
+        return "computed during compilation"
+    }
+
+    let b = comptime {
+        io.println("answer: " + answer.toString())
+        return answer + 1
+    }
+
+    io.println(message)
+    io.println("answer: " + answer.toString())
+    io.println(permissionStatus)
+}

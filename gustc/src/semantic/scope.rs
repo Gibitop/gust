@@ -297,9 +297,18 @@ impl Analyzer {
             | ExprKind::Binary { .. }
             | ExprKind::Cast { .. }
             | ExprKind::Unary { .. } => true,
+            ExprKind::Block(block) => block
+                .statements
+                .last()
+                .and_then(|statement| match &statement.kind {
+                    StmtKind::Return { value: Some(value) } => Some(value),
+                    _ => None,
+                })
+                .is_some_and(|value| self.expr_has_mutable_capability(value)),
             ExprKind::Array(_)
             | ExprKind::GenericType { .. }
             | ExprKind::Lambda(_)
+            | ExprKind::Comptime(_)
             | ExprKind::Match { .. }
             | ExprKind::PostfixIncrement(_)
             | ExprKind::Missing => false,
@@ -535,6 +544,7 @@ fn statement_always_returns_value(statement: &Stmt) -> bool {
                 }
         }
         StmtKind::Expr(expr) => expression_never_returns(expr),
+        StmtKind::Block(block) => block_always_returns_value(block),
         StmtKind::Let { .. }
         | StmtKind::Assign { .. }
         | StmtKind::Return { value: None }
@@ -560,6 +570,7 @@ fn expression_never_returns(expr: &Expr) -> bool {
                     MatchBranchBody::Block(block) => block_always_returns_value(block),
                 })
         }
+        ExprKind::Block(block) => block_always_returns_value(block),
         _ => false,
     }
 }

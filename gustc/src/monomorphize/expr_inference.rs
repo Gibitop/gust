@@ -281,11 +281,30 @@ impl Monomorphizer {
                 self.infer_expr_type(operand)
             }
             ExprKind::Cast { type_ref, .. } => Some(self.expanded_type(type_ref)),
-            ExprKind::Binary { left, right, .. } => {
-                let left = self.infer_expr_type(left)?;
-                let right = self.infer_expr_type(right)?;
-                (type_name(&left) == type_name(&right)).then_some(left)
-            }
+            ExprKind::Binary { left, op, right } => match op {
+                BinaryOp::LogicalAnd
+                | BinaryOp::LogicalOr
+                | BinaryOp::Equal
+                | BinaryOp::NotEqual
+                | BinaryOp::Less
+                | BinaryOp::LessEqual
+                | BinaryOp::Greater
+                | BinaryOp::GreaterEqual => Some(inferred("bool")),
+                BinaryOp::Add
+                | BinaryOp::Subtract
+                | BinaryOp::Multiply
+                | BinaryOp::Divide
+                | BinaryOp::Remainder
+                | BinaryOp::BitwiseAnd
+                | BinaryOp::BitwiseOr
+                | BinaryOp::BitwiseXor
+                | BinaryOp::ShiftLeft
+                | BinaryOp::ShiftRight => {
+                    let left = self.infer_expr_type(left)?;
+                    let right = self.infer_expr_type(right)?;
+                    (type_name(&left) == type_name(&right)).then_some(left)
+                }
+            },
             ExprKind::Match { branches, .. } => branches.iter().find_map(|branch| {
                 let MatchBranchBody::Expr(expr) = &branch.body else {
                     return None;
@@ -293,6 +312,13 @@ impl Monomorphizer {
                 self.infer_expr_type(expr)
             }),
             ExprKind::CollectionLiteral { collection, .. } => Some(self.expanded_type(collection)),
+            ExprKind::Block(block) => block.statements.last().and_then(|statement| {
+                let StmtKind::Return { value: Some(value) } = &statement.kind else {
+                    return None;
+                };
+                self.infer_expr_type(value)
+            }),
+            ExprKind::Comptime(expr) => self.infer_expr_type(expr),
             ExprKind::Array(_) | ExprKind::Lambda(_) | ExprKind::Missing => None,
         }
     }

@@ -267,6 +267,7 @@ pub enum StmtKind {
         iterable: Expr,
         body: Block,
     },
+    Block(Block),
     Expr(Expr),
 }
 
@@ -339,6 +340,8 @@ pub enum ExprKind {
         branches: Vec<MatchBranch>,
     },
     Lambda(FunctionDecl),
+    Block(Block),
+    Comptime(Box<Expr>),
     PostfixIncrement(Box<Expr>),
     Missing,
 }

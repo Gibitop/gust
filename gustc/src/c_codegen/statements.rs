@@ -171,6 +171,30 @@ fn push_c_statement(
 
             source.push('\n');
         }
+        LoweredStatement::Block(statements) => {
+            push_c_indent(source, indent);
+            source.push_str("{\n");
+            let block_roots = format!("gust_rt_block_roots_{indent}");
+            if uses_gc {
+                push_c_scope_base(source, &block_roots, indent + 1);
+            }
+            for statement in statements {
+                push_c_statement(
+                    source,
+                    statement,
+                    indent + 1,
+                    structs,
+                    uses_panic,
+                    uses_gc,
+                    loop_roots,
+                );
+            }
+            if uses_gc {
+                push_c_pop_roots(source, &block_roots, indent + 1);
+            }
+            push_c_indent(source, indent);
+            source.push_str("}\n");
+        }
         LoweredStatement::While { condition, body } => {
             push_c_indent(source, indent);
             source.push_str("while (");

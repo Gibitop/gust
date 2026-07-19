@@ -138,6 +138,9 @@ impl Monomorphizer {
                 StmtKind::While { body, .. } => {
                     return_types.extend(self.infer_block_return_types(body));
                 }
+                StmtKind::Block(block) => {
+                    return_types.extend(self.infer_block_return_types(block));
+                }
                 StmtKind::Assign { .. }
                 | StmtKind::Return { value: None }
                 | StmtKind::Break

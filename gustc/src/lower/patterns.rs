@@ -19,9 +19,18 @@ fn expression_has_mutable_capability(expr: &Expr, locals: &HashMap<String, Lower
         | ExprKind::CollectionLiteral { .. }
         | ExprKind::GenericType { .. }
         | ExprKind::Lambda(_)
+        | ExprKind::Comptime(_)
         | ExprKind::Match { .. }
         | ExprKind::PostfixIncrement(_)
         | ExprKind::Missing => false,
+        ExprKind::Block(block) => block
+            .statements
+            .last()
+            .and_then(|statement| match &statement.kind {
+                StmtKind::Return { value: Some(value) } => Some(value),
+                _ => None,
+            })
+            .is_some_and(|value| expression_has_mutable_capability(value, locals)),
     }
 }
 
@@ -73,6 +82,9 @@ fn lowered_expression_has_mutable_capability(
         }),
         LoweredExprKind::IndirectCall { .. } | LoweredExprKind::DynamicCall { .. } => {
             matches!(expr.type_, LoweredType::Struct(_) | LoweredType::Trait(_))
+        }
+        LoweredExprKind::Block { value, .. } => {
+            lowered_expression_has_mutable_capability(value, locals, signatures, structs)
         }
         LoweredExprKind::StringLiteral(_)
         | LoweredExprKind::BoolLiteral(_)

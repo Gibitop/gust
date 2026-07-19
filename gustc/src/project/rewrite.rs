@@ -278,6 +278,7 @@ impl<'names, 'diagnostics> ModuleRewriter<'names, 'diagnostics> {
                 }
                 self.scopes.pop();
             }
+            StmtKind::Block(block) => self.rewrite_block(block),
             StmtKind::Break | StmtKind::Continue => {}
             StmtKind::Expr(expr) => self.rewrite_expr(expr),
         }
@@ -377,6 +378,8 @@ impl<'names, 'diagnostics> ModuleRewriter<'names, 'diagnostics> {
                 }
             }
             ExprKind::Lambda(function) => self.rewrite_function(function),
+            ExprKind::Block(block) => self.rewrite_block(block),
+            ExprKind::Comptime(expr) => self.rewrite_expr(expr),
             ExprKind::Number(_)
             | ExprKind::String(_)
             | ExprKind::Char(_)

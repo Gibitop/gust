@@ -55,4 +55,5 @@ include!("modules.rs");
 include!("std.rs");
 include!("generics.rs");
 include!("diagnostics.rs");
+include!("comptime.rs");
 include!("helpers.rs");

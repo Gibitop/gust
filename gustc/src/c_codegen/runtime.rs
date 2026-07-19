@@ -376,6 +376,7 @@ fn gc_cell_types(program: &LoweredProgram) -> Vec<LoweredType> {
         for statement in &function.statements {
             collect_cell_types_from_statement(statement, &mut types);
         }
+        collect_cell_types_from_expr(&function.return_value, &mut types);
     }
     for function in &program.closure_functions {
         for param in &function.params {
@@ -384,6 +385,7 @@ fn gc_cell_types(program: &LoweredProgram) -> Vec<LoweredType> {
         for statement in &function.statements {
             collect_cell_types_from_statement(statement, &mut types);
         }
+        collect_cell_types_from_expr(&function.return_value, &mut types);
     }
     for statement in &program.statements {
         collect_cell_types_from_statement(statement, &mut types);
@@ -396,13 +398,23 @@ fn gc_cell_types(program: &LoweredProgram) -> Vec<LoweredType> {
 fn collect_cell_types_from_statement(statement: &LoweredStatement, types: &mut Vec<LoweredType>) {
     match statement {
         LoweredStatement::Local { value, .. } | LoweredStatement::LocalCell { value, .. } => {
-            types.push(value.type_.clone());
+            collect_cell_types_from_expr(value, types);
         }
+        LoweredStatement::Assignment { target, value, .. } => {
+            collect_cell_types_from_expr(target, types);
+            collect_cell_types_from_expr(value, types);
+        }
+        LoweredStatement::Println(value)
+        | LoweredStatement::Expr(value)
+        | LoweredStatement::Return(Some(value)) => collect_cell_types_from_expr(value, types),
+        LoweredStatement::Panic { message, .. } => collect_cell_types_from_expr(message, types),
         LoweredStatement::If {
+            condition,
             then_branch,
             else_branch,
             ..
         } => {
+            collect_cell_types_from_expr(condition, types);
             for statement in then_branch {
                 collect_cell_types_from_statement(statement, types);
             }
@@ -412,24 +424,97 @@ fn collect_cell_types_from_statement(statement: &LoweredStatement, types: &mut V
                 }
             }
         }
-        LoweredStatement::While { body, .. } => {
+        LoweredStatement::While { condition, body } => {
+            collect_cell_types_from_expr(condition, types);
             for statement in body {
+                collect_cell_types_from_statement(statement, types);
+            }
+        }
+        LoweredStatement::Block(statements) => {
+            for statement in statements {
                 collect_cell_types_from_statement(statement, types);
             }
         }
         LoweredStatement::Match {
             value, decision, ..
         } => {
-            types.push(value.type_.clone());
+            collect_cell_types_from_expr(value, types);
             collect_cell_types_from_decision(decision, types);
         }
-        LoweredStatement::Assignment { .. }
-        | LoweredStatement::Println(_)
-        | LoweredStatement::Panic { .. }
-        | LoweredStatement::Expr(_)
-        | LoweredStatement::Return(_)
+        LoweredStatement::Return(None)
         | LoweredStatement::Break
         | LoweredStatement::Continue => {}
+    }
+}
+
+fn collect_cell_types_from_expr(expr: &LoweredExpr, types: &mut Vec<LoweredType>) {
+    types.push(expr.type_.clone());
+    match &expr.kind {
+        LoweredExprKind::PostfixIncrement(value)
+        | LoweredExprKind::Not(value)
+        | LoweredExprKind::Negate(value)
+        | LoweredExprKind::Clone(value)
+        | LoweredExprKind::NumberToString(value) => collect_cell_types_from_expr(value, types),
+        LoweredExprKind::StringConcat(left, right)
+        | LoweredExprKind::Arithmetic { left, right, .. }
+        | LoweredExprKind::Logical { left, right, .. }
+        | LoweredExprKind::Comparison { left, right, .. } => {
+            collect_cell_types_from_expr(left, types);
+            collect_cell_types_from_expr(right, types);
+        }
+        LoweredExprKind::Cast { value, .. }
+        | LoweredExprKind::FieldAccess { object: value, .. } => {
+            collect_cell_types_from_expr(value, types)
+        }
+        LoweredExprKind::StructLiteral { fields, .. } => {
+            for field in fields {
+                collect_cell_types_from_expr(&field.value, types);
+            }
+        }
+        LoweredExprKind::EnumLiteral { payload, .. } => {
+            if let Some(payload) = payload {
+                collect_cell_types_from_expr(payload, types);
+            }
+        }
+        LoweredExprKind::Match {
+            value, decision, ..
+        } => {
+            collect_cell_types_from_expr(value, types);
+            collect_cell_types_from_decision(decision, types);
+        }
+        LoweredExprKind::Block { statements, value } => {
+            for statement in statements {
+                collect_cell_types_from_statement(statement, types);
+            }
+            collect_cell_types_from_expr(value, types);
+        }
+        LoweredExprKind::Call { args, .. }
+        | LoweredExprKind::CollectionLiteral { items: args, .. } => {
+            for arg in args {
+                collect_cell_types_from_expr(arg, types);
+            }
+        }
+        LoweredExprKind::TraitObject { value, .. } => collect_cell_types_from_expr(value, types),
+        LoweredExprKind::DynamicCall { object, args, .. } => {
+            collect_cell_types_from_expr(object, types);
+            for arg in args {
+                collect_cell_types_from_expr(arg, types);
+            }
+        }
+        LoweredExprKind::IndirectCall { callee, args, .. } => {
+            collect_cell_types_from_expr(callee, types);
+            for arg in args {
+                collect_cell_types_from_expr(arg, types);
+            }
+        }
+        LoweredExprKind::Void
+        | LoweredExprKind::StringLiteral(_)
+        | LoweredExprKind::BoolLiteral(_)
+        | LoweredExprKind::NumberLiteral(_)
+        | LoweredExprKind::Local(_)
+        | LoweredExprKind::LocalCell(_)
+        | LoweredExprKind::CapturedLocal { .. }
+        | LoweredExprKind::Closure { .. } => {}
     }
 }
 

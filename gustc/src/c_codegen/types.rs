@@ -221,6 +221,11 @@ fn collect_statement_function_types(statement: &LoweredStatement, types: &mut Ve
                 collect_statement_function_types(statement, types);
             }
         }
+        LoweredStatement::Block(statements) => {
+            for statement in statements {
+                collect_statement_function_types(statement, types);
+            }
+        }
         LoweredStatement::Match {
             value, decision, ..
         } => {
@@ -266,6 +271,12 @@ fn collect_expr_function_types(expr: &LoweredExpr, types: &mut Vec<LoweredType>)
         } => {
             collect_expr_function_types(value, types);
             collect_decision_function_types(decision, types);
+        }
+        LoweredExprKind::Block { statements, value } => {
+            for statement in statements {
+                collect_statement_function_types(statement, types);
+            }
+            collect_expr_function_types(value, types);
         }
         LoweredExprKind::Call { args, .. } => {
             for arg in args {

@@ -1,6 +1,6 @@
 fn push_c_local_name(source: &mut String, name: &str) {
     source.push_str("gust_");
-    source.push_str(name);
+    push_c_identifier_suffix(source, name);
 }
 
 fn closure_env_type_name(name: &str) -> String {

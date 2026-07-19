@@ -30,6 +30,13 @@ impl Parser {
             Some(Keyword::Break) => self.parse_break_statement(),
             Some(Keyword::Continue) => self.parse_continue_statement(),
             Some(Keyword::For) => self.parse_for_statement(),
+            _ if self.check_kind(&TokenKind::LeftBrace) => {
+                let block = self.parse_block();
+                Stmt {
+                    span: block.span,
+                    kind: StmtKind::Block(block),
+                }
+            }
             _ => {
                 let target = self.parse_expression();
 

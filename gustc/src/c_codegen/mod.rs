@@ -7,9 +7,15 @@ use crate::lower::{
     LoweredSourceLocation, LoweredStatement, LoweredStaticVar, LoweredStruct, LoweredType,
 };
 
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Default)]
 pub struct CCodegenOptions {
     pub gc_stress: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct CComptimeOptions {
+    pub entry_name: String,
+    pub result_path: String,
 }
 
 pub fn emit_c(program: &LoweredProgram) -> String {
@@ -17,7 +23,23 @@ pub fn emit_c(program: &LoweredProgram) -> String {
 }
 
 pub fn emit_c_with_options(program: &LoweredProgram, options: CCodegenOptions) -> String {
-    let uses_string = program_uses_type(program, BasicType::String);
+    emit_c_internal(program, options, None)
+}
+
+pub fn emit_c_for_comptime(
+    program: &LoweredProgram,
+    options: CCodegenOptions,
+    comptime: CComptimeOptions,
+) -> String {
+    emit_c_internal(program, options, Some(comptime))
+}
+
+fn emit_c_internal(
+    program: &LoweredProgram,
+    options: CCodegenOptions,
+    comptime: Option<CComptimeOptions>,
+) -> String {
+    let uses_string = comptime.is_some() || program_uses_type(program, BasicType::String);
     let uses_string_equality = program_uses_string_equality(program);
     let number_to_string_types = number_to_string_types(program);
     let float_to_int_casts = float_to_int_casts(program);
@@ -40,7 +62,8 @@ pub fn emit_c_with_options(program: &LoweredProgram, options: CCodegenOptions) -
         || number_to_string_types.contains(&BasicType::I128)
         || program_uses_match_or(program)
         || !float_to_int_casts.is_empty();
-    let uses_usize = uses_alloc
+    let uses_usize = comptime.is_some()
+        || uses_alloc
         || uses_string
         || program_uses_type(program, BasicType::Usize)
         || program
@@ -49,9 +72,10 @@ pub fn emit_c_with_options(program: &LoweredProgram, options: CCodegenOptions) -
             .any(|struct_| struct_.raw_buffer_element.is_some());
     let uses_float =
         program_uses_type(program, BasicType::F32) || program_uses_type(program, BasicType::F64);
-    let uses_fixed_width_int = program_uses_fixed_width_int(program);
+    let uses_fixed_width_int = program_uses_fixed_width_int(program) || comptime.is_some();
     let uses_panic = program_uses_panic(program);
-    let uses_println = program.statements.iter().any(statement_uses_println)
+    let uses_println = comptime.is_some()
+        || program.statements.iter().any(statement_uses_println)
         || program
             .functions
             .iter()
@@ -75,7 +99,7 @@ pub fn emit_c_with_options(program: &LoweredProgram, options: CCodegenOptions) -
         source.push_str("#include <stdint.h>\n");
     }
 
-    if uses_println || uses_number_to_string || uses_panic {
+    if uses_println || uses_number_to_string || uses_panic || comptime.is_some() {
         source.push_str("#include <stdio.h>\n");
     }
 
@@ -83,7 +107,7 @@ pub fn emit_c_with_options(program: &LoweredProgram, options: CCodegenOptions) -
         source.push_str("#include <math.h>\n");
     }
 
-    if uses_alloc || uses_panic {
+    if uses_alloc || uses_panic || comptime.is_some() {
         source.push_str("#include <stdlib.h>\n#include <string.h>\n");
     } else if uses_string_equality {
         source.push_str("#include <string.h>\n");
@@ -163,6 +187,10 @@ pub fn emit_c_with_options(program: &LoweredProgram, options: CCodegenOptions) -
 
     push_c_struct_runtime_helpers(&mut source, program);
 
+    if comptime.is_some() {
+        push_c_comptime_runtime(&mut source);
+    }
+
     push_c_static_declarations(&mut source, &program.statics);
 
     for function in ordered_functions(&program.functions) {
@@ -227,6 +255,10 @@ pub fn emit_c_with_options(program: &LoweredProgram, options: CCodegenOptions) -
         );
     }
 
+    if let Some(comptime) = comptime {
+        push_c_comptime_result_write(&mut source, program, &comptime);
+    }
+
     if uses_alloc {
         source.push_str("    gust_rt_roots_pop_to(gust_rt_function_roots);\n");
     }
@@ -245,3 +277,4 @@ include!("items.rs");
 include!("statements.rs");
 include!("expressions.rs");
 include!("names.rs");
+include!("comptime.rs");

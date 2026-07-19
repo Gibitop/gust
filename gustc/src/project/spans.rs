@@ -182,6 +182,7 @@ fn shift_statement(statement: &mut Stmt, offset: usize) {
             shift_expr(iterable, offset);
             shift_block(body, offset);
         }
+        StmtKind::Block(block) => shift_block(block, offset),
         StmtKind::Break | StmtKind::Continue => {}
         StmtKind::Expr(expr) => shift_expr(expr, offset),
     }
@@ -258,6 +259,8 @@ fn shift_expr(expr: &mut Expr, offset: usize) {
             }
         }
         ExprKind::Lambda(function) => shift_function(function, offset),
+        ExprKind::Block(block) => shift_block(block, offset),
+        ExprKind::Comptime(expr) => shift_expr(expr, offset),
         ExprKind::Identifier(_)
         | ExprKind::Number(_)
         | ExprKind::String(_)

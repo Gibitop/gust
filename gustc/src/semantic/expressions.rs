@@ -312,6 +312,15 @@ impl Analyzer {
                 branch_type.unwrap_or(Type::Unknown)
             }
             ExprKind::Lambda(function) => self.validate_lambda(expr.span, function, expected_type),
+            ExprKind::Block(block) => self.validate_block_expr(expr.span, block, expected_type),
+            ExprKind::Comptime(body) => {
+                self.diagnostics.push(Diagnostic::error(
+                    expr.span,
+                    "failed to evaluate comptime expression before semantic validation",
+                ));
+                self.validate_expr(body);
+                Type::Unknown
+            }
             ExprKind::PostfixIncrement(target) => {
                 if matches!(target.kind, ExprKind::Member { .. }) {
                     return self.validate_member_increment(expr.span, target);
@@ -415,6 +424,43 @@ impl Analyzer {
         let value_type =
             self.validate_assignment_value(span, target, op, value, field_type.clone());
         self.report_type_mismatch(value.span, field_type, value_type);
+    }
+
+    fn validate_block_expr(
+        &mut self,
+        span: Span,
+        block: &Block,
+        expected_type: Option<Type>,
+    ) -> Type {
+        self.push_scope();
+
+        if block.statements.is_empty() {
+            self.diagnostics.push(Diagnostic::error(
+                span,
+                "block expressions must return a value",
+            ));
+            self.pop_scope();
+            return Type::Unknown;
+        }
+
+        let return_type = expected_type.clone().unwrap_or(Type::Unknown);
+        self.return_types.push(return_type.clone());
+        for statement in &block.statements {
+            self.validate_statement(statement);
+        }
+        self.return_types.pop();
+
+        if !block_always_returns_value(block) {
+            self.diagnostics.push(Diagnostic::error(
+                span,
+                "block expressions must return a value",
+            ));
+            self.pop_scope();
+            return Type::Unknown;
+        }
+
+        self.pop_scope();
+        return_type
     }
 
     fn validate_member_increment(&mut self, span: Span, target: &Expr) -> Type {

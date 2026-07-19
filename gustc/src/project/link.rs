@@ -1,4 +1,9 @@
-fn link_modules(modules: &[Module], diagnostics: &mut Vec<Diagnostic>) -> Program {
+struct LinkedProgram {
+    program: Program,
+    item_packages: Vec<usize>,
+}
+
+fn link_modules(modules: &[Module], diagnostics: &mut Vec<Diagnostic>) -> LinkedProgram {
     let mut exports = Vec::with_capacity(modules.len());
     let mut local_names = Vec::with_capacity(modules.len());
     let mut local_name_packages = Vec::with_capacity(modules.len());
@@ -67,7 +72,10 @@ fn link_modules(modules: &[Module], diagnostics: &mut Vec<Diagnostic>) -> Progra
         .iter()
         .any(|diagnostic| diagnostic.severity == Severity::Error)
     {
-        return Program { items: Vec::new() };
+        return LinkedProgram {
+            program: Program { items: Vec::new() },
+            item_packages: Vec::new(),
+        };
     }
 
     let mut visible_names = local_names.clone();
@@ -150,7 +158,10 @@ fn link_modules(modules: &[Module], diagnostics: &mut Vec<Diagnostic>) -> Progra
         .iter()
         .any(|diagnostic| diagnostic.severity == Severity::Error)
     {
-        return Program { items: Vec::new() };
+        return LinkedProgram {
+            program: Program { items: Vec::new() },
+            item_packages: Vec::new(),
+        };
     }
 
     validate_foreign_impls(modules, &visible_name_packages, diagnostics);
@@ -158,10 +169,14 @@ fn link_modules(modules: &[Module], diagnostics: &mut Vec<Diagnostic>) -> Progra
         .iter()
         .any(|diagnostic| diagnostic.severity == Severity::Error)
     {
-        return Program { items: Vec::new() };
+        return LinkedProgram {
+            program: Program { items: Vec::new() },
+            item_packages: Vec::new(),
+        };
     }
 
     let mut items = Vec::new();
+    let mut item_packages = Vec::new();
     for (module_index, module) in modules.iter().enumerate() {
         let mut rewriter = ModuleRewriter::new(
             &local_names[module_index],
@@ -181,10 +196,14 @@ fn link_modules(modules: &[Module], diagnostics: &mut Vec<Diagnostic>) -> Progra
             let mut item = item.clone();
             rewriter.rewrite_item(&mut item);
             items.push(item);
+            item_packages.push(module.package);
         }
     }
 
-    Program { items }
+    LinkedProgram {
+        program: Program { items },
+        item_packages,
+    }
 }
 
 fn resolve_re_exports(

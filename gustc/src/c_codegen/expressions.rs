@@ -267,6 +267,15 @@ fn push_c_value_with_panic(
             push_c_local_name(source, &result_name);
             source.push_str(";\n})");
         }
+        LoweredExprKind::Block { statements, value } => {
+            source.push_str("({\n");
+            for statement in statements {
+                push_c_statement(source, statement, 1, structs, uses_panic, false, None);
+            }
+            source.push_str("    ");
+            push_c_value_with_panic(source, value, structs, uses_panic);
+            source.push_str(";\n})");
+        }
         LoweredExprKind::FieldAccess { object, field } => {
             push_c_value_with_panic(source, object, structs, uses_panic);
             if object.type_ == LoweredType::Basic(BasicType::String) {
@@ -608,10 +617,12 @@ fn push_c_value_with_panic(
             location,
         } => {
             let wrapped = push_c_call_site_update_start(source, location, uses_panic);
+            source.push('(');
             push_c_value_with_panic(source, callee, structs, uses_panic);
-            source.push_str(".gust_call(");
+            source.push_str(").gust_call(");
+            source.push('(');
             push_c_value_with_panic(source, callee, structs, uses_panic);
-            source.push_str(".gust_env");
+            source.push_str(").gust_env");
             for arg in args {
                 source.push_str(", ");
                 push_c_value_with_panic(source, arg, structs, uses_panic);

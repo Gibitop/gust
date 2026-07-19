@@ -1,4 +1,5 @@
 pub mod ast;
+pub mod build;
 pub mod c_codegen;
 pub mod diagnostic;
 pub mod lexer;
@@ -30,8 +31,15 @@ impl CompileResult {
 
 pub fn check_source(source: &str) -> CompileResult {
     let (tokens, mut diagnostics) = Lexer::new(source).tokenize();
-    let (program, parser_diagnostics) = Parser::new(tokens).parse();
+    let (mut program, parser_diagnostics) = Parser::new(tokens).parse();
     diagnostics.extend(parser_diagnostics);
+
+    if !diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.severity == Severity::Error)
+    {
+        project::expand_comptime_for_source(&mut program, &mut diagnostics);
+    }
 
     if !diagnostics
         .iter()

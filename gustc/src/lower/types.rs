@@ -316,6 +316,45 @@ fn infer_expr_type(
         | ExprKind::CollectionLiteral { .. }
         | ExprKind::GenericType { .. }
         | ExprKind::Missing => None,
+        ExprKind::Block(block) => {
+            let mut block_locals = locals.clone();
+            let (last_statement, setup_statements) = block.statements.split_last()?;
+            for statement in setup_statements {
+                if let StmtKind::Let {
+                    name,
+                    type_annotation,
+                    value,
+                    ..
+                } = &statement.kind
+                {
+                    let type_ = type_annotation
+                        .as_ref()
+                        .and_then(|type_ref| {
+                            quiet_lower_type_ref(type_ref, &block_locals, structs, enums, traits)
+                        })
+                        .or_else(|| {
+                            value.as_ref().and_then(|value| {
+                                infer_expr_type(
+                                    value,
+                                    &block_locals,
+                                    signatures,
+                                    structs,
+                                    enums,
+                                    traits,
+                                )
+                            })
+                        });
+                    if let Some(type_) = type_ {
+                        block_locals.insert(name.clone(), type_);
+                    }
+                }
+            }
+            let StmtKind::Return { value: Some(value) } = &last_statement.kind else {
+                return None;
+            };
+            infer_expr_type(value, &block_locals, signatures, structs, enums, traits)
+        }
+        ExprKind::Comptime(expr) => infer_expr_type(expr, locals, signatures, structs, enums, traits),
         ExprKind::Lambda(function) => {
             infer_lambda_expr_type(function, locals, signatures, structs, enums, traits)
         }

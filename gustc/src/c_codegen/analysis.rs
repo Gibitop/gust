@@ -98,6 +98,9 @@ fn statement_uses_type(statement: &LoweredStatement, type_: BasicType) -> bool {
                     .iter()
                     .any(|statement| statement_uses_type(statement, type_))
         }
+        LoweredStatement::Block(statements) => statements
+            .iter()
+            .any(|statement| statement_uses_type(statement, type_)),
         LoweredStatement::Break | LoweredStatement::Continue => false,
         LoweredStatement::Match {
             value, decision, ..
@@ -142,6 +145,12 @@ fn expr_uses_type(expr: &LoweredExpr, type_: BasicType) -> bool {
                         &mut |expr| expr_uses_type(expr, type_),
                         &mut |statement| statement_uses_type(statement, type_),
                     )
+            }
+            LoweredExprKind::Block { statements, value } => {
+                statements
+                    .iter()
+                    .any(|statement| statement_uses_type(statement, type_))
+                    || expr_uses_type(value, type_)
             }
             LoweredExprKind::FieldAccess { object, .. }
             | LoweredExprKind::TraitObject { value: object, .. }
@@ -267,6 +276,11 @@ fn collect_statement_float_to_int_casts(
                 collect_statement_float_to_int_casts(statement, casts);
             }
         }
+        LoweredStatement::Block(statements) => {
+            for statement in statements {
+                collect_statement_float_to_int_casts(statement, casts);
+            }
+        }
         LoweredStatement::Match {
             value, decision, ..
         } => {
@@ -326,6 +340,12 @@ fn collect_expr_float_to_int_casts(
         } => {
             collect_expr_float_to_int_casts(value, casts);
             collect_decision_float_to_int_casts(decision, casts);
+        }
+        LoweredExprKind::Block { statements, value } => {
+            for statement in statements {
+                collect_statement_float_to_int_casts(statement, casts);
+            }
+            collect_expr_float_to_int_casts(value, casts);
         }
         LoweredExprKind::Call { args, .. } => {
             for arg in args {
@@ -464,6 +484,9 @@ fn statement_uses_number_to_string(statement: &LoweredStatement, type_: BasicTyp
                     .iter()
                     .any(|statement| statement_uses_number_to_string(statement, type_))
         }
+        LoweredStatement::Block(statements) => statements
+            .iter()
+            .any(|statement| statement_uses_number_to_string(statement, type_)),
         LoweredStatement::Break | LoweredStatement::Continue => false,
         LoweredStatement::Match {
             value, decision, ..
@@ -511,8 +534,14 @@ fn expr_uses_number_to_string(expr: &LoweredExpr, type_: BasicType) -> bool {
                 || decision_walk(
                     decision,
                     &mut |expr| expr_uses_number_to_string(expr, type_),
-                    &mut |statement| statement_uses_number_to_string(statement, type_),
+                        &mut |statement| statement_uses_number_to_string(statement, type_),
                 )
+        }
+        LoweredExprKind::Block { statements, value } => {
+            statements
+                .iter()
+                .any(|statement| statement_uses_number_to_string(statement, type_))
+                || expr_uses_number_to_string(value, type_)
         }
         LoweredExprKind::Call { args, .. } => args
             .iter()
@@ -598,6 +627,7 @@ fn statement_uses_string_equality(statement: &LoweredStatement) -> bool {
         LoweredStatement::While { condition, body } => {
             expr_uses_string_equality(condition) || body.iter().any(statement_uses_string_equality)
         }
+        LoweredStatement::Block(statements) => statements.iter().any(statement_uses_string_equality),
         LoweredStatement::Break | LoweredStatement::Continue => false,
         LoweredStatement::Match {
             value, decision, ..
@@ -636,6 +666,10 @@ fn expr_uses_string_equality(expr: &LoweredExpr) -> bool {
             value, decision, ..
         } => {
             expr_uses_string_equality(value) || decision_uses_string_equality(decision)
+        }
+        LoweredExprKind::Block { statements, value } => {
+            statements.iter().any(statement_uses_string_equality)
+                || expr_uses_string_equality(value)
         }
         LoweredExprKind::FieldAccess { object, .. }
         | LoweredExprKind::TraitObject { value: object, .. }
@@ -697,6 +731,7 @@ fn statement_uses_string_concat(statement: &LoweredStatement) -> bool {
         LoweredStatement::While { condition, body } => {
             expr_uses_string_concat(condition) || body.iter().any(statement_uses_string_concat)
         }
+        LoweredStatement::Block(statements) => statements.iter().any(statement_uses_string_concat),
         LoweredStatement::Break | LoweredStatement::Continue => false,
         LoweredStatement::Match {
             value, decision, ..
@@ -738,6 +773,9 @@ fn expr_uses_string_concat(expr: &LoweredExpr) -> bool {
                     &mut |expr| expr_uses_string_concat(expr),
                     &mut |statement| statement_uses_string_concat(statement),
                 )
+        }
+        LoweredExprKind::Block { statements, value } => {
+            statements.iter().any(statement_uses_string_concat) || expr_uses_string_concat(value)
         }
         LoweredExprKind::FieldAccess { object, .. }
         | LoweredExprKind::TraitObject { value: object, .. }
@@ -821,6 +859,7 @@ fn statement_uses_enum_trait_object(statement: &LoweredStatement) -> bool {
             expr_uses_enum_trait_object(condition)
                 || body.iter().any(statement_uses_enum_trait_object)
         }
+        LoweredStatement::Block(statements) => statements.iter().any(statement_uses_enum_trait_object),
         LoweredStatement::Break | LoweredStatement::Continue => false,
         LoweredStatement::Match {
             value, decision, ..
@@ -873,6 +912,10 @@ fn expr_uses_enum_trait_object(expr: &LoweredExpr) -> bool {
                     &mut |statement| statement_uses_enum_trait_object(statement),
                 )
         }
+        LoweredExprKind::Block { statements, value } => {
+            statements.iter().any(statement_uses_enum_trait_object)
+                || expr_uses_enum_trait_object(value)
+        }
         LoweredExprKind::Call { args, .. } => args.iter().any(expr_uses_enum_trait_object),
         LoweredExprKind::CollectionLiteral { items, .. } => {
             items.iter().any(expr_uses_enum_trait_object)
@@ -922,6 +965,7 @@ fn statement_uses_println(statement: &LoweredStatement) -> bool {
         LoweredStatement::While { condition, body } => {
             expr_uses_println(condition) || body.iter().any(statement_uses_println)
         }
+        LoweredStatement::Block(statements) => statements.iter().any(statement_uses_println),
         LoweredStatement::Local { value, .. }
         | LoweredStatement::LocalCell { value, .. }
         | LoweredStatement::Expr(value) => expr_uses_println(value),
@@ -970,6 +1014,7 @@ fn statement_uses_panic(statement: &LoweredStatement) -> bool {
         LoweredStatement::While { condition, body } => {
             expr_uses_panic(condition) || body.iter().any(statement_uses_panic)
         }
+        LoweredStatement::Block(statements) => statements.iter().any(statement_uses_panic),
         LoweredStatement::Break | LoweredStatement::Continue => false,
         LoweredStatement::Match {
             value, decision, ..
@@ -1013,6 +1058,9 @@ fn expr_uses_panic(expr: &LoweredExpr) -> bool {
                     &mut expr_uses_panic,
                     &mut statement_uses_panic,
                 )
+        }
+        LoweredExprKind::Block { statements, value } => {
+            statements.iter().any(statement_uses_panic) || expr_uses_panic(value)
         }
         LoweredExprKind::FieldAccess { object, .. }
         | LoweredExprKind::TraitObject { value: object, .. }
@@ -1070,6 +1118,9 @@ fn expr_uses_println(expr: &LoweredExpr) -> bool {
                     &mut |expr| expr_uses_println(expr),
                     &mut |statement| statement_uses_println(statement),
                 )
+        }
+        LoweredExprKind::Block { statements, value } => {
+            statements.iter().any(statement_uses_println) || expr_uses_println(value)
         }
         LoweredExprKind::Call { args, .. } => args.iter().any(expr_uses_println),
         LoweredExprKind::CollectionLiteral { items, .. } => items.iter().any(expr_uses_println),
@@ -1166,6 +1217,9 @@ fn statement_calls_name(statement: &LoweredStatement, name: &str) -> bool {
                     .iter()
                     .any(|statement| statement_calls_name(statement, name))
         }
+        LoweredStatement::Block(statements) => statements
+            .iter()
+            .any(|statement| statement_calls_name(statement, name)),
         LoweredStatement::Break | LoweredStatement::Continue => false,
         LoweredStatement::Match {
             value, decision, ..
@@ -1209,6 +1263,12 @@ fn expr_calls_name(expr: &LoweredExpr, name: &str) -> bool {
                     &mut |expr| expr_calls_name(expr, name),
                     &mut |statement| statement_calls_name(statement, name),
                 )
+        }
+        LoweredExprKind::Block { statements, value } => {
+            statements
+                .iter()
+                .any(|statement| statement_calls_name(statement, name))
+                || expr_calls_name(value, name)
         }
         LoweredExprKind::FieldAccess { object, .. }
         | LoweredExprKind::TraitObject { value: object, .. }

@@ -167,7 +167,12 @@ impl Monomorphizer {
                 let Item::StaticVar(item) = item else {
                     return None;
                 };
-                Some((item.name.clone(), item.type_annotation.as_ref()?.clone()))
+                Some((
+                    item.name.clone(),
+                    item.type_annotation
+                        .clone()
+                        .or_else(|| infer_static_value_type(&item.value))?,
+                ))
             })
             .collect();
         let generic_function_returns = function_templates
@@ -217,6 +222,44 @@ impl Monomorphizer {
         }
     }
 
+}
+
+fn infer_static_value_type(expr: &Expr) -> Option<TypeRef> {
+    let inferred = |name: &str| TypeRef {
+        name: name.to_string(),
+        args: Vec::new(),
+        bindings: Vec::new(),
+        function: None,
+        span: expr.span,
+    };
+
+    match &expr.kind {
+        ExprKind::Number(value) => Some(inferred(if crate::ast::number_literal_is_float(value) {
+            "f64"
+        } else {
+            "i32"
+        })),
+        ExprKind::String(_) => Some(inferred("string")),
+        ExprKind::Char(_) => Some(inferred("char")),
+        ExprKind::Bool(_) => Some(inferred("bool")),
+        ExprKind::Binary { left, op, right } => match op {
+            BinaryOp::LogicalAnd
+            | BinaryOp::LogicalOr
+            | BinaryOp::Equal
+            | BinaryOp::NotEqual
+            | BinaryOp::Less
+            | BinaryOp::LessEqual
+            | BinaryOp::Greater
+            | BinaryOp::GreaterEqual => Some(inferred("bool")),
+            _ => {
+                let left = infer_static_value_type(left)?;
+                let right = infer_static_value_type(right)?;
+                (type_name(&left) == type_name(&right)).then_some(left)
+            }
+        },
+        ExprKind::Cast { type_ref, .. } => Some(type_ref.clone()),
+        _ => None,
+    }
 }
 
 fn trait_default_extensions(program: &Program) -> Vec<crate::ast::ExtensionDecl> {

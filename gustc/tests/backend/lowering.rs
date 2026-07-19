@@ -65,6 +65,94 @@ fn if_else_lowers_successfully() {
 }
 
 #[test]
+fn block_expression_lowers_to_value_expression() {
+    let result = check_source(
+        r#"fn main() {
+    let value = {
+        let base = 40
+        return base + 2
+    }
+
+    io.println(value.toString())
+}"#,
+    );
+
+    assert!(
+        !result.has_errors(),
+        "expected block expression to validate, got {:?}",
+        result.diagnostics
+    );
+
+    let lowered = lower_program(&result.program).expect("block expression should lower");
+    let source = emit_c(&lowered);
+
+    assert!(source.contains("int32_t gust_base = 40;"));
+    assert!(source.contains("gust_base + 2"));
+    assert!(!source.contains("// Gust closure: lambda"));
+}
+
+#[test]
+fn scoped_block_statement_lowers_to_c_block() {
+    let result = check_source(
+        r#"fn main() {
+    {
+        let value = 42
+        io.println(value.toString())
+    }
+}"#,
+    );
+
+    assert!(
+        !result.has_errors(),
+        "expected scoped block statement to validate, got {:?}",
+        result.diagnostics
+    );
+
+    let lowered = lower_program(&result.program).expect("scoped block should lower");
+
+    assert!(
+        matches!(lowered.statements[0], LoweredStatement::Block(_)),
+        "expected lowered scoped block, got {:?}",
+        lowered.statements
+    );
+}
+
+#[test]
+fn block_expression_returned_closure_captures_block_local() {
+    let result = check_source(
+        r#"fn main() {
+    let counter = {
+        let mut n = 0
+
+        return fn(): i32 {
+            n++
+            return n
+        }
+    }
+
+    io.println(counter().toString())
+}"#,
+    );
+
+    assert!(
+        !result.has_errors(),
+        "expected block expression closure to validate, got {:?}",
+        result.diagnostics
+    );
+
+    let lowered = lower_program(&result.program).expect("block expression closure should lower");
+
+    assert!(
+        lowered
+            .closure_functions
+            .iter()
+            .any(|function| function.captures.iter().any(|capture| capture.name == "n")),
+        "expected returned closure to capture block local, got {:?}",
+        lowered.closure_functions
+    );
+}
+
+#[test]
 fn while_break_and_continue_lower_and_emit_c() {
     let result = check_source(
         r#"fn main() {

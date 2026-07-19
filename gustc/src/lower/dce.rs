@@ -212,6 +212,11 @@ impl<'program> LoweredReachability<'program> {
                     self.visit_statement(statement);
                 }
             }
+            LoweredStatement::Block(statements) => {
+                for statement in statements {
+                    self.visit_statement(statement);
+                }
+            }
             LoweredStatement::Break | LoweredStatement::Continue => {}
             LoweredStatement::Match {
                 value, decision, ..
@@ -255,6 +260,12 @@ impl<'program> LoweredReachability<'program> {
             } => {
                 self.visit_expr(value);
                 self.visit_match_decision(decision);
+            }
+            LoweredExprKind::Block { statements, value } => {
+                for statement in statements {
+                    self.visit_statement(statement);
+                }
+                self.visit_expr(value);
             }
             LoweredExprKind::Call { name, args, .. } => {
                 self.mark_function(name);
@@ -557,6 +568,11 @@ impl<'program> LoweredTypeReachability<'program> {
                     self.visit_statement(statement);
                 }
             }
+            LoweredStatement::Block(statements) => {
+                for statement in statements {
+                    self.visit_statement(statement);
+                }
+            }
             LoweredStatement::Break | LoweredStatement::Continue => {}
             LoweredStatement::Match {
                 value, decision, ..
@@ -605,6 +621,12 @@ impl<'program> LoweredTypeReachability<'program> {
             } => {
                 self.visit_expr(value);
                 self.visit_match_decision(decision);
+            }
+            LoweredExprKind::Block { statements, value } => {
+                for statement in statements {
+                    self.visit_statement(statement);
+                }
+                self.visit_expr(value);
             }
             LoweredExprKind::Call { args, .. } => {
                 for arg in args {

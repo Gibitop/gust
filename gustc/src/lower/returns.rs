@@ -154,6 +154,19 @@ fn infer_block_return_types(
                     has_unresolved_value_return,
                 )?;
             }
+            StmtKind::Block(block) => {
+                let mut block_locals = locals.clone();
+                infer_block_return_types(
+                    block,
+                    &mut block_locals,
+                    signatures,
+                    structs,
+                    enums,
+                    traits,
+                    return_type,
+                    has_unresolved_value_return,
+                )?;
+            }
             StmtKind::Assign { .. }
             | StmtKind::Break
             | StmtKind::Continue
@@ -210,6 +223,9 @@ fn lowered_statement_always_returns_value(statement: &LoweredStatement) -> bool 
         LoweredStatement::Match { decision, .. } => {
             let (has_body, all_bodies_return) = lowered_match_bodies_always_return(decision);
             has_body && all_bodies_return
+        }
+        LoweredStatement::Block(statements) => {
+            statements.iter().any(lowered_statement_always_returns_value)
         }
         LoweredStatement::Local { .. }
         | LoweredStatement::LocalCell { .. }

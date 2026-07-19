@@ -267,6 +267,14 @@ impl Parser {
                 span: token.span,
             },
             TokenKind::LeftBracket => self.finish_array(token.span),
+            TokenKind::LeftBrace => {
+                self.position = self.position.saturating_sub(1);
+                let block = self.parse_block();
+                Expr {
+                    span: block.span,
+                    kind: ExprKind::Block(block),
+                }
+            }
             TokenKind::LeftParen => {
                 let expr = self.parse_expression();
                 self.expect_kind(&TokenKind::RightParen, "`)`");
@@ -278,6 +286,19 @@ impl Parser {
                 Expr {
                     span: function.span,
                     kind: ExprKind::Lambda(function),
+                }
+            }
+            TokenKind::Keyword(Keyword::Comptime) => {
+                if self.check_kind(&TokenKind::Dot) {
+                    return Expr {
+                        kind: ExprKind::Identifier("comptime".to_string()),
+                        span: token.span,
+                    };
+                }
+                let value = self.parse_expression();
+                Expr {
+                    span: token.span.join(value.span),
+                    kind: ExprKind::Comptime(Box::new(value)),
                 }
             }
             TokenKind::Keyword(Keyword::Match) => self.finish_match(token.span),

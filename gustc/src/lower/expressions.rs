@@ -202,6 +202,131 @@ fn lower_range_literal(
     })
 }
 
+#[allow(clippy::too_many_arguments)]
+fn lower_block_expr(
+    span: Span,
+    block: &Block,
+    locals: &HashMap<String, LoweringLocal>,
+    signatures: &HashMap<String, FunctionSignature>,
+    structs: &HashMap<String, LoweredStruct>,
+    enums: &HashMap<String, LoweredEnum>,
+    traits: &HashMap<String, LoweredTrait>,
+    diagnostics: &mut Vec<Diagnostic>,
+    expected_type: Option<LoweredType>,
+) -> Option<LoweredExpr> {
+    if block.statements.is_empty() {
+        diagnostics.push(Diagnostic::error(
+            span,
+            "block expressions must return a value in executable builds",
+        ));
+        return None;
+    }
+
+    if let Some((last_statement, setup_statements)) = block.statements.split_last()
+        && !setup_statements.iter().any(statement_contains_return)
+        && let StmtKind::Return { value: Some(value) } = &last_statement.kind
+    {
+        let mut block_locals = locals.clone();
+        let mut statements = Vec::new();
+        for statement in setup_statements {
+            let lowered = lower_conditional_block(
+                &Block {
+                    statements: vec![statement.clone()],
+                    span: statement.span,
+                },
+                &mut block_locals,
+                signatures,
+                structs,
+                enums,
+                traits,
+                diagnostics,
+                None,
+            );
+            statements.extend(lowered);
+        }
+        let value = lower_expr(
+            value,
+            &block_locals,
+            signatures,
+            structs,
+            enums,
+            traits,
+            diagnostics,
+            expected_type,
+            "expected supported block expression value in executable builds",
+        )?;
+
+        return Some(LoweredExpr {
+            type_: value.type_.clone(),
+            kind: LoweredExprKind::Block {
+                statements,
+                value: Box::new(value),
+            },
+        });
+    }
+
+    let lambda = Expr {
+        span,
+        kind: ExprKind::Lambda(FunctionDecl {
+            name: None,
+            exported: false,
+            type_params: Vec::new(),
+            type_param_bounds: Vec::new(),
+            params: Vec::new(),
+            return_type: None,
+            body: FunctionBody::Block(block.clone()),
+            span,
+        }),
+    };
+    let call = Expr {
+        span,
+        kind: ExprKind::Call {
+            callee: Box::new(lambda),
+            args: Vec::new(),
+        },
+    };
+    lower_expr(
+        &call,
+        locals,
+        signatures,
+        structs,
+        enums,
+        traits,
+        diagnostics,
+        expected_type,
+        "expected supported block expression value in executable builds",
+    )
+}
+
+fn statement_contains_return(statement: &Stmt) -> bool {
+    match &statement.kind {
+        StmtKind::Return { .. } => true,
+        StmtKind::If {
+            then_branch,
+            else_branch,
+            ..
+        } => {
+            block_contains_return(then_branch)
+                || else_branch.as_ref().is_some_and(|else_branch| match else_branch {
+                    ElseBranch::Block(block) => block_contains_return(block),
+                    ElseBranch::If(statement) => statement_contains_return(statement),
+                })
+        }
+        StmtKind::While { body, .. } | StmtKind::For { body, .. } | StmtKind::Block(body) => {
+            block_contains_return(body)
+        }
+        StmtKind::Let { .. }
+        | StmtKind::Assign { .. }
+        | StmtKind::Break
+        | StmtKind::Continue
+        | StmtKind::Expr(_) => false,
+    }
+}
+
+fn block_contains_return(block: &Block) -> bool {
+    block.statements.iter().any(statement_contains_return)
+}
+
 // Expression lowering is the central executable-build dispatcher; keeping the shared tables,
 // diagnostics, expected type, and diagnostic message explicit keeps call sites readable.
 #[allow(clippy::too_many_arguments)]
@@ -285,6 +410,17 @@ fn lower_expr(
             ));
             return None;
         }
+        ExprKind::Block(block) => lower_block_expr(
+            expr.span,
+            block,
+            locals,
+            signatures,
+            structs,
+            enums,
+            traits,
+            diagnostics,
+            expected_type.clone(),
+        )?,
         ExprKind::PostfixIncrement(target) => {
             let binding_name = match &target.kind {
                 ExprKind::Identifier(name) => name,
@@ -1499,6 +1635,13 @@ fn lower_expr(
             diagnostics,
             expected_type.clone(),
         )?,
+        ExprKind::Comptime(_) => {
+            diagnostics.push(Diagnostic::error(
+                expr.span,
+                "failed to evaluate comptime expression before executable lowering",
+            ));
+            return None;
+        }
         ExprKind::Match { value, branches } => {
             let value_mutable = expression_has_mutable_capability(value, locals);
             let value = lower_expr(
@@ -1979,6 +2122,16 @@ fn lower_lambda_expr(
                     StmtKind::Continue => statements.push(LoweredStatement::Continue),
                     StmtKind::For { .. } => statements.extend(lower_for_statement(
                         statement,
+                        &locals,
+                        signatures,
+                        structs,
+                        enums,
+                        traits,
+                        diagnostics,
+                        Some(return_type.as_ref()),
+                    )),
+                    StmtKind::Block(block) => statements.push(lower_scoped_block_statement(
+                        block,
                         &locals,
                         signatures,
                         structs,

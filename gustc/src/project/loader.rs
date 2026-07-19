@@ -312,6 +312,8 @@ fn load_std_package(
         std: true,
         no_std: true,
         dependencies: HashMap::new(),
+        aliases: HashSet::new(),
+        comptime_permissions: ComptimePermissions::default(),
     });
     Ok(index)
 }

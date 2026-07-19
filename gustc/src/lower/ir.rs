@@ -134,6 +134,7 @@ pub enum LoweredStatement {
         then_branch: Vec<LoweredStatement>,
         else_branch: Option<Vec<LoweredStatement>>,
     },
+    Block(Vec<LoweredStatement>),
     While {
         condition: LoweredExpr,
         body: Vec<LoweredStatement>,
@@ -249,6 +250,10 @@ pub enum LoweredExprKind {
         value: Box<LoweredExpr>,
         temp_name: String,
         decision: Box<LoweredMatchDecision>,
+    },
+    Block {
+        statements: Vec<LoweredStatement>,
+        value: Box<LoweredExpr>,
     },
     FieldAccess {
         object: Box<LoweredExpr>,

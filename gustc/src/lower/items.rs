@@ -561,6 +561,16 @@ fn lower_function(
                         diagnostics,
                         Some(&signature.return_type),
                     )),
+                    StmtKind::Block(block) => statements.push(lower_scoped_block_statement(
+                        block,
+                        &locals,
+                        signatures,
+                        structs,
+                        enums,
+                        traits,
+                        diagnostics,
+                        Some(&signature.return_type),
+                    )),
                 }
             }
         }
@@ -708,6 +718,16 @@ fn lower_main(
                         diagnostics,
                         None,
                     )),
+                    StmtKind::Block(block) => statements.push(lower_scoped_block_statement(
+                        block,
+                        &locals,
+                        signatures,
+                        structs,
+                        enums,
+                        traits,
+                        diagnostics,
+                        None,
+                    )),
                 }
             }
         }
@@ -747,6 +767,18 @@ fn lower_static_vars(
                 "top-level let annotations only support basic, known struct, enum, trait, and function types in executable builds",
             )
         });
+        let static_initializer = FunctionDecl {
+            name: None,
+            exported: false,
+            type_params: Vec::new(),
+            type_param_bounds: Vec::new(),
+            params: Vec::new(),
+            return_type: None,
+            body: FunctionBody::Expr(Box::new(item.value.clone())),
+            span: item.span,
+        };
+        let captured_names = captured_let_names(&static_initializer);
+        CAPTURED_NAMES.with(|names| *names.borrow_mut() = captured_names);
         let Some(value) = lower_expr(
             &item.value,
             &static_locals,
@@ -758,8 +790,10 @@ fn lower_static_vars(
             expected_type.clone(),
             "expected supported top-level let initializer in executable builds",
         ) else {
+            CAPTURED_NAMES.with(|names| names.borrow_mut().clear());
             continue;
         };
+        CAPTURED_NAMES.with(|names| names.borrow_mut().clear());
         let type_ = expected_type.unwrap_or_else(|| value.type_.clone());
 
         statics.push(LoweredStaticVar {
@@ -1042,6 +1076,20 @@ fn collect_expr_static_dependencies(
             }
         }
         ExprKind::Lambda(_) => {}
+        ExprKind::Block(block) => collect_block_static_dependencies(
+            block,
+            static_names,
+            functions,
+            visiting_functions,
+            dependencies,
+        ),
+        ExprKind::Comptime(expr) => collect_expr_static_dependencies(
+            expr,
+            static_names,
+            functions,
+            visiting_functions,
+            dependencies,
+        ),
         ExprKind::GenericType { .. }
         | ExprKind::Number(_)
         | ExprKind::String(_)
@@ -1184,6 +1232,13 @@ fn collect_block_static_dependencies(
                     dependencies,
                 );
             }
+            StmtKind::Block(block) => collect_block_static_dependencies(
+                block,
+                static_names,
+                functions,
+                visiting_functions,
+                dependencies,
+            ),
             StmtKind::Expr(expr) => collect_expr_static_dependencies(
                 expr,
                 static_names,
@@ -1210,6 +1265,7 @@ fn collect_statement_static_dependencies(
         | StmtKind::Let { .. }
         | StmtKind::Assign { .. }
         | StmtKind::Return { .. }
+        | StmtKind::Block(_)
         | StmtKind::Expr(_) => collect_block_static_dependencies(
             &Block {
                 statements: vec![statement.clone()],

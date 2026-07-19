@@ -324,6 +324,7 @@ impl Monomorphizer {
                 }
                 self.rewrite_block(body, substitutions);
             }
+            StmtKind::Block(block) => self.rewrite_block(block, substitutions),
             StmtKind::Break | StmtKind::Continue => {}
             StmtKind::Expr(expr) => self.rewrite_expr(expr, substitutions),
         }

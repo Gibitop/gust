@@ -367,6 +367,20 @@ impl Analyzer {
                 }
             }
             ExprKind::Lambda(_) => {}
+            ExprKind::Block(block) => self.collect_block_static_dependencies(
+                block,
+                static_names,
+                functions,
+                visiting_functions,
+                dependencies,
+            ),
+            ExprKind::Comptime(expr) => self.collect_expr_static_dependencies(
+                expr,
+                static_names,
+                functions,
+                visiting_functions,
+                dependencies,
+            ),
             ExprKind::Number(_)
             | ExprKind::String(_)
             | ExprKind::Char(_)
@@ -530,6 +544,13 @@ impl Analyzer {
                         dependencies,
                     );
                 }
+                StmtKind::Block(block) => self.collect_block_static_dependencies(
+                    block,
+                    static_names,
+                    functions,
+                    visiting_functions,
+                    dependencies,
+                ),
                 StmtKind::Expr(expr) => self.collect_expr_static_dependencies(
                     expr,
                     static_names,
@@ -989,6 +1010,7 @@ impl Analyzer {
             StmtKind::Expr(expr) => {
                 self.validate_expression_statement(expr);
             }
+            StmtKind::Block(block) => self.validate_block(block),
         }
     }
 

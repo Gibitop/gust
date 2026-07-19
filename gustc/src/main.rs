@@ -1,9 +1,10 @@
 use std::env;
 use std::fs;
 use std::path::PathBuf;
-use std::process::{self, Command, ExitCode};
+use std::process::{self, ExitCode};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use gustc::build::compile_c_source_to_binary;
 use gustc::c_codegen::{CCodegenOptions, emit_c_with_options};
 use gustc::lower::lower_program_with_source_files;
 use gustc::project::{ProjectOptions, check_project_with_options};
@@ -165,41 +166,16 @@ fn main() -> ExitCode {
         env::temp_dir().join(format!("gustc-{}-{unique_id}.c", process::id()))
     });
 
-    if let Err(error) = fs::write(&c_path, &c_source) {
-        eprintln!(
-            "{}: error: failed to write generated C source: {error}",
-            c_path.display()
-        );
-        return ExitCode::FAILURE;
-    }
-
-    let output = Command::new("cc")
-        .arg(&c_path)
-        .arg("-lm")
-        .arg("-o")
-        .arg(&output_path)
-        .output();
+    let output = compile_c_source_to_binary(&c_source, &c_path, &output_path);
 
     if !keep_c_file {
         let _ = fs::remove_file(&c_path);
     }
 
     match output {
-        Ok(output) if output.status.success() => ExitCode::SUCCESS,
-        Ok(output) => {
-            if !output.stdout.is_empty() {
-                eprint!("{}", String::from_utf8_lossy(&output.stdout));
-            }
-
-            if !output.stderr.is_empty() {
-                eprint!("{}", String::from_utf8_lossy(&output.stderr));
-            }
-
-            eprintln!("cc failed with status {}", output.status);
-            ExitCode::FAILURE
-        }
+        Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
-            eprintln!("error: failed to invoke cc: {error}");
+            eprintln!("{error}");
             ExitCode::FAILURE
         }
     }

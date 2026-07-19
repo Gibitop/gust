@@ -66,6 +66,10 @@ fn collect_block_captures(
                 body_available.insert(name.clone());
                 collect_block_captures(body, &mut body_available, captured);
             }
+            StmtKind::Block(block) => {
+                let mut block_available = available.clone();
+                collect_block_captures(block, &mut block_available, captured);
+            }
             StmtKind::Break | StmtKind::Continue => {}
         }
     }
@@ -92,6 +96,11 @@ fn collect_expr_captures(expr: &Expr, available: &HashSet<String>, captured: &mu
             }
             collect_lambda_body_captures(function, available, &mut lambda_locals, captured);
         }
+        ExprKind::Block(block) => {
+            let mut block_available = available.clone();
+            collect_block_captures(block, &mut block_available, captured);
+        }
+        ExprKind::Comptime(expr) => collect_expr_captures(expr, available, captured),
         ExprKind::Call { callee, args } => {
             collect_expr_captures(callee, available, captured);
             for arg in args {
@@ -241,6 +250,15 @@ fn collect_lambda_body_captures(
                         body_locals.insert(name.clone());
                         collect_lambda_block_captures(body, available, &mut body_locals, captured);
                     }
+                    StmtKind::Block(block) => {
+                        let mut block_locals = lambda_locals.clone();
+                        collect_lambda_block_captures(
+                            block,
+                            available,
+                            &mut block_locals,
+                            captured,
+                        );
+                    }
                     StmtKind::Break | StmtKind::Continue => {}
                 }
             }
@@ -285,6 +303,13 @@ fn collect_lambda_expr_captures(
                 nested_locals.insert(param.name.clone());
             }
             collect_lambda_body_captures(function, available, &mut nested_locals, captured);
+        }
+        ExprKind::Block(block) => {
+            let mut block_locals = lambda_locals.clone();
+            collect_lambda_block_captures(block, available, &mut block_locals, captured)
+        }
+        ExprKind::Comptime(expr) => {
+            collect_lambda_expr_captures(expr, available, lambda_locals, captured)
         }
         ExprKind::Call { callee, args } => {
             collect_lambda_expr_captures(callee, available, lambda_locals, captured);

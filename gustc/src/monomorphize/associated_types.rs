@@ -408,6 +408,7 @@ impl Monomorphizer {
                     self.validate_expr_trait_objects(iterable);
                     self.validate_block_trait_objects(body);
                 }
+                StmtKind::Block(block) => self.validate_block_trait_objects(block),
                 StmtKind::Expr(expr) => self.validate_expr_trait_objects(expr),
                 StmtKind::Break | StmtKind::Continue => {}
             }
@@ -477,6 +478,8 @@ impl Monomorphizer {
                 }
             }
             ExprKind::Lambda(function) => self.validate_function_associated_types(function),
+            ExprKind::Block(block) => self.validate_block_trait_objects(block),
+            ExprKind::Comptime(expr) => self.validate_expr_trait_objects(expr),
             ExprKind::Identifier(_)
             | ExprKind::Number(_)
             | ExprKind::String(_)

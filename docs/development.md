@@ -87,6 +87,68 @@ independent bindings. Cyclic top-level initialization dependencies are compile-t
 including direct dependencies and dependencies through function and method calls scanned from
 initializers by callable source name.
 
+## Blocks
+
+`{ ... }` in statement position is a scoped block statement. It introduces a lexical scope, and
+bindings declared inside the block are not visible after it. A `return` inside this kind of block
+keeps the normal function-body meaning and returns from the nearest function or lambda.
+
+`{ ... }` in expression position is a block expression. It introduces a lexical scope and evaluates
+to the value returned from the block: `let value = { let base = 40 return base + 2 }`. A `return`
+inside an expression-position block returns from that block expression, not from the surrounding
+function. Executable lowering implements block expressions as immediately invoked zero-argument
+lambdas, so ordinary closure capture machinery preserves values that escape from the block.
+
+## Comptime blocks
+
+`comptime` is an expression that evaluates Gust code during compilation and replaces itself with
+the value it returns. Block form is parsed as `comptime <block expression>`:
+`let value = comptime { return 1 + 2 }`. Short form evaluates one expression:
+`let value = comptime makeValue()`. A comptime block can appear at top level or inside a function.
+
+Comptime uses the same Gust semantics as runtime code by compiling each comptime expression into a
+temporary runner, executing it with permission-controlled host access, serializing the returned
+value to a compiler-owned artifact, and materializing that value back into the AST before the final
+program is validated/lowered. Runner artifacts use a versioned binary protocol and never use stdout,
+so user `io.println` calls inside comptime code do not corrupt the result.
+
+The first compiled-runner implementation uses the linked declarations for each comptime site and
+does not cache runner outputs. Runtime static initializers are pruned from runners; only previously
+materialized direct-comptime statics are available as static inputs. Nested `comptime` wrappers are
+stripped in runner mode, so nested comptime code runs as ordinary Gust runtime code inside the
+runner. Primitive values, strings, structs, enums, and source lambda closure results are
+materialized back into Gust AST. Closure results are serialized with their lowered closure function
+name and captured runtime values, then rebuilt as source-level lambdas inside block expressions so
+ordinary runtime closure capture handles mutable state. Named function values and other values
+without a source-level materializer report a compile-time diagnostic instead of producing a partial
+or backend-specific artifact.
+
+Comptime code cannot read runtime locals or ordinary top-level `let` bindings from the surrounding
+program. Top-level `let` initializers are runtime static initialization, so even simple-looking
+values are not compile-time inputs. A later comptime expression may read a top-level binding only
+after that binding was itself initialized by a direct `comptime` expression and materialized by the
+expander.
+
+Root packages may read the host filesystem and environment from comptime code by default. External
+packages have no host read permission unless the root project's `project.yaml` grants it through
+`comptimePermissions`. Permissions are grouped by dependency alias and capability. Each capability
+is either `true` or an indented list of allowed names/patterns:
+
+```yaml
+comptimePermissions:
+  helper:
+    fs:
+      - ./schema/**/*.yaml
+      - ./embed/**
+    env:
+      - PORT
+```
+
+`comptime.permissions.fs.canRead(path)` and `comptime.permissions.env.canRead(name)` report whether
+the current package permission would allow that read; they do not check whether the file or
+environment variable exists. The actual filesystem and environment read APIs are intentionally not
+implemented yet; when they are added, they should pass through the same permission checks.
+
 ## Standard library development
 
 The source-level standard library lives in the repository-root `std` project, with source files

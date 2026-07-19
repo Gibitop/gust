@@ -3,9 +3,9 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::ast::{
-    BasicType, Block, ElseBranch, Expr, ExprKind, FunctionBody, FunctionDecl, ImportName,
+    BasicType, BinaryOp, Block, ElseBranch, Expr, ExprKind, FunctionBody, FunctionDecl, ImportName,
     ImportNamespace, Item, MatchBranch, MatchBranchBody, Param, Pattern, Program, Stmt, StmtKind,
-    StructMember, TypeRef,
+    StructInitField, StructMember, TypeRef,
 };
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::lexer::Lexer;
@@ -88,6 +88,22 @@ struct Package {
     std: bool,
     no_std: bool,
     dependencies: HashMap<String, usize>,
+    aliases: HashSet<String>,
+    comptime_permissions: ComptimePermissions,
+}
+
+#[derive(Debug, Clone, Default)]
+struct ComptimePermissions {
+    fs: PermissionValue,
+    env: PermissionValue,
+}
+
+#[derive(Debug, Clone, Default)]
+enum PermissionValue {
+    #[default]
+    None,
+    All,
+    Patterns(Vec<String>),
 }
 
 struct Module {
@@ -149,6 +165,7 @@ pub fn check_project_with_options(
     let (root, entry_path, root_package) = if let Some(project_root) = project_root {
         let mut packages = Vec::new();
         let root_package = load_package(&project_root, &mut packages, &mut Vec::new())?;
+        apply_root_comptime_permissions(&project_root, root_package, &mut packages)?;
         let entry_path = if path.is_dir() {
             packages[root_package].src.join("main.gust")
         } else {
@@ -184,6 +201,11 @@ pub fn check_project_with_options(
             std: false,
             no_std: options.no_std,
             dependencies: HashMap::new(),
+            aliases: HashSet::new(),
+            comptime_permissions: ComptimePermissions {
+                fs: PermissionValue::All,
+                env: PermissionValue::All,
+            },
         }];
         (root, entry_path, (0, packages))
     };
@@ -203,7 +225,36 @@ pub fn check_project_with_options(
     {
         Program { items: Vec::new() }
     } else {
-        link_modules(&loader.modules, &mut diagnostics)
+        let linked = link_modules(&loader.modules, &mut diagnostics);
+        if !diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.severity == Severity::Error)
+        {
+            let mut program = linked.program;
+            let source_files = loader
+                .sources
+                .iter()
+                .map(|file| LoweringSourceFile {
+                    path: file
+                        .display_path
+                        .clone()
+                        .unwrap_or_else(|| relative_source_path(&root, &file.path)),
+                    source: file.source.clone(),
+                    offset: file.offset,
+                })
+                .collect();
+            expand_comptime(
+                &mut program,
+                &linked.item_packages,
+                &loader.packages,
+                root_package,
+                &mut diagnostics,
+                source_files,
+            );
+            program
+        } else {
+            linked.program
+        }
     };
 
     if !diagnostics
@@ -280,6 +331,8 @@ fn load_package(
         std: false,
         no_std: false,
         dependencies: HashMap::new(),
+        aliases: HashSet::new(),
+        comptime_permissions: ComptimePermissions::default(),
     });
 
     let manifest = read_project_manifest(&manifest_path)?;
@@ -304,6 +357,7 @@ fn load_package(
             root.join(path)
         };
         let dependency_index = load_package(&dependency_root, packages, loading)?;
+        packages[dependency_index].aliases.insert(name.clone());
         dependencies.insert(name, dependency_index);
     }
     packages[index].dependencies = dependencies;
@@ -312,9 +366,32 @@ fn load_package(
     Ok(index)
 }
 
+fn apply_root_comptime_permissions(
+    root: &Path,
+    root_package: usize,
+    packages: &mut [Package],
+) -> Result<(), String> {
+    packages[root_package].comptime_permissions = ComptimePermissions {
+        fs: PermissionValue::All,
+        env: PermissionValue::All,
+    };
+
+    let manifest = read_project_manifest(&root.join("project.yaml"))?;
+    for (name, permissions) in manifest.comptime_permissions {
+        for (index, package) in packages.iter_mut().enumerate() {
+            if index != root_package && package.aliases.contains(&name) {
+                package.comptime_permissions = permissions.clone();
+            }
+        }
+    }
+
+    Ok(())
+}
+
 struct ProjectManifest {
     dependencies: Vec<(String, String)>,
     no_std: bool,
+    comptime_permissions: Vec<(String, ComptimePermissions)>,
 }
 
 fn read_project_manifest(path: &Path) -> Result<ProjectManifest, String> {
@@ -324,6 +401,11 @@ fn read_project_manifest(path: &Path) -> Result<ProjectManifest, String> {
     let mut in_dependencies = false;
     let mut dependencies_indent = 0;
     let mut no_std = false;
+    let mut comptime_permissions = Vec::new();
+    let mut in_comptime_permissions = false;
+    let mut comptime_permissions_indent = 0;
+    let mut current_comptime_package: Option<(String, ComptimePermissions, usize)> = None;
+    let mut current_comptime_capability: Option<(String, usize)> = None;
 
     for (line_index, line) in source.lines().enumerate() {
         let line_number = line_index + 1;
@@ -333,6 +415,105 @@ fn read_project_manifest(path: &Path) -> Result<ProjectManifest, String> {
         }
 
         let indent = line.len() - line.trim_start().len();
+        if in_comptime_permissions {
+            if indent <= comptime_permissions_indent {
+                if let Some((name, permissions, _)) = current_comptime_package.take() {
+                    comptime_permissions.push((name, permissions));
+                }
+                current_comptime_capability = None;
+                in_comptime_permissions = false;
+            } else if trimmed.starts_with("- ") {
+                let Some((capability, capability_indent)) = &current_comptime_capability else {
+                    return Err(format!(
+                        "{}:{line_number}: comptime permission list item must be under `fs:` or `env:`",
+                        path.display()
+                    ));
+                };
+                if indent <= *capability_indent {
+                    return Err(format!(
+                        "{}:{line_number}: comptime permission list item must be indented under `{capability}:`",
+                        path.display()
+                    ));
+                }
+                let Some((_, permissions, _)) = &mut current_comptime_package else {
+                    return Err(format!(
+                        "{}:{line_number}: comptime permission list item must be under a package",
+                        path.display()
+                    ));
+                };
+                let value = unquote_yaml_scalar(
+                    trimmed
+                        .strip_prefix("- ")
+                        .expect("list item prefix was checked")
+                        .trim(),
+                );
+                match capability.as_str() {
+                    "fs" => push_permission_pattern(&mut permissions.fs, value),
+                    "env" => push_permission_pattern(&mut permissions.env, value),
+                    _ => unreachable!("capability is validated when it is opened"),
+                }
+                continue;
+            } else if let Some((name, value)) = trimmed.split_once(':') {
+                let name = name.trim();
+                let value = value.trim();
+                if current_comptime_package
+                    .as_ref()
+                    .is_some_and(|(_, _, package_indent)| indent <= *package_indent)
+                {
+                    if let Some((name, permissions, _)) = current_comptime_package.take() {
+                        comptime_permissions.push((name, permissions));
+                    }
+                    current_comptime_capability = None;
+                }
+
+                if current_comptime_package.is_none() {
+                    if value.is_empty() {
+                        current_comptime_package =
+                            Some((name.to_string(), ComptimePermissions::default(), indent));
+                        continue;
+                    }
+                    return Err(format!(
+                        "{}:{line_number}: comptime package `{name}` must contain an indented permission map",
+                        path.display()
+                    ));
+                }
+
+                let Some((_, permissions, package_indent)) = &mut current_comptime_package else {
+                    unreachable!("current package existence was checked");
+                };
+                if indent <= *package_indent {
+                    return Err(format!(
+                        "{}:{line_number}: comptime permission `{name}` must be indented under its package",
+                        path.display()
+                    ));
+                }
+                match name {
+                    "fs" | "env" => {
+                        let permission = parse_permission_value(path, line_number, name, value)?;
+                        match name {
+                            "fs" => permissions.fs = permission,
+                            "env" => permissions.env = permission,
+                            _ => unreachable!(),
+                        }
+                        current_comptime_capability =
+                            value.is_empty().then(|| (name.to_string(), indent));
+                    }
+                    _ => {
+                        return Err(format!(
+                            "{}:{line_number}: unsupported comptime permission `{name}`",
+                            path.display()
+                        ));
+                    }
+                }
+                continue;
+            } else {
+                return Err(format!(
+                    "{}:{line_number}: expected comptime permission entry",
+                    path.display()
+                ));
+            }
+        }
+
         if !in_dependencies {
             if indent == 0 && trimmed.starts_with("noStd:") {
                 let value = trimmed
@@ -359,6 +540,14 @@ fn read_project_manifest(path: &Path) -> Result<ProjectManifest, String> {
             if indent == 0 && trimmed == "dependencies: {}" {
                 continue;
             }
+            if indent == 0 && trimmed == "comptimePermissions:" {
+                in_comptime_permissions = true;
+                comptime_permissions_indent = indent;
+                continue;
+            }
+            if indent == 0 && trimmed == "comptimePermissions: {}" {
+                continue;
+            }
             continue;
         }
 
@@ -370,6 +559,14 @@ fn read_project_manifest(path: &Path) -> Result<ProjectManifest, String> {
                 continue;
             }
             if indent == 0 && trimmed == "dependencies: {}" {
+                continue;
+            }
+            if indent == 0 && trimmed == "comptimePermissions:" {
+                in_comptime_permissions = true;
+                comptime_permissions_indent = indent;
+                continue;
+            }
+            if indent == 0 && trimmed == "comptimePermissions: {}" {
                 continue;
             }
         }
@@ -416,11 +613,43 @@ fn read_project_manifest(path: &Path) -> Result<ProjectManifest, String> {
         }
         dependencies.push((name.to_string(), unquote_yaml_scalar(value)));
     }
+    if let Some((name, permissions, _)) = current_comptime_package {
+        comptime_permissions.push((name, permissions));
+    }
 
     Ok(ProjectManifest {
         dependencies,
         no_std,
+        comptime_permissions,
     })
+}
+
+fn parse_permission_value(
+    path: &Path,
+    line_number: usize,
+    capability: &str,
+    value: &str,
+) -> Result<PermissionValue, String> {
+    if value.is_empty() {
+        return Ok(PermissionValue::Patterns(Vec::new()));
+    }
+
+    match unquote_yaml_scalar(value).as_str() {
+        "true" => Ok(PermissionValue::All),
+        "false" => Ok(PermissionValue::None),
+        _ => Err(format!(
+            "{}:{line_number}: expected comptime permission `{capability}` to be `true` or an indented list",
+            path.display()
+        )),
+    }
+}
+
+fn push_permission_pattern(permission: &mut PermissionValue, value: String) {
+    match permission {
+        PermissionValue::Patterns(patterns) => patterns.push(value),
+        PermissionValue::None => *permission = PermissionValue::Patterns(vec![value]),
+        PermissionValue::All => {}
+    }
 }
 
 fn unquote_yaml_scalar(value: &str) -> String {
@@ -463,3 +692,4 @@ include!("loader.rs");
 include!("link.rs");
 include!("rewrite.rs");
 include!("spans.rs");
+include!("comptime.rs");

@@ -1,8 +1,8 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 
 use crate::ast::{
-    Block, ElseBranch, EnumDecl, Expr, ExprKind, FunctionBody, FunctionDecl, ImplDecl, Item,
-    MatchBranchBody, Pattern, Program, Stmt, StmtKind, StructDecl, StructMember, TraitDecl,
+    BinaryOp, Block, ElseBranch, EnumDecl, Expr, ExprKind, FunctionBody, FunctionDecl, ImplDecl,
+    Item, MatchBranchBody, Pattern, Program, Stmt, StmtKind, StructDecl, StructMember, TraitDecl,
     TypeParamBound, TypeRef,
 };
 use crate::diagnostic::Diagnostic;

@@ -119,6 +119,92 @@ fn main() {
 }
 
 #[test]
+fn single_source_comptime_blocks_expand_before_validation() {
+    let source = r#"let answer = comptime {
+    return 40 + 2
+}
+
+fn main() {
+    let value = comptime answer + 1
+}"#;
+    let result = check_source(source);
+
+    assert!(
+        !result.has_errors(),
+        "expected single-source comptime expressions to validate, got {:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
+fn block_expression_returns_a_scoped_value() {
+    let result = check_source(
+        r#"fn answer(): i32 {
+    let value = {
+        let base = 40
+        return base + 2
+    }
+
+    return value
+}
+
+fn main() {
+    let value = answer()
+}"#,
+    );
+
+    assert!(
+        !result.has_errors(),
+        "expected block expression to validate, got {:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
+fn scoped_block_bindings_do_not_leak() {
+    let result = check_source(
+        r#"fn main() {
+    {
+        let a = 42
+    }
+
+    io.println(a.toString())
+}"#,
+    );
+
+    assert!(
+        result
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.message.contains("unknown name `a`")),
+        "expected scoped block binding to be unavailable, got {:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
+fn block_expression_requires_return_value() {
+    let result = check_source(
+        r#"fn main() {
+    let value = {
+        let a = 42
+    }
+}"#,
+    );
+
+    assert!(
+        result
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic
+                .message
+                .contains("block expressions must return a value")),
+        "expected missing block return diagnostic, got {:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
 fn top_level_let_mut_is_rejected() {
     let source = r#"let mut count = 1
 
